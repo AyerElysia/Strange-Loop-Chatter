@@ -2190,9 +2190,132 @@ registry模块负责插件系统中组件的注册和查找，提供统一的注
 state manager负责管理插件系统的状态信息，提供状态的存储、更新和查询功能，确保插件系统能够正确维护和恢复其运行状态。
 
 `loader`:
-loader模块负责插件系统中组件的加载功能。它支持文件夹、zip包，.mfp等多种加载方式，确保插件系统能够灵活地加载和使用各种组件。
+loader模块负责插件系统中插件整体的加载功能。它支持文件夹，zip包，.mfp等多种加载方式，确保插件系统能够灵活地加载和使用各种组件。
 
 ### core\prompt
 prompt模块负责管理和处理与LLM交互相关的提示词和模板，确保插件系统能够有效地与LLM进行对话和交互。
 它提供提示词的存储、加载和渲染功能。
 
+它提供一个PromptTemplate类，通过该类可以实现强大的提示词模板功能。
+该系统支持占位符映射，且支持默认占位符值，方便在提示词中使用动态内容.
+
+```python
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import Any, Callable
+
+def _is_effectively_empty(v: Any) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, str):
+        return len(v.strip()) == 0
+    if isinstance(v, (list, tuple, set, dict)):
+        return len(v) == 0
+    return False
+
+@dataclass(frozen=True)
+class RenderPolicy:
+    fn: Callable[[Any], str]
+
+    def __call__(self, value: Any) -> str:
+        return self.fn(value)
+
+    def then(self, other: "RenderPolicy") -> "RenderPolicy":
+        # 串联：先把 value 渲染成字符串，再交给下一个策略处理
+        return RenderPolicy(lambda v: other(self(v)))
+
+# --- 常用策略工厂 ---
+def optional(empty: str = "") -> RenderPolicy:
+    return RenderPolicy(lambda v: empty if _is_effectively_empty(v) else str(v))
+
+def trim() -> RenderPolicy:
+    return RenderPolicy(lambda v: str(v).strip())
+
+def header(title: str, sep: str = "\n") -> RenderPolicy:
+    def _fn(v: Any) -> str:
+        s = str(v)
+        if _is_effectively_empty(s):
+            return ""
+        return f"{title}{sep}{s}"
+    return RenderPolicy(_fn)
+
+def wrap(prefix: str = "", suffix: str = "") -> RenderPolicy:
+    def _fn(v: Any) -> str:
+        s = str(v)
+        if _is_effectively_empty(s):
+            return ""
+        return f"{prefix}{s}{suffix}"
+    return RenderPolicy(_fn)
+
+def join_blocks(block_sep: str = "\n\n") -> RenderPolicy:
+    def _fn(v: Any) -> str:
+        if _is_effectively_empty(v):
+            return ""
+        if isinstance(v, (list, tuple)):
+            parts = [str(x).strip() for x in v if not _is_effectively_empty(x)]
+            return block_sep.join(parts)
+        return str(v)
+    return RenderPolicy(_fn)
+
+def min_len(n: int) -> RenderPolicy:
+    def _fn(v: Any) -> str:
+        s = str(v)
+        return "" if len(s.strip()) < n else s
+    return RenderPolicy(_fn)
+
+@dataclass
+class PromptTemplate:
+    name: str
+    template: str
+    policies: dict[str, RenderPolicy] = field(default_factory=dict)
+    values: dict[str, Any] = field(default_factory=dict)
+
+    def set(self, key: str, value: Any) -> "PromptTemplate":
+        self.values[key] = value
+        return self
+
+    def build(self) -> str:
+        rendered = {}
+        for key, value in self.values.items():
+            policy = self.policies.get(key, optional())  # 默认也是 optional
+            rendered[key] = policy(value)
+
+        # 没设置但模板里有的 key，会 KeyError；你也可以改成 strict/loose
+        return self.template.format_map(rendered)
+```
+
+使用:
+```python
+from src.core.prompt import PromptTemplate, trim, min_len, header
+
+tmpl = PromptTemplate(
+    name="knowledge_base_query",
+    template="用户问题：{user.query}\n\n{context.kb}\n\n",
+    policies={
+        "context.kb": trim().then(min_len(5)).then(header("# 知识库内容：")),
+    }
+)
+
+prompt = (
+    tmpl.set("user.query", "怎么设计 prompt 系统？")
+        .set("context.kb", "")     # 没检索到
+        .build()
+)
+print(prompt)   # 用户问题：怎么设计 prompt 系统？
+
+# 如果 context.kb 有内容，就变成:
+#
+# 用户问题：...
+
+# # 知识库内容：
+#（检索结果...）
+```
+
+创建PromptTemplate实例时，会自动将其注册到prompt manager中，方便后续通过名称获取和使用。
+
+```python
+from src.core.prompt import get_prompt_manager
+
+prompt_manager = get_prompt_manager()
+prompt = prompt_manager.get_prompt_template("knowledge_base_query")
+```
