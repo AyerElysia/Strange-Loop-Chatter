@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,22 @@ from rich.traceback import install as install_rich_traceback
 
 from .color import COLOR, get_rich_color
 from .file_handler import FileHandler, RotationMode
+
+# 事件总线（延迟导入避免循环依赖）
+_event_bus = None
+
+
+def _get_event_bus():
+    """获取全局事件总线实例。"""
+    global _event_bus
+    if _event_bus is None:
+        from src.kernel.event import event_bus
+        _event_bus = event_bus
+    return _event_bus
+
+
+# 日志广播事件名称
+LOG_OUTPUT_EVENT = "on_log_output"
 
 
 class Logger:
@@ -46,6 +63,7 @@ class Logger:
         log_dir: str | Path = "logs",
         file_rotation: RotationMode = RotationMode.DATE,
         max_file_size: int = 10 * 1024 * 1024,  # 10MB
+        enable_event_broadcast: bool = True,
     ) -> None:
         """初始化日志记录器
 
@@ -58,6 +76,7 @@ class Logger:
             log_dir: 日志文件目录
             file_rotation: 文件轮转模式
             max_file_size: 单个日志文件最大大小（字节），仅在 SIZE 模式下生效
+            enable_event_broadcast: 是否启用事件广播（发布到 on_log_output 事件）
         """
         self.name = name
         self.display = display or name
@@ -65,6 +84,7 @@ class Logger:
         self.metadata: dict[str, Any] = {}
         self._lock = threading.Lock()
         self._enable_file = enable_file
+        self._enable_event_broadcast = enable_event_broadcast
 
         # 创建或使用提供的 Console
         if console is None:
@@ -151,13 +171,15 @@ class Logger:
             # 合并元数据
             all_metadata = {**self.metadata, **metadata}
 
-            # 构建输出文本
-            timestamp = datetime.now().strftime("%H:%M:%S")
+            # 构建时间戳
+            now = datetime.now()
+            timestamp_short = now.strftime("%H:%M:%S")
+            timestamp_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
             level_color = get_rich_color(color)
 
             # 使用 rich.Text 构建彩色输出
             text = Text()
-            text.append(f"[{timestamp}] ", style="dim")
+            text.append(f"[{timestamp_short}] ", style="dim")
             text.append(f"{self.display}", style=self.color)
             text.append(" | ", style="dim")
             text.append(f"{level}", style=level_color)
@@ -176,13 +198,70 @@ class Logger:
             # 输出到文件（如果启用）
             if self._enable_file and self.file_handler:
                 # 构建纯文本日志（不带颜色代码）
-                log_line = f"[{timestamp}] {self.display} | {level} | {message}"
+                log_line = f"[{timestamp_short}] {self.display} | {level} | {message}"
                 if all_metadata:
                     metadata_str = " | ".join([f"{k}={v}" for k, v in all_metadata.items()])
                     log_line += f"\n  {metadata_str}"
                 log_line += "\n"
 
                 self.file_handler.write(log_line)
+
+            # 发布事件广播（如果启用）
+            if self._enable_event_broadcast:
+                self._emit_log_event(timestamp_iso, level, message, all_metadata)
+
+    def _emit_log_event(
+        self,
+        timestamp: str,
+        level: str,
+        message: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        """发布日志事件到事件总线。
+
+        Args:
+            timestamp: ISO 格式时间戳
+            level: 日志级别
+            message: 日志消息
+            metadata: 元数据字典
+        """
+        try:
+            # 构建事件数据
+            log_data: dict[str, Any] = {
+                "timestamp": timestamp,
+                "level": level,
+                "logger_name": self.name,
+                "display": self.display,
+                "color": self.color,
+                "message": message,
+            }
+
+            # 添加元数据（如果有）
+            if metadata:
+                log_data["metadata"] = dict(metadata)
+
+            # 获取事件总线
+            event_bus = _get_event_bus()
+
+            # 创建事件
+            from src.kernel.event import Event
+            event = Event(name=LOG_OUTPUT_EVENT, data=log_data, source=self.name)
+
+            # 尝试发布事件（即发即弃）
+            try:
+                loop = asyncio.get_running_loop()
+                # 有运行中的事件循环
+                # 直接使用 ensure_future 安排任务
+                asyncio.ensure_future(event_bus.publish(event))
+            except RuntimeError:
+                # 没有运行中的事件循环
+                # 事件广播是可选功能，静默忽略
+                pass
+
+        except Exception:
+            # 事件广播失败不应影响日志系统本身
+            # 静默忽略错误
+            pass
 
     def set_metadata(self, key: str, value: Any) -> None:
         """设置元数据
@@ -314,6 +393,7 @@ def get_logger(
     log_dir: str | Path = "logs",
     file_rotation: RotationMode = RotationMode.DATE,
     max_file_size: int = 10 * 1024 * 1024,
+    enable_event_broadcast: bool = True,
 ) -> Logger:
     """获取或创建日志记录器
 
@@ -326,6 +406,7 @@ def get_logger(
         log_dir: 日志文件目录
         file_rotation: 文件轮转模式
         max_file_size: 单个日志文件最大大小（字节）
+        enable_event_broadcast: 是否启用事件广播（发布到 on_log_output 事件）
 
     Returns:
         Logger: 日志记录器实例
@@ -338,6 +419,9 @@ def get_logger(
         >>> # 启用文件输出
         >>> logger = get_logger("my_logger", enable_file=True, file_rotation=RotationMode.DATE)
         >>> logger.info("这条日志会同时输出到控制台和文件")
+        >>> # 启用事件广播
+        >>> logger = get_logger("my_logger", enable_event_broadcast=True)
+        >>> logger.info("这条日志会广播到事件系统")
     """
     with _lock:
         if name not in _loggers:
@@ -350,6 +434,7 @@ def get_logger(
                 log_dir=log_dir,
                 file_rotation=file_rotation,
                 max_file_size=max_file_size,
+                enable_event_broadcast=enable_event_broadcast,
             )
         return _loggers[name]
 

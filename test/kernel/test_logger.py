@@ -6,6 +6,7 @@ Logger 模块单元测试
 
 from __future__ import annotations
 
+import asyncio
 from io import StringIO
 
 from rich.console import Console
@@ -21,6 +22,7 @@ from src.kernel.logger import (
     DEFAULT_LEVEL_COLORS,
     RotationMode,
     FileHandler,
+    LOG_OUTPUT_EVENT,
 )
 from pathlib import Path
 import tempfile
@@ -925,3 +927,182 @@ class TestFileHandlerInternalMethods:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+class TestEventBroadcast:
+    """测试日志事件广播功能"""
+
+    def test_logger_event_broadcast_default_enabled(self) -> None:
+        """测试默认情况下事件广播是启用的"""
+        console = Console(file=StringIO())
+        logger = get_logger("no_broadcast", console=console)
+
+        assert logger._enable_event_broadcast is True
+    def test_logger_enable_event_broadcast(self) -> None:
+        """测试启用事件广播"""
+        console = Console(file=StringIO())
+        logger = get_logger(
+            "with_broadcast",
+            enable_event_broadcast=True,
+            console=console,
+        )
+
+        assert logger._enable_event_broadcast is True
+
+    async def test_log_event_data_structure(self) -> None:
+        """测试日志事件的数据结构"""
+        console = Console(file=StringIO())
+        logger = get_logger(
+            "event_test",
+            enable_event_broadcast=True,
+            display="EventTest",
+            color=COLOR.CYAN,
+            console=console,
+        )
+
+        # 收集事件数据
+        received_events: list[dict] = []
+
+        async def event_handler(event):
+            # 只收集特定 logger 的事件
+            if event.data.get("logger_name") == "event_test":
+                received_events.append(event.data)
+
+        # 订阅事件（通过 event 系统直接订阅）
+        from src.kernel.event import event_bus
+        unsubscribe = event_bus.subscribe(LOG_OUTPUT_EVENT, event_handler)
+
+        try:
+            # 输出日志
+            logger.info("Test message", user_id="123")
+
+            # 等待事件处理
+            await asyncio.sleep(0.1)
+
+            # 验证事件数据结构
+            assert len(received_events) == 1
+            log_data = received_events[0]
+
+            # 验证必需字段
+            assert "timestamp" in log_data
+            assert "level" in log_data
+            assert "logger_name" in log_data
+            assert "display" in log_data
+            assert "color" in log_data
+            assert "message" in log_data
+
+            # 验证字段值
+            assert log_data["level"] == "INFO"
+            assert log_data["logger_name"] == "event_test"
+            assert log_data["display"] == "EventTest"
+            assert log_data["color"] == "cyan"
+            assert log_data["message"] == "Test message"
+            assert "metadata" in log_data
+            assert log_data["metadata"]["user_id"] == "123"
+
+        finally:
+            unsubscribe()
+
+    async def test_event_broadcast_with_metadata(self) -> None:
+        """测试带元数据的日志广播"""
+        console = Console(file=StringIO())
+        logger = get_logger(
+            "metadata_broadcast_test",
+            enable_event_broadcast=True,
+            console=console,
+        )
+
+        received_logs: list[dict] = []
+
+        async def log_handler(event):
+            # 只收集特定 logger 的事件
+            if event.data.get("logger_name") == "metadata_broadcast_test":
+                received_logs.append(event.data)
+
+        # 通过 event 系统订阅
+        from src.kernel.event import event_bus
+        unsubscribe = event_bus.subscribe(LOG_OUTPUT_EVENT, log_handler)
+
+        try:
+            # 设置全局元数据
+            logger.set_metadata("app", "test_app")
+            logger.set_metadata("version", "1.0")
+
+            # 输出带临时元数据的日志
+            logger.info("Action completed", user_id="123", status="success")
+
+            # 等待事件处理
+            await asyncio.sleep(0.1)
+
+            assert len(received_logs) == 1
+            log_data = received_logs[0]
+
+            # 验证元数据
+            assert log_data["metadata"]["app"] == "test_app"
+            assert log_data["metadata"]["version"] == "1.0"
+            assert log_data["metadata"]["user_id"] == "123"
+            assert log_data["metadata"]["status"] == "success"
+
+        finally:
+            unsubscribe()
+
+    async def test_event_broadcast_disabled_no_events(self) -> None:
+        """测试禁用广播时不发布事件"""
+        console = Console(file=StringIO())
+        logger = get_logger(
+            "no_broadcast_test",
+            enable_event_broadcast=False,
+            console=console,
+        )
+
+        received_logs: list[dict] = []
+
+        async def log_handler(event):
+            # 只收集特定 logger 的事件
+            if event.data.get("logger_name") == "no_broadcast_test":
+                received_logs.append(event.data)
+
+        from src.kernel.event import event_bus
+        unsubscribe = event_bus.subscribe(LOG_OUTPUT_EVENT, log_handler)
+
+        try:
+            logger.info("This should not be broadcasted")
+            await asyncio.sleep(0.1)
+
+            # 应该没有收到日志
+            assert len(received_logs) == 0
+
+        finally:
+            unsubscribe()
+
+    async def test_log_event_timestamp_format(self) -> None:
+        """测试日志事件时间戳格式"""
+        from datetime import datetime
+
+        console = Console(file=StringIO())
+        logger = get_logger(
+            "timestamp_test",
+            enable_event_broadcast=True,
+            console=console,
+        )
+
+        received_timestamps: list[str] = []
+
+        async def log_handler(event):
+            # 只收集特定 logger 的事件
+            if event.data.get("logger_name") == "timestamp_test":
+                received_timestamps.append(event.data["timestamp"])
+
+        from src.kernel.event import event_bus
+        unsubscribe = event_bus.subscribe(LOG_OUTPUT_EVENT, log_handler)
+
+        try:
+            logger.info("Timestamp test")
+            await asyncio.sleep(0.1)
+
+            assert len(received_timestamps) == 1
+            timestamp = received_timestamps[0]
+
+            # 验证时间戳格式 (ISO 8601: YYYY-MM-DDTHH:MM:SS.mmm)
+            datetime.fromisoformat(timestamp)
+
+        finally:
+            unsubscribe()

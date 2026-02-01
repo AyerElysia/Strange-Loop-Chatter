@@ -4,7 +4,8 @@ Logger 模块
 基于 rich 库的统一日志系统，支持彩色渲染、元数据跟踪、文件输出和异常格式化。
 
 用法示例:
-    from src.kernel.logger import get_logger, COLOR, RotationMode
+    from src.kernel.logger import get_logger, COLOR, RotationMode, LOG_OUTPUT_EVENT
+    from src.kernel.event import event_bus
 
     # 创建日志记录器（仅控制台）
     logger = get_logger("my_logger", display="我的日志", color=COLOR.BLUE)
@@ -20,6 +21,15 @@ Logger 模块
 
     # 使用面板输出
     logger.print_panel("重要消息", title="通知")
+
+    # 启用事件广播
+    async def on_log(event):
+        log_data = event.data
+        print(f"[{log_data['level']}] {log_data['message']}")
+
+    logger = get_logger("my_logger", enable_event_broadcast=True)
+    event_bus.subscribe(LOG_OUTPUT_EVENT, on_log)
+    logger.info("这条日志会被广播到事件系统")
 """
 
 from .logger import (
@@ -29,6 +39,7 @@ from .logger import (
     get_all_loggers,
     clear_all_loggers,
     install_rich_traceback_formatter,
+    LOG_OUTPUT_EVENT,
 )
 from .color import COLOR, get_rich_color, DEFAULT_LEVEL_COLORS
 from .file_handler import FileHandler, RotationMode
@@ -48,6 +59,8 @@ __all__ = [
     "get_rich_color",
     "install_rich_traceback_formatter",
     "DEFAULT_LEVEL_COLORS",
+    # 事件广播相关
+    "LOG_OUTPUT_EVENT",
 ]
 
 # 版本信息
