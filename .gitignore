@@ -88,3 +88,5 @@ poetry.lock
 logs/
 htmlcov/
 .ruff_cache/
+old/
+data/
