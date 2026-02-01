@@ -21,6 +21,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.kernel.config import ConfigBase, SectionBase, config_section, Field
+from src.kernel.logger import get_logger, COLOR
+
+# 创建全局 logger
+logger = get_logger("config_example", display="Config", color=COLOR.YELLOW)
 
 
 class AppConfig(ConfigBase):
@@ -67,21 +71,21 @@ def main() -> None:
         config_path = Path(tmp) / "app_config.toml"
         _write_initial_toml(config_path)
 
-        print("=== 原始配置文件内容 ===")
-        print(config_path.read_text(encoding="utf-8"))
+        logger.info("=== 原始配置文件内容 ===")
+        logger.info(config_path.read_text(encoding="utf-8"))
 
         cfg = AppConfig.load(config_path, auto_update=True)
 
-        print("=== 加载后的配置对象 ===")
-        print(f"database.host = {cfg.database.host}")
-        print(f"database.port = {cfg.database.port}")
-        print(f"features.enable_cache = {cfg.features.enable_cache}")
-        print(f"features.enable_logging = {cfg.features.enable_logging}")
+        logger.info("=== 加载后的配置对象 ===")
+        logger.info(f"database.host = {cfg.database.host}")
+        logger.info(f"database.port = {cfg.database.port}")
+        logger.info(f"features.enable_cache = {cfg.features.enable_cache}")
+        logger.info(f"features.enable_logging = {cfg.features.enable_logging}")
 
-        print("=== auto_update=True 后的配置文件内容 ===")
-        print(config_path.read_text(encoding="utf-8"))
+        logger.info("=== auto_update=True 后的配置文件内容 ===")
+        logger.info(config_path.read_text(encoding="utf-8"))
 
-        print("[OK] 示例完成")
+        logger.info("[OK] 示例完成")
 
 
 if __name__ == "__main__":
