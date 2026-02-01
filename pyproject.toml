@@ -23,3 +23,26 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["test"]
+addopts = [
+    "--cov=src",
+    "--cov-config=pyproject.toml",
+    "--cov-report=term-missing",
+]
+
+[tool.coverage.run]
+source = ["src"]
+
+[tool.coverage.report]
+omit = [
+    "test/*",
+    "tests/*",
+    "examples/*",
+    "docs/*",
+    "old/*",
+    "scripts/*",
+    "data/*",
+    "logs/*",
+    "htmlcov/*",
+    "config/*",
+    "**/__pycache__/*",
+]
