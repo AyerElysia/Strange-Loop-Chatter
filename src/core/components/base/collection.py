@@ -55,8 +55,6 @@ class BaseCollection(ABC, LLMUsable):
     chatter_allow: list[str] = []
     chat_type: ChatType = ChatType.ALL
 
-    cover_go_activate: bool = True
-
     # 组件级依赖（精确到组件签名）
     dependencies: list[str] = []  # 例如 ["other_plugin:tool:database"]
 
@@ -68,7 +66,7 @@ class BaseCollection(ABC, LLMUsable):
         """
         self.plugin = plugin
 
-    async def execute(self, stream_id: str | None = None) -> tuple[bool, dict[str, Any]]:
+    async def execute(self, stream_id: str) -> tuple[bool, dict[str, Any]]:
         """执行 Collection（解包并激活内部组件）。
 
         与 Action/Tool 一样，Collection 作为 LLMUsable 也可以被调用。
@@ -178,72 +176,3 @@ class BaseCollection(ABC, LLMUsable):
                 }
             }
         }
-
-    async def go_activate(self) -> bool:
-        """Collection 激活判定函数。
-
-        Returns:
-            bool: 是否激活
-
-        Examples:
-            >>> async def go_activate(self) -> bool:
-            ...     return await self._random_activation(0.5)
-        """
-        return True
-
-    async def _random_activation(self, probability: float) -> bool:
-        """随机激活工具函数。
-
-        Args:
-            probability: 激活概率，范围 0.0 到 1.0
-
-        Returns:
-            bool: 是否激活
-
-        Examples:
-            >>> if await self._random_activation(0.5):
-            ...     print("有50%概率激活")
-        """
-        return random.random() < probability
-
-    async def _keyword_match(
-        self,
-        keywords: list[str],
-        case_sensitive: bool = False,
-    ) -> bool:
-        """关键词匹配工具函数。
-
-        Args:
-            keywords: 关键词列表
-            case_sensitive: 是否区分大小写
-
-        Returns:
-            bool: 是否匹配到关键词
-
-        Examples:
-            >>> if await self._keyword_match(["hello", "hi"]):
-            ...     print("匹配到问候语")
-        """
-        # Collection 没有直接的 _last_message，需要从其他地方获取
-        # 这里提供接口，子类可以自行实现
-        return False
-
-    async def _llm_judge_activation(
-        self,
-        judge_prompt: str = "",
-        action_require: list[str] | None = None,
-    ) -> bool:
-        """LLM 判断激活工具函数。
-
-        Args:
-            judge_prompt: 判断用提示词
-            action_require: 强调的激活需求列表
-
-        Returns:
-            bool: LLM 判定是否激活
-
-        Note:
-            此方法需要 action_manager 支持，当前返回 False
-        """
-        # TODO: 实现与 action_manager 的集成
-        return False

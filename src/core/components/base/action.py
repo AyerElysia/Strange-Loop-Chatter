@@ -198,6 +198,28 @@ class BaseAction(ABC, LLMUsable):
 
         return any(kw in message for kw in keywords)
 
+    def _get_recent_chat_content(self, max_messages: int = 6) -> str:
+        """获取最近聊天消息的文本内容。
+
+        Args:
+            max_messages: 获取的最大消息数量，默认为6条
+
+        Returns:
+            str: 格式化的聊天内容，每条消息一行，格式为 "发送者: 内容"
+        """
+        # 获取最新的 max_messages 条消息
+        recent_messages = self.chat_stream.context.history_messages[-max_messages:]
+
+        # 格式化消息内容
+        content_lines = []
+        for msg in recent_messages:
+            # 优先使用 processed_plain_text，其次使用 content
+            msg_text = msg.processed_plain_text if msg.processed_plain_text else str(msg.content)
+            # 格式：发送者名: 内容
+            content_lines.append(f"{msg.sender_name}: {msg_text}")
+
+        return "\n".join(content_lines)
+
     async def _llm_judge_activation(
         self,
         judge_prompt: str = "",
@@ -205,20 +227,90 @@ class BaseAction(ABC, LLMUsable):
     ) -> bool:
         """LLM 判断激活工具函数。
 
-        使用 llm 判断是否应该激活此 Action。
+        使用 LLM 来判断是否应该激活此 Action。
+        会自动构建完整的判断提示词，只需要提供核心判断逻辑即可。
+
+        聊天内容会自动从实例属性中获取。
 
         Args:
-            judge_prompt: 判断用提示词
-            action_require: 强调的激活需求列表
+            judge_prompt: 自定义判断提示词（核心判断逻辑）
+            action_require: Action 使用场景，如果不提供则使用类属性
 
         Returns:
-            bool: LLM 判定是否激活
+            bool: 是否应该激活
 
-        Note:
-            此方法需要 action_manager 支持，当前返回 False
+        Examples:
+            >>> # 最简单的用法
+            >>> result = await self._llm_judge_activation(
+            >>>     "当用户询问天气信息时激活"
+            >>> )
+            >>>
+            >>> # 提供详细信息
+            >>> result = await self._llm_judge_activation(
+            >>>     judge_prompt="当用户表达情绪或需要情感支持时激活",
+            >>>     action_require=["用户情绪低落", "需要情感支持"]
+            >>> )
         """
-        # TODO: 实现与 llm 的集成
-        return False
+        import asyncio
+
+        from src.kernel.llm import LLMRequest, LLMPayload, ROLE, Text
+        from src.core.config import get_model_config
+
+        try:
+            # 自动获取聊天内容：使用当前聊天流的最新6条消息
+            chat_content = self._get_recent_chat_content()
+
+            # 获取 utils_small 模型配置
+            utils_small_set = get_model_config().get_task("utils_small")
+
+            if action_require is None:
+                action_require = action_require or []
+
+            # 构建完整的判断提示词
+            prompt = f"""你需要判断在当前聊天情况下，是否应该激活名为"{self.action_name}"的动作。
+
+动作描述：{self.action_description}
+"""
+
+            if action_require:
+                prompt += "\n动作使用场景：\n"
+                for req in action_require:
+                    prompt += f"- {req}\n"
+
+            if judge_prompt:
+                prompt += f"\n额外判定条件：\n{judge_prompt}\n"
+
+            if chat_content:
+                prompt += f"\n当前聊天记录：\n{chat_content}\n"
+
+            prompt += """
+请根据以上信息判断是否应该激活这个动作。
+只需要回答"是"或"否"，不要有其他内容。
+"""
+
+            # 创建 LLM 请求
+            llm_request = LLMRequest(utils_small_set, request_name="ActionActivationJudge")
+            llm_request.add_payload(LLMPayload(ROLE.USER, Text(prompt)))
+
+            # 调用 LLM 进行判断，设置 7 秒超时避免长时间等待
+            try:
+                response = await asyncio.wait_for(
+                    llm_request.send(stream=False),
+                    timeout=7.0,
+                )
+                # 获取响应文本（await 返回的是 str）
+                response_text = str(response).strip().lower()
+                should_activate = "是" in response_text or "yes" in response_text or "true" in response_text
+            except asyncio.TimeoutError:
+                # 超时时默认激活，交给后续决策系统处理
+                should_activate = True
+
+            return should_activate
+
+        except Exception:
+            # 出错时默认不激活
+            return False
+        
 
     async def _send_to_stream(
         self,

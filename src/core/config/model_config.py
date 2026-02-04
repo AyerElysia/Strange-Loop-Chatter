@@ -28,10 +28,10 @@
 """
 
 from threading import Lock
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from src.kernel.config import ConfigBase, SectionBase, config_section, Field
-
+from src.kernel.llm.types import ModelSet
 
 # ==============================================================================
 # API Provider Configuration
@@ -366,7 +366,7 @@ class ModelConfig(ConfigBase):
             self._build_cache_dicts()
         return self._models_dict  # type: ignore
 
-    def get_task(self, task_name: str) -> list[dict[str, Any]]:
+    def get_task(self, task_name: str) -> ModelSet:
         """获取任务的 ModelSet（符合 kernel.llm 要求的格式）
         
         返回格式符合 kernel.llm.types.ModelEntry 定义，包含完整的模型配置信息。
@@ -375,7 +375,7 @@ class ModelConfig(ConfigBase):
             task_name: 任务名称（如 'replyer', 'utils', 'embedding' 等）
             
         Returns:
-            list[dict]: ModelSet 列表，每个元素包含：
+            ModelSet: ModelSet 列表，每个元素包含：
                 - api_provider: str - API 提供商名称
                 - base_url: str - API 基础 URL
                 - model_identifier: str - 模型标识符
@@ -438,7 +438,7 @@ class ModelConfig(ConfigBase):
             
             model_set.append(model_entry)
         
-        return model_set
+        return cast(ModelSet, model_set)
 
 
 # ==============================================================================
