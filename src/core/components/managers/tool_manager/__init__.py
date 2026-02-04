@@ -1,1 +1,0 @@
-"""Tool manager subpackage."""

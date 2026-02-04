@@ -5,7 +5,7 @@
 """
 
 import inspect
-from typing import Any, get_args, get_origin, Callable
+from typing import Any, Callable, get_args, get_origin, get_type_hints
 
 
 # Python 类型到 JSON Schema 类型的映射
@@ -38,16 +38,16 @@ def map_type_to_json(type_hint: Any) -> str:
     if type_hint is type(None):
         return "null"
 
-    # 处理 Annotated 类型
+    # 处理 Annotated 类型（不同 Python 版本 get_origin 行为不同）
+    annotated_origin = getattr(type_hint, "__origin__", None)
+    annotated_meta = getattr(type_hint, "__metadata__", None)
+    if annotated_origin is not None and annotated_meta is not None:
+        return map_type_to_json(annotated_origin)
+
     origin = get_origin(type_hint)
     if origin is not None:
-        # 如果是 Annotated[T, ...]，提取 T
-        if origin.__name__ == "Annotated":
-            args = get_args(type_hint)
-            if args:
-                return map_type_to_json(args[0])
         # 如果是 Union[T, None] 或 Optional[T]
-        elif origin.__name__ in ("Union", "Optional"):
+        if origin.__name__ in ("Union", "Optional"):
             args = get_args(type_hint)
             if args:
                 # 过滤掉 None
@@ -62,11 +62,105 @@ def map_type_to_json(type_hint: Any) -> str:
                     return _TYPE_MAPPING.get(container_type, "object")
 
     # 处理字符串类型的类型提示（如 "int"）
+    # 这里禁止使用 eval，避免执行任意代码。
     if isinstance(type_hint, str):
-        type_hint = eval(type_hint, {}, {})
+        safe_name_map: dict[str, Any] = {
+            "int": int,
+            "float": float,
+            "str": str,
+            "bool": bool,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "set": set,
+            "none": type(None),
+            "nonetype": type(None),
+        }
+        resolved = safe_name_map.get(type_hint.strip().lower())
+        if resolved is None:
+            return "string"
+        type_hint = resolved
 
     # 直接类型映射
     return _TYPE_MAPPING.get(type_hint, "string")
+
+
+def _parse_google_style_args(doc: str) -> dict[str, str]:
+    """解析 Google 风格 docstring 的 Args 段。
+
+    仅解析形如：
+
+    Args:
+        name: desc...
+
+    返回 {"name": "desc..."}。
+    """
+    if not doc:
+        return {}
+
+    lines = doc.splitlines()
+    start = None
+    for idx, line in enumerate(lines):
+        if line.strip() in {"Args:", "Arguments:"}:
+            start = idx + 1
+            break
+    if start is None:
+        return {}
+
+    result: dict[str, str] = {}
+    current_name: str | None = None
+    current_desc_parts: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_name, current_desc_parts
+        if current_name is None:
+            return
+        desc = " ".join(part.strip() for part in current_desc_parts if part.strip())
+        result[current_name] = desc.strip()
+        current_name = None
+        current_desc_parts = []
+
+    for raw in lines[start:]:
+        stripped = raw.strip()
+        if not stripped:
+            # 空行：视为可能的段落分隔，但不立即终止
+            if current_name is not None:
+                current_desc_parts.append("")
+            continue
+
+        # 遇到新的 section（如 Returns: / Raises: / Examples:）则结束
+        if not raw.startswith(" ") and stripped.endswith(":"):
+            break
+
+        # 解析 "name: desc" 行
+        if ":" in stripped and not stripped.startswith(":"):
+            name_part, desc_part = stripped.split(":", 1)
+            candidate = name_part.strip()
+            if candidate and " " not in candidate and "\t" not in candidate:
+                flush()
+                current_name = candidate
+                current_desc_parts = [desc_part.strip()]
+                continue
+
+        # 续行：归并到上一个参数描述
+        if current_name is not None:
+            current_desc_parts.append(stripped)
+
+    flush()
+    return result
+
+
+def _extract_annotated_description(type_hint: Any) -> tuple[Any, str | None]:
+    annotated_origin = getattr(type_hint, "__origin__", None)
+    annotated_meta = getattr(type_hint, "__metadata__", None)
+    if annotated_origin is None or annotated_meta is None:
+        return type_hint, None
+
+    for meta in annotated_meta:
+        if isinstance(meta, str) and meta.strip():
+            return annotated_origin, meta.strip()
+
+    return annotated_origin, None
 
 
 def parse_function_signature(
@@ -92,7 +186,16 @@ def parse_function_signature(
         ... )
     """
     sig = inspect.signature(func)
-    parameters = {}
+    parameters: dict[str, Any] = {}
+    doc = inspect.getdoc(func) or ""
+    arg_desc = _parse_google_style_args(doc)
+
+    # 支持 `from __future__ import annotations`：此时注解可能是字符串
+    # 使用 get_type_hints 解析（保留 Annotated 元数据）
+    try:
+        resolved_hints = get_type_hints(func, include_extras=True)
+    except Exception:
+        resolved_hints = {}
 
     # 遍历函数参数
     for param_name, param in sig.parameters.items():
@@ -100,9 +203,21 @@ def parse_function_signature(
         if param_name == "self":
             continue
 
+        # 跳过 *args / **kwargs（schema 需要显式参数）
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
+
+        annotation = resolved_hints.get(param_name, param.annotation)
+        base_type, annotated_desc = _extract_annotated_description(annotation)
+
         param_info: dict[str, Any] = {
-            "type": map_type_to_json(param.annotation),
-            "description": f"{param_name} 参数",
+            "type": map_type_to_json(base_type),
+            "description": annotated_desc
+            or arg_desc.get(param_name)
+            or f"{param_name} 参数",
         }
 
         # 处理默认值
@@ -123,7 +238,13 @@ def parse_function_signature(
                 "required": [
                     name
                     for name, param in sig.parameters.items()
-                    if name != "self" and param.default == inspect.Parameter.empty
+                    if name != "self"
+                    and param.kind
+                    not in (
+                        inspect.Parameter.VAR_POSITIONAL,
+                        inspect.Parameter.VAR_KEYWORD,
+                    )
+                    and param.default == inspect.Parameter.empty
                 ],
             },
         },

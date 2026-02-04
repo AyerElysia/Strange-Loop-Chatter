@@ -281,6 +281,66 @@ class TaskManager:
         with self._lock:
             return sum(1 for info in self._tasks.values() if not info.is_done())
 
+    async def gather(
+        self,
+        *coros: Coroutine[Any, Any, Any],
+        return_exceptions: bool = False,
+        group_name: str | None = None,
+    ) -> list[Any]:
+        """并行执行多个协程并返回结果列表。
+
+        类似 asyncio.gather，但使用 TaskManager 追踪所有任务。
+        所有创建的任务会被追踪，完成后自动清理。
+
+        Args:
+            *coros: 要执行的协程
+            return_exceptions: 是否将异常作为结果返回（False 则抛出第一个异常）
+            group_name: 可选的任务组名称
+
+        Returns:
+            list[Any]: 结果列表，顺序与输入协程一致
+
+        Raises:
+            Exception: 第一个发生的异常（如果 return_exceptions=False）
+
+        Examples:
+            >>> tm = get_task_manager()
+            >>> results = await tm.gather(
+            ...     task1(),
+            ...     task2(),
+            ...     task3(),
+            ...     return_exceptions=True
+            ... )
+        """
+        if not coros:
+            return []
+
+        # 创建任务组（如果指定了 group_name）
+        group_context: Any = None
+        if group_name:
+            group_context = self.group(name=group_name)
+
+        # 创建所有任务
+        tasks = []
+        for coro in coros:
+            task_info = self.create_task(
+                coro=coro,
+                name=f"gather_task_{len(tasks)}",
+                group_name=group_name,
+            )
+            tasks.append(task_info.task)
+
+        # 使用 TaskGroup 上下文（如果有）
+        if group_context:
+            async with group_context:
+                # 等待所有任务完成
+                results = await asyncio.gather(*tasks, return_exceptions=return_exceptions)
+        else:
+            # 直接等待所有任务完成
+            results = await asyncio.gather(*tasks, return_exceptions=return_exceptions)
+
+        return results
+
     def get_stats(self) -> dict[str, Any]:
         """获取任务统计信息
 
@@ -326,3 +386,35 @@ def get_task_manager() -> TaskManager:
     if _task_manager is None:
         _task_manager = TaskManager()
     return _task_manager
+
+
+async def gather(
+    *coros: Coroutine[Any, Any, Any],
+    return_exceptions: bool = False,
+    group_name: str | None = None,
+) -> list[Any]:
+    """并行执行多个协程并返回结果列表（模块级别函数）。
+
+    这是 TaskManager.gather 的便捷包装器，使用全局 TaskManager 实例。
+
+    Args:
+        *coros: 要执行的协程
+        return_exceptions: 是否将异常作为结果返回（False 则抛出第一个异常）
+        group_name: 可选的任务组名称
+
+    Returns:
+        list[Any]: 结果列表，顺序与输入协程一致
+
+    Raises:
+        Exception: 第一个发生的异常（如果 return_exceptions=False）
+
+    Examples:
+        >>> from src.kernel.concurrency import gather
+        >>> results = await gather(
+        ...     task1(),
+        ...     task2(),
+        ...     task3()
+        ... )
+    """
+    tm = get_task_manager()
+    return await tm.gather(*coros, return_exceptions=return_exceptions, group_name=group_name)

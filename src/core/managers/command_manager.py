@@ -190,16 +190,48 @@ class CommandManager:
         if not command_cls:
             return False, f"未知命令: {command_path}"
 
-        # TODO: 创建 Command 实例并执行
-        # 需要获取 plugin 实例和 chat_stream
+        # 通过类反向查找签名和获取 plugin 实例
+        signature = self._find_signature_by_class(command_cls)
+        if not signature:
+            return False, "命令未注册"
 
+        # ========== 权限检查 ==========
+        from src.core.managers.permission_manager import get_permission_manager
+
+        perm_manager = get_permission_manager()
+        person_id = perm_manager.generate_person_id(
+            message.platform, message.sender_id
+        )
+
+        # 检查用户是否有权限执行该命令
+        has_permission, perm_reason = await perm_manager.check_command_permission(
+            person_id=person_id,
+            command_class=command_cls,
+            command_signature=signature,
+        )
+
+        if not has_permission:
+            logger.warning(
+                f"权限拒绝: user={person_id}, command={command_path}, reason={perm_reason}"
+            )
+            return False, f"权限不足：{perm_reason}"
+
+        # ========== 命令执行 ==========
+        from src.core.managers.plugin_manager import get_plugin_manager
+        from src.core.components.types import parse_signature
+
+        sig_info = parse_signature(signature)
+        plugin_manager = get_plugin_manager()
+        plugin = plugin_manager.get_plugin(sig_info["plugin_name"])
+
+        if not plugin:
+            return False, f"插件未加载: {sig_info['plugin_name']}"
+
+        # 创建 Command 实例并执行
         try:
-            # command_instance = command_cls(chat_stream=..., plugin=...)
-            # result = await command_instance.execute(args)
-            # return result
-
-            # 临时返回
-            return True, f"命令 {command_path} 执行成功（待实现）"
+            command_instance = command_cls(plugin=plugin)
+            result = await command_instance.execute(command_text)
+            return result
 
         except Exception as e:
             logger.error(f"执行命令失败 ({command_path}): {e}")
@@ -221,9 +253,57 @@ class CommandManager:
         if not command_cls:
             return f"命令未找到: {signature}"
 
-        # TODO: 从 Command 类获取帮助信息
-        # 需要遍历命令树并生成帮助文档
-        return f"命令: {command_cls.command_name}\n{command_cls.command_description}"
+        # 获取 plugin 实例以创建临时 Command 实例
+        from src.core.managers.plugin_manager import get_plugin_manager
+        from src.core.components.types import parse_signature
+
+        sig_info = parse_signature(signature)
+        plugin_manager = get_plugin_manager()
+        plugin = plugin_manager.get_plugin(sig_info["plugin_name"])
+
+        if not plugin:
+            return f"插件未加载: {sig_info['plugin_name']}"
+
+        # 创建临时实例以访问命令树
+        command_instance = command_cls(plugin=plugin)
+
+        # 生成帮助信息
+        help_lines = [
+            f"命令: /{command_cls.command_name}",
+            f"描述: {command_cls.command_description}",
+        ]
+
+        # 遍历命令树生成子命令列表
+        if command_instance._root.children:
+            help_lines.append("\n子命令:")
+            for child_name, child_node in command_instance._root.children.items():
+                desc = child_node.description or "无描述"
+                help_lines.append(f"  /{command_cls.command_name} {child_name} - {desc}")
+
+        return "\n".join(help_lines)
+
+    def _find_signature_by_class(self, command_cls: type) -> str | None:
+        """通过类查找签名。
+
+        Args:
+            command_cls: Command 类
+
+        Returns:
+            str | None: 组件签名，如果未找到则返回 None
+        """
+        # 优先使用 __signature__ 属性（在 plugin_manager 注册时设置）
+        if hasattr(command_cls, "__signature__"):
+            return getattr(command_cls, "__signature__")  # type: ignore[attr-defined]
+
+        # 如果属性不存在，从注册表反向查找
+        registry = get_global_registry()
+        all_commands = registry.get_by_type(ComponentType.COMMAND)
+
+        for sig, cls in all_commands.items():
+            if cls is command_cls:
+                return sig
+
+        return None
 
     def get_all_command_names(self) -> list[str]:
         """获取所有命令名称。

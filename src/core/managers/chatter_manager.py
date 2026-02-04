@@ -8,14 +8,12 @@ Chatter 是 Bot 的智能核心，定义对话逻辑和 LLMUsable 过滤。
 from typing import TYPE_CHECKING
 
 from src.kernel.logger import get_logger
-from src.kernel.llm.payload.tooling import LLMUsable
 
 from src.core.components.registry import get_global_registry
 from src.core.components.types import ComponentType
 
 if TYPE_CHECKING:
     from src.core.components.base.chatter import BaseChatter
-    from src.core.models.message import Message
 
 
 logger = get_logger("chatter_manager")
@@ -83,37 +81,6 @@ class ChatterManager:
         registry = get_global_registry()
         return registry.get(signature)
 
-    async def filter_llm_usables(
-        self,
-        signature: str,
-        unreads: list["Message"],
-    ) -> list[type[LLMUsable]]:
-        """过滤 LLMUsable 组件。
-
-        调用 Chatter 的 modify_llm_usables 方法过滤可用的 LLMUsable。
-
-        Args:
-            signature: Chatter 组件签名
-            unreads: 未读消息列表
-
-        Returns:
-            list[type[LLMUsable]]: 过滤后的 LLMUsable 组件列表
-
-        Examples:
-            >>> usables = await manager.filter_llm_usables(
-            ...     "my_plugin:chatter:my_chatter",
-            ...     unreads
-            ... )
-        """
-        chatter_cls = self.get_chatter_class(signature)
-        if not chatter_cls:
-            logger.warning(f"Chatter 类未找到: {signature}")
-            return []
-
-        # TODO: 实现 LLMUsable 过滤逻辑
-        # 需要获取全局的 LLMUsable 集合，然后调用 Chatter 的过滤方法
-        return []
-
     def get_active_chatters(self) -> dict[str, "BaseChatter"]:
         """获取当前活跃的 Chatter 实例。
 
@@ -156,6 +123,19 @@ class ChatterManager:
             return True
         return False
 
+    def get_chatter_by_stream(self, stream_id: str) -> "BaseChatter | None":
+        """获取指定聊天流的活跃 Chatter 实例。
+
+        Args:
+            stream_id: 聊天流 ID
+
+        Returns:
+            BaseChatter | None: Chatter 实例，如果不存在则返回 None
+
+        Examples:
+            >>> chatter = manager.get_chatter_by_stream("stream_1")
+        """
+        return self._active_chatters.get(stream_id)
 
 # 全局 Chatter 管理器实例
 _global_chatter_manager: ChatterManager | None = None

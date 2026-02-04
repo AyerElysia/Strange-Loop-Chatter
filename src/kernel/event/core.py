@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from src.kernel.concurrency import get_task_manager
 from src.kernel.logger import get_logger, COLOR
 
 # 注意：EventBus 自身的日志不应再通过事件总线进行广播，否则在订阅了
@@ -340,8 +341,8 @@ class EventBus:
         Example:
             >>> bus.publish_sync("user_action", {"action": "click"})
         """
-        task = asyncio.create_task(self.publish(event_name, params))
-        return task
+        task = get_task_manager().create_task(self.publish(event_name, params))
+        return task.task # type: ignore
 
     @property
     def subscribed_events(self) -> set[str]:

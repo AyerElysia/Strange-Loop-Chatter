@@ -57,6 +57,7 @@ class BaseEventHandler(ABC):
         """
         self.plugin = plugin
         self._subscribed_events: set[EventType] = set()
+        self.signature = ""  # 组件签名，由管理器设置
 
         # 初始化订阅
         for event in self.init_subscribe:

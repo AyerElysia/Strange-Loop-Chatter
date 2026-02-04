@@ -13,6 +13,7 @@ from src.core.components.utils import parse_function_signature
 
 if TYPE_CHECKING:
     from src.core.components.base.plugin import BasePlugin
+    from src.core.models.stream import ChatStream
     from src.kernel.llm.payload.tooling import LLMUsable
 
 
@@ -57,7 +58,7 @@ class BaseAction(ABC, LLMUsable):
     # 组件级依赖（精确到组件签名）
     dependencies: list[str] = []  # 例如 ["other_plugin:tool:calculator"]
 
-    def __init__(self, chat_stream, plugin: "BasePlugin") -> None:
+    def __init__(self, chat_stream: "ChatStream", plugin: "BasePlugin") -> None:
         """初始化动作组件。
 
         Args:
@@ -201,7 +202,11 @@ class BaseAction(ABC, LLMUsable):
         # TODO: 实现与 action_manager 的集成
         return False
 
-    async def _send_to_stream(self, content, stream_id: str | None = None) -> bool:
+    async def _send_to_stream(
+        self,
+        content: Any,
+        stream_id: str | None = None,
+    ) -> bool:
         """发送任意内容到指定聊天流。
 
         Args:

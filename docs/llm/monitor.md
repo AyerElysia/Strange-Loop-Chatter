@@ -145,67 +145,61 @@ collector.record_request(metrics)
 ##### get_stats
 
 ```python
-def get_stats(self, model_name: str) -> ModelStats | None:
-    """获取特定模型的统计数据。"""
+def get_stats(self, model_name: str | None = None) -> dict[str, Any] | list[dict[str, Any]]:
+    """获取统计数据。
+    
+    Args:
+        model_name: 指定模型名称，若为 None 则返回所有模型的统计
+    
+    Returns:
+        单个模型的统计字典或所有模型的统计列表
+    """
 ```
 
-返回指定模型的聚合统计信息。
+返回指定模型或所有模型的聚合统计信息。
 
 **使用示例：**
 ```python
+# 获取特定模型统计
 stats = collector.get_stats("gpt-4")
-if stats:
-    print(f"gpt-4 成功率: {stats.success_rate:.2%}")
-else:
-    print("没有 gpt-4 的数据")
+print(f"gpt-4 成功率: {stats['success_rate']:.2%}")
+print(f"gpt-4 平均延迟: {stats['avg_latency']:.3f}s")
+
+# 获取所有模型统计
+all_stats = collector.get_stats()
+for model_stats in all_stats:
+    print(f"{model_stats['model_name']}: {model_stats['success_rate']:.2%}")
 ```
 
-##### list_all_stats
+##### get_recent_history
 
 ```python
-def list_all_stats(self) -> dict[str, ModelStats]:
-    """获取所有模型的统计数据。"""
+def get_recent_history(self, limit: int = 100) -> list[RequestMetrics]:
+    """获取最近的请求历史。"""
 ```
 
-返回所有模型的统计信息。
-
-**使用示例：**
-```python
-all_stats = collector.list_all_stats()
-for model_name, stats in all_stats.items():
-    print(f"{model_name}: {stats.success_rate:.2%}")
-```
-
-##### get_history
-
-```python
-def get_history(self, model_name: str | None = None, limit: int | None = None) -> list[RequestMetrics]:
-    """获取请求历史。"""
-```
-
-获取历史请求记录。可按模型名称和数量限制。
+获取最近 N 条请求记录。
 
 **使用示例：**
 ```python
 # 获取最后 10 条记录
-recent = collector.get_history(limit=10)
-
-# 获取 gpt-4 的所有记录
-gpt4_history = collector.get_history(model_name="gpt-4")
+recent = collector.get_recent_history(limit=10)
+for metrics in recent:
+    print(f"{metrics.model_name}: {metrics.latency:.3f}s, success={metrics.success}")
 ```
 
-##### clear_history
+##### clear
 
 ```python
-def clear_history(self) -> None:
-    """清除所有历史记录。"""
+def clear(self) -> None:
+    """清空所有统计数据。"""
 ```
 
-重置所有数据。通常用于测试或重新开始统计。
+清除所有的统计数据和历史记录。通常用于测试或重新开始统计。
 
 **使用示例：**
 ```python
-collector.clear_history()
+collector.clear()
 # 所有统计重置
 ```
 
@@ -215,27 +209,26 @@ collector.clear_history()
 
 ```python
 class RequestTimer:
-    """上下文管理器，用于测量请求延迟。"""
+    """请求计时器（上下文管理器）。"""
     
     def __init__(self) -> None:
         """初始化计时器。"""
     
-    async def measure(self, coro) -> tuple[Any, float]:
-        """测量异步操作的执行时间。
-        
-        Args:
-            coro: 异步操作
-        
-        Returns:
-            (结果, 耗时秒数)
-        """
+    @property
+    def elapsed(self) -> float:
+        """已用时间（秒）。"""
 ```
 
 **使用示例：**
 ```python
+from kernel.llm import RequestTimer
+
 timer = RequestTimer()
-result, elapsed = await timer.measure(request.send())
-print(f"耗时: {elapsed}s")
+with timer:
+    message = await request.send(stream=False)
+    message = await message
+
+print(f"耗时: {timer.elapsed:.3f}s")
 ```
 
 ---

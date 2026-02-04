@@ -65,14 +65,14 @@ class _RoundRobinSession(PolicySession):
         retry_interval = model.get("retry_interval")
 
         try:
-            max_retry_int = int(max_retry)
+            max_retry_int = int(max_retry) if max_retry is not None else 2
         except Exception:
             max_retry_int = 0
         if max_retry_int < 0:
             max_retry_int = 0
 
         try:
-            delay = float(retry_interval)
+            delay = float(retry_interval) if retry_interval is not None else 3.0
         except Exception:
             delay = 0.0
         if delay < 0:

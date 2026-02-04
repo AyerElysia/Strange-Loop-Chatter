@@ -20,10 +20,10 @@ class LLMResponse:
     _auto_append_response: bool                         # 是否自动追加到对话
     
     payloads: list[LLMPayload]                          # 当前对话的所有 payload
-    model_set: Any                                       # 模型配置
+    model_set: ModelSet                                 # 模型配置
     
     message: str | None = None                          # 完整的文本响应
-    call_list: list[ToolCall] = None                    # 工具调用列表
+    call_list: list[ToolCall] = field(default_factory=list)  # 工具调用列表
     
     _consumed: bool = False                             # 是否已被消费
 ```

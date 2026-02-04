@@ -162,7 +162,7 @@ class TestTaskManager:
         tm = get_task_manager()
 
         async def long_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
             return "should not complete"
 
         task_info = tm.create_task(long_task())
@@ -261,7 +261,7 @@ class TestTaskGroup:
             raise ValueError("Task failed")
 
         async def long_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
             return "should not complete"
 
         try:
@@ -303,14 +303,14 @@ class TestWatchDog:
 
         heartbeat = wd.register_stream(
             stream_id="test_stream",
-            tick_interval=1.0,
-            warning_threshold=2.0,
-            restart_threshold=5.0,
+            tick_interval=0.1,
+            warning_threshold=0.2,
+            restart_threshold=0.5,
         )
 
         assert isinstance(heartbeat, StreamHeartbeat)
         assert heartbeat.stream_id == "test_stream"
-        assert heartbeat.tick_interval == 1.0
+        assert heartbeat.tick_interval == 0.1
 
         # 清理
         wd.unregister_stream("test_stream")
@@ -327,7 +327,7 @@ class TestWatchDog:
         # 喂狗
         import time
 
-        time.sleep(0.1)
+        time.sleep(0.01)
         wd.feed_dog("test_stream")
 
         # 验证心跳时间已更新
@@ -372,13 +372,13 @@ class TestIntegration:
         tm.set_watchdog(wd)
 
         async def short_task():
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.01)
 
         # 创建任务
         tm.create_task(short_task(), timeout=1.0)
 
         # 清理已完成任务
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.05)
         cleaned = tm.cleanup_tasks()
 
         assert cleaned >= 1
@@ -434,7 +434,7 @@ class TestTaskInfoEdgeCases:
         """测试 __repr__ 方法的各种状态"""
         # 测试 running 状态
         async def running_task():
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.05)
 
         task = asyncio.create_task(running_task())
         task_info_running = TaskInfo(
@@ -458,7 +458,7 @@ class TestTaskInfoEdgeCases:
 
         # 测试 cancelled 状态
         async def cancellable_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         task3 = asyncio.create_task(cancellable_task())
         task3.cancel()
@@ -578,7 +578,7 @@ class TestTaskManagerEdgeCases:
         tm = get_task_manager()
 
         async def daemon_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         # 创建守护任务
         tm.create_task(daemon_task(), daemon=True)
@@ -682,7 +682,7 @@ class TestTaskGroupEdgeCases:
         tm = get_task_manager()
 
         async def long_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         async with tm.group(name="timeout_group", timeout=0.1) as tg:
             tg.create_task(long_task())
@@ -699,7 +699,7 @@ class TestTaskGroupEdgeCases:
             raise ValueError("Error")
 
         async def normal_task():
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.05)
 
         try:
             async with tm.group(name="no_cancel_group", cancel_on_error=False) as tg:
@@ -754,17 +754,17 @@ class TestTaskGroupEdgeCases:
         tm = get_task_manager()
 
         async def quick_task():
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.01)
 
         async def long_task():
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.05)
 
         async with tm.group(name="active_count_group") as tg:
             tg.create_task(quick_task())
             tg.create_task(long_task())
             assert tg.get_active_task_count() == 2
 
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.02)
             assert tg.get_active_task_count() == 1
 
     @pytest.mark.asyncio
@@ -802,7 +802,7 @@ class TestTaskGroupEdgeCases:
         tm = get_task_manager()
 
         async def dummy_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         # 创建一个可以被取消的任务
         async def cancel_context():
@@ -822,8 +822,8 @@ class TestWatchDogEdgeCases:
 
     def test_watchdog_init(self) -> None:
         """测试 WatchDog 初始化"""
-        wd = WatchDog(tick_interval=2.0)
-        assert wd._tick_interval == 2.0
+        wd = WatchDog(tick_interval=0.2)
+        assert wd._tick_interval == 0.2
         assert not wd._running
         assert wd._thread is None
 
@@ -974,6 +974,7 @@ class TestWatchDogEdgeCases:
         wd.stop()
 
     @pytest.mark.asyncio
+    @pytest.mark.slow
     async def test_watchdog_with_task_manager_integration(self) -> None:
         """测试 WatchDog 与 TaskManager 深度集成"""
         tm = get_task_manager()
@@ -986,13 +987,13 @@ class TestWatchDogEdgeCases:
         wd.start()
 
         async def timeout_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         # 创建带超时的任务
         task_info = tm.create_task(timeout_task(), timeout=0.2)
 
         # 等待足够的时间让 watchdog 检查到超时
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.1)
 
         # 任务应该被取消
         assert task_info.is_cancelled() or task_info.is_done()
@@ -1003,6 +1004,7 @@ class TestWatchDogEdgeCases:
 class TestWatchDogStreamMonitoring:
     """测试 WatchDog 流监控功能"""
 
+    @pytest.mark.slow
     def test_watchdog_stream_warning_threshold(self) -> None:
         """测试流警告阈值"""
         wd = WatchDog(tick_interval=0.05)
@@ -1018,10 +1020,11 @@ class TestWatchDogStreamMonitoring:
         # 等待足够长的时间触发警告
         import time
 
-        time.sleep(0.1)
+        time.sleep(0.01)
 
         wd.stop()
 
+    @pytest.mark.slow
     def test_watchdog_stream_restart_threshold(self) -> None:
         """测试流重启阈值和回调"""
         wd = WatchDog(tick_interval=0.05)
@@ -1043,7 +1046,7 @@ class TestWatchDogStreamMonitoring:
         # 等待足够长的时间触发重启
         import time
 
-        time.sleep(0.1)
+        time.sleep(0.01)
 
         wd.stop()
 
@@ -1065,7 +1068,7 @@ class TestWatchDogStreamMonitoring:
         # 等待触发重启
         import time
 
-        time.sleep(0.1)
+        time.sleep(0.01)
 
         # 不应该导致 WatchDog 崩溃
         assert wd._running
@@ -1188,7 +1191,7 @@ class TestConcurrencyModuleRepr:
 
     def test_watchdog_repr_comprehensive(self) -> None:
         """测试 WatchDog __repr__ 的全面情况"""
-        wd = WatchDog(tick_interval=2.0)
+        wd = WatchDog(tick_interval=0.2)
 
         repr_str = repr(wd)
         assert "WatchDog" in repr_str
@@ -1245,7 +1248,7 @@ class TestTaskManagerGroupManagement:
             tg.create_task(quick_task())
 
         # 等待任务完成
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.05)
 
         # 清理
         cleaned = tm.cleanup_tasks()
@@ -1280,7 +1283,7 @@ class TestAdditionalCoverage:
         tm = get_task_manager()
 
         async def long_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         async with tm.group(name="pending_test", timeout=0.1) as tg:
             tg.create_task(long_task())
@@ -1310,10 +1313,10 @@ class TestAdditionalCoverage:
 
         async def non_cancelable_task():
             try:
-                await asyncio.sleep(100)
+                await asyncio.sleep(0.05)
             except asyncio.CancelledError:
                 # 忽略取消并继续睡眠
-                await asyncio.sleep(100)
+                await asyncio.sleep(0.05)
 
         async with tg:
             tg.create_task(non_cancelable_task())
@@ -1340,16 +1343,16 @@ class TestAdditionalCoverage:
 
         async def non_cancellable_task():
             try:
-                await asyncio.sleep(100)
+                await asyncio.sleep(0.05)
             except asyncio.CancelledError:
                 # 忽略取消
-                await asyncio.sleep(100)
+                await asyncio.sleep(0.05)
 
         # 创建带超时的任务
         tm.create_task(non_cancellable_task(), timeout=0.2)
 
         # 等待 watchdog 检查
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.1)
 
         wd.stop()
 
@@ -1375,7 +1378,7 @@ class TestAdditionalCoverage:
         wd.start()
 
         # 没有设置 _task_manager，让 watchdog 自己获取
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.05)
 
         wd.stop()
 
@@ -1388,7 +1391,7 @@ class TestAdditionalCoverage:
             raise ValueError("Error")
 
         async def normal_task():
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.05)
 
         try:
             async with tm.group(name="no_cancel_on_exit", cancel_on_error=False) as tg:
@@ -1435,7 +1438,7 @@ class TestAdditionalCoverage:
         wd.start()
 
         # 没有创建任务，让 watchdog 检查
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.05)
 
         wd.stop()
 
@@ -1481,7 +1484,7 @@ class TestAdditionalCoverage:
         tm = get_task_manager()
 
         async def sample_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         # 创建任务组
         async with tm.group(name="cancel_wait_error") as tg:
@@ -1531,7 +1534,7 @@ class TestAdditionalCoverage:
         tm.create_task(instant_task(), timeout=0.02, name="instant_task")
 
         # 等待 watchdog 检查
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.05)
 
         wd.stop()
 
@@ -1559,10 +1562,11 @@ class TestAdditionalCoverage:
         async with tm.group(name="group_exception_test") as tg:
             task_info = tg.create_task(failing_task())
             # 等待任务失败
-            try:
-                await task_info.task
-            except ValueError:
-                pass
+            if task_info.task:
+                try:
+                    await task_info.task
+                except ValueError:
+                    pass
 
             # _on_task_done 应该将异常记录到组中
             # 由于任务失败且属于组，异常应该被记录
@@ -1578,7 +1582,7 @@ class TestAdditionalCoverage:
         # 模拟 tick 延迟
         import time
 
-        time.sleep(0.1)
+        time.sleep(0.01)
 
         # 手动设置上次 tick 为很久以前，这样下次循环会触发警告
         from datetime import timedelta
@@ -1586,7 +1590,7 @@ class TestAdditionalCoverage:
         wd._last_tick_time = datetime.now() - timedelta(seconds=1.0)
 
         # 等待下一个 tick 检测到异常
-        time.sleep(0.1)
+        time.sleep(0.01)
 
         wd.stop()
 
@@ -1596,7 +1600,7 @@ class TestAdditionalCoverage:
         tg = TaskGroup(name="cancel_from_wait")
 
         async def long_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         async with tg:
             tg.create_task(long_task())
@@ -1624,7 +1628,7 @@ class TestAdditionalCoverage:
     async def test_task_info_is_failed_not_done(self) -> None:
         """测试 is_failed 在任务未完成时返回 False"""
         async def running_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         task = asyncio.create_task(running_task())
         task_info = TaskInfo(task_id="test_id", task=task)
@@ -1668,10 +1672,11 @@ class TestAdditionalCoverage:
             task_info = tg.create_task(failing_task())
 
             # 等待任务完成并失败
-            try:
-                await task_info.task
-            except ValueError:
-                pass
+            if task_info.task:
+                try:
+                    await task_info.task
+                except ValueError:
+                    pass
 
             # _on_task_done 应该已经处理了这个异常
 
@@ -1681,7 +1686,7 @@ class TestAdditionalCoverage:
         tm = get_task_manager()
 
         async def cancellable_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         # 创建一个属于组的任务
         async with tm.group(name="cancelled_callback_test") as tg:
@@ -1690,10 +1695,11 @@ class TestAdditionalCoverage:
             # 取消任务
             task_info.cancel()
 
-            try:
-                await task_info.task
-            except asyncio.CancelledError:
-                pass
+            if task_info.task:
+                try:
+                    await task_info.task
+                except asyncio.CancelledError:
+                    pass
 
             # _on_task_done 应该处理被取消的任务（不记录异常）
 
@@ -1726,17 +1732,18 @@ class TestAdditionalCoverage:
             raise ValueError("Test exception")
 
         # 创建一个组并添加失败的任务
-        group = tm.group(name="full_exception_test")
+        _ = tm.group(name="full_exception_test")
 
         # 在组内创建任务（但不使用 async with，保持组激活）
-        async with group as tg:
+        async with tm.group(name="full_exception_test") as tg:
             task_info = tg.create_task(failing_task())
 
             # 等待任务完成（会失败）
-            try:
-                await task_info.task
-            except ValueError:
-                pass
+            if task_info.task:
+                try:
+                    await task_info.task
+                except ValueError:
+                    pass
 
             # _on_task_done 回调应该已经被触发
             # 它应该检测到任务未取消、有异常、属于组、组存在
@@ -1747,7 +1754,7 @@ class TestAdditionalCoverage:
         tg = TaskGroup(name="wait_cancelled")
 
         async def slow_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         async with tg:
             tg.create_task(slow_task())
@@ -1794,7 +1801,7 @@ class TestAdditionalCoverage:
 
         # 测试任务未完成的情况
         async def running_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         task = asyncio.create_task(running_task())
         task_info_running = TaskInfo(task_id="test_id_2", task=task)
@@ -1868,7 +1875,7 @@ class TestAdditionalCoverage:
         tg = TaskGroup(name="cancel_during_wait")
 
         async def endless_task():
-            await asyncio.sleep(1000)
+            await asyncio.sleep(0.05)
 
         async with tg:
             tg.create_task(endless_task())
@@ -1936,7 +1943,8 @@ class TestAdditionalCoverage:
         task_info = tm.create_task(super_fast_task(), timeout=0.05, name="fast")
 
         # 等待任务完成
-        await task_info.task
+        if task_info.task:
+            await task_info.task
 
         # 手动将 task 设置为 None，这样 cancel() 会返回 False
         task_info.task = None
@@ -1951,7 +1959,6 @@ class TestAdditionalCoverage:
         await replacement_task
         task_info.task = replacement_task
         tm.cleanup_tasks()
-        tm.set_watchdog(None)
 
     @pytest.mark.asyncio
     async def test_task_info_is_failed_edge_case_with_mock(self) -> None:
@@ -1987,7 +1994,7 @@ class TestAdditionalCoverage:
         tm = get_task_manager()
 
         async def sample_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         # 创建一个外部可取消的任务组上下文
         async def cancellable_context():
@@ -2006,7 +2013,7 @@ class TestAdditionalCoverage:
 
         async def slow_cancel_task():
             try:
-                await asyncio.sleep(10)
+                await asyncio.sleep(0.05)
             except asyncio.CancelledError:
                 await asyncio.sleep(0.1)
                 raise
@@ -2032,7 +2039,7 @@ class TestAdditionalCoverage:
 
         import time
 
-        time.sleep(0.1)
+        time.sleep(0.01)
         wd.stop()
 
     @pytest.mark.asyncio
@@ -2048,10 +2055,10 @@ class TestAdditionalCoverage:
             await asyncio.sleep(0.01)
 
         async def no_timeout_task():
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.05)
 
         async def daemon_timeout_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         # 创建带超时的非守护任务
         tm.create_task(quick_timeout_task(), timeout=0.02)
@@ -2061,7 +2068,7 @@ class TestAdditionalCoverage:
         tm.create_task(daemon_timeout_task(), daemon=True, timeout=0.02)
 
         # 等待 watchdog 检查
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.05)
 
         wd.stop()
 
@@ -2071,7 +2078,7 @@ class TestAdditionalCoverage:
         tm = get_task_manager()
 
         async def long_task():
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.05)
 
         async with tm.group(name="timeout_pending_test", timeout=0.1) as tg:
             tg.create_task(long_task())

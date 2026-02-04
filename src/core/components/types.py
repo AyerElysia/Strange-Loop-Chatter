@@ -70,6 +70,124 @@ class ComponentState(Enum):
     ERROR = "error"
 
 
+class PermissionLevel(int, Enum):
+    """权限级别枚举。
+
+    定义命令执行的层级权限系统。
+    数值越高表示权限越大。
+
+    Attributes:
+        GUEST: 访客级别 (Level 1) - 有限访问
+        USER: 用户级别 (Level 2) - 普通用户（默认）
+        OPERATOR: 操作员级别 (Level 3) - 管理操作
+        OWNER: 所有者级别 (Level 4) - 完全控制
+
+    Examples:
+        >>> level = PermissionLevel.OPERATOR
+        >>> level > PermissionLevel.USER
+        True
+        >>> PermissionLevel.from_string("owner")
+        PermissionLevel.OWNER
+    """
+
+    GUEST = 1
+    USER = 2
+    OPERATOR = 3
+    OWNER = 4
+
+    def __lt__(self, other: object) -> bool:
+        """比较权限级别（小于）。
+
+        Args:
+            other: 另一个 PermissionLevel 对象
+
+        Returns:
+            bool: 如果自身权限低于 other，返回 True
+        """
+        if isinstance(other, PermissionLevel):
+            return self.value < other.value
+        return NotImplemented
+
+    def __le__(self, other: object) -> bool:
+        """比较权限级别（小于等于）。
+
+        Args:
+            other: 另一个 PermissionLevel 对象
+
+        Returns:
+            bool: 如果自身权限低于或等于 other，返回 True
+        """
+        if isinstance(other, PermissionLevel):
+            return self.value <= other.value
+        return NotImplemented
+
+    def __gt__(self, other: object) -> bool:
+        """比较权限级别（大于）。
+
+        Args:
+            other: 另一个 PermissionLevel 对象
+
+        Returns:
+            bool: 如果自身权限高于 other，返回 True
+        """
+        if isinstance(other, PermissionLevel):
+            return self.value > other.value
+        return NotImplemented
+
+    def __ge__(self, other: object) -> bool:
+        """比较权限级别（大于等于）。
+
+        Args:
+            other: 另一个 PermissionLevel 对象
+
+        Returns:
+            bool: 如果自身权限高于或等于 other，返回 True
+        """
+        if isinstance(other, PermissionLevel):
+            return self.value >= other.value
+        return NotImplemented
+
+    @classmethod
+    def from_string(cls, level_str: str) -> "PermissionLevel":
+        """从字符串转换为 PermissionLevel。
+
+        Args:
+            level_str: 权限级别字符串（不区分大小写）
+
+        Returns:
+            PermissionLevel: 对应的权限级别枚举值
+
+        Raises:
+            ValueError: 如果字符串不匹配任何级别
+
+        Examples:
+            >>> PermissionLevel.from_string("owner")
+            PermissionLevel.OWNER
+            >>> PermissionLevel.from_string("GUEST")
+            PermissionLevel.GUEST
+        """
+        try:
+            return cls[level_str.upper()]
+        except KeyError:
+            valid = [lvl.name for lvl in cls]
+            raise ValueError(
+                f"无效的权限级别: '{level_str}'。"
+                f"有效级别为: {', '.join(valid)}"
+            )
+
+    def to_string(self) -> str:
+        """转换为小写字符串。
+
+        Returns:
+            str: 权限级别的小写字符串表示
+
+        Examples:
+            >>> PermissionLevel.OPERATOR.to_string()
+            'operator'
+        """
+        return self.name.lower()
+
+
 class ComponentMeta(TypedDict, total=False):
     """组件元数据。
 

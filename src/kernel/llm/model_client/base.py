@@ -34,3 +34,4 @@ class ChatModelClient(Protocol):
         - tool_calls: 非流时解析出的工具调用列表；流式则为 None（将通过 StreamEvent 解析）
         - stream_iter: 流式迭代器；非流则为 None
         """
+        ...

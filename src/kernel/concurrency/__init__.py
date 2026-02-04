@@ -24,9 +24,18 @@ Concurrency 模块
         cancel_on_error=True
     ) as tg:
         tg.create_task(my_task())
+
+    # 使用 gather 并行执行任务
+    from src.kernel.concurrency import gather
+
+    results = await gather(
+        my_task(),
+        my_task(),
+        my_task()
+    )
 """
 
-from .task_manager import TaskManager, get_task_manager
+from .task_manager import TaskManager, get_task_manager, gather
 from .task_group import TaskGroup
 from .task_info import TaskInfo
 from .watchdog import WatchDog, get_watchdog, StreamHeartbeat
@@ -44,6 +53,7 @@ __all__ = [
     # 主要接口
     "get_task_manager",
     "TaskManager",
+    "gather",
     "TaskGroup",
     "TaskInfo",
     "get_watchdog",

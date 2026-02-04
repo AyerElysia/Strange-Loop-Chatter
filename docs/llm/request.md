@@ -12,16 +12,19 @@
 ## 类定义
 
 ```python
+from dataclasses import dataclass, field
+
 @dataclass(slots=True)
 class LLMRequest:
     """LLMRequest：构建 payload 并执行请求。"""
     
-    model_set: Any                      # 模型配置列表
-    request_name: str = ""              # 请求名称（用于日志和策略）
-    payloads: list[LLMPayload] = None   # 消息 payload 列表
-    policy: Policy | None = None        # 负载均衡/重试策略
-    clients: ModelClientRegistry = None # 模型客户端注册表
-    enable_metrics: bool = True         # 是否启用指标收集
+    model_set: ModelSet                                  # 模型配置列表
+    request_name: str = ""                              # 请求名称（用于日志和策略）
+    
+    payloads: list[LLMPayload] = field(default_factory=list)  # 消息 payload 列表
+    policy: Policy | None = None                        # 负载均衡/重试策略
+    clients: ModelClientRegistry | None = None          # 模型客户端注册表
+    enable_metrics: bool = True                         # 是否启用指标收集
 ```
 
 ## 核心属性
@@ -38,15 +41,15 @@ class LLMRequest:
     "client_type": "openai",           # 提供商类型
     "model_identifier": "gpt-4",       # 模型标识
     "api_key": "sk-...",              # API 密钥
-    "base_url": "https://api.openai.com/v1",  # API 基础 URL（可选）
 }
 ```
 
-**可选配置项：**
+**常见可选配置项：**
 ```python
 {
-    "max_retry": 3,                    # 最大重试次数（默认 0）
-    "retry_interval": 1.0,             # 重试间隔（秒，默认 0）
+    "base_url": "https://api.openai.com/v1",  # API 基础 URL
+    "max_retry": 3,                    # 最大重试次数
+    "retry_interval": 1.0,             # 重试间隔（秒）
     "timeout": 30.0,                   # 请求超时（秒）
     "temperature": 0.7,                # 采样温度
     "max_tokens": 2000,                # 最大输出 token 数

@@ -182,7 +182,7 @@ class PromptTemplate:
 
         # 使用自定义的 dict 来处理缺失的 key
         class SafeDict(dict):
-            def __missing__(self, key):
+            def __missing__(self, key: str) -> str:
                 return f"{{{key}}}"
 
         return self.template.format_map(SafeDict(rendered))

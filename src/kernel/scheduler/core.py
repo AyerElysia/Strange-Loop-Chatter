@@ -426,7 +426,7 @@ class UnifiedScheduler:
                 if task._scheduled_trigger_time is None:
                     task._scheduled_trigger_time = trigger_time
 
-                if current_time >= task._scheduled_trigger_time:
+                if task._scheduled_trigger_time is not None and current_time >= task._scheduled_trigger_time:
                     task._scheduled_trigger_time = next_after(
                         current_time,
                         task._scheduled_trigger_time,
