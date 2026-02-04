@@ -16,7 +16,6 @@ from src.core.transport.router.http_server import get_http_server
 if TYPE_CHECKING:
     from src.core.components.base.router import BaseRouter
     from src.core.components.base.plugin import BasePlugin
-    from src.core.transport.router.http_server import HTTPServer
 
 
 logger = get_logger("router_manager")
@@ -321,9 +320,9 @@ class RouterManager:
         """
         all_routers = self.get_all_routers()
         return [
-            self.get_router_info(signature)
+            info
             for signature in all_routers.keys()
-            if self.get_router_info(signature) is not None
+            if (info := self.get_router_info(signature)) is not None
         ]
 
     async def reload_router(self, signature: str, plugin: "BasePlugin") -> "BaseRouter":

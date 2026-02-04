@@ -6,7 +6,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from src.core.components.managers.router_manager import (
+from src.core.managers.router_manager import (
     RouterManager,
     get_router_manager,
 )
@@ -63,7 +63,7 @@ class TestRouterManager:
         manager = RouterManager()
         yield manager
         # 清理
-        import src.core.components.managers.router_manager as module
+        import src.core.managers.router_manager as module
         module._global_router_manager = None
 
     @pytest.fixture
@@ -101,7 +101,7 @@ class TestRouterManager:
 
     def test_get_all_routers(self, manager, registry):
         """测试获取所有 Router。"""
-        with patch("src.core.components.managers.router_manager.get_global_registry") as mock_get:
+        with patch("src.core.managers.router_manager.get_global_registry") as mock_get:
             mock_get.return_value = registry
 
             routers = manager.get_all_routers()
@@ -111,7 +111,7 @@ class TestRouterManager:
 
     def test_get_routers_for_plugin(self, manager, registry):
         """测试获取插件的 Router。"""
-        with patch("src.core.components.managers.router_manager.get_global_registry") as mock_get:
+        with patch("src.core.managers.router_manager.get_global_registry") as mock_get:
             mock_get.return_value = registry
 
             routers = manager.get_routers_for_plugin("test_plugin")
@@ -119,7 +119,7 @@ class TestRouterManager:
 
     def test_get_router_class(self, manager, registry):
         """测试获取 Router 类。"""
-        with patch("src.core.components.managers.router_manager.get_global_registry") as mock_get:
+        with patch("src.core.managers.router_manager.get_global_registry") as mock_get:
             mock_get.return_value = registry
 
             router_cls = manager.get_router_class("test_plugin:router:test_router")
@@ -133,8 +133,8 @@ class TestRouterManager:
     async def test_mount_router(self, manager, http_server, plugin, registry):
         """测试挂载 Router。"""
         # 使用 patch 模拟 get_http_server 返回测试服务器
-        with patch("src.core.components.managers.router_manager.get_global_registry") as mock_registry, \
-             patch("src.core.components.managers.router_manager.get_http_server") as mock_http:
+        with patch("src.core.managers.router_manager.get_global_registry") as mock_registry, \
+             patch("src.core.managers.router_manager.get_http_server") as mock_http:
             mock_registry.return_value = registry
             mock_http.return_value = http_server
 
@@ -153,8 +153,8 @@ class TestRouterManager:
     @pytest.mark.asyncio
     async def test_mount_router_already_mounted(self, manager, http_server, plugin, registry):
         """测试挂载已挂载的 Router。"""
-        with patch("src.core.components.managers.router_manager.get_global_registry") as mock_registry, \
-             patch("src.core.components.managers.router_manager.get_http_server") as mock_http:
+        with patch("src.core.managers.router_manager.get_global_registry") as mock_registry, \
+             patch("src.core.managers.router_manager.get_http_server") as mock_http:
             mock_registry.return_value = registry
             mock_http.return_value = http_server
 
@@ -168,8 +168,8 @@ class TestRouterManager:
     @pytest.mark.asyncio
     async def test_mount_router_not_found(self, manager, http_server, plugin, registry):
         """测试挂载不存在的 Router。"""
-        with patch("src.core.components.managers.router_manager.get_global_registry") as mock_registry, \
-             patch("src.core.components.managers.router_manager.get_http_server") as mock_http:
+        with patch("src.core.managers.router_manager.get_global_registry") as mock_registry, \
+             patch("src.core.managers.router_manager.get_http_server") as mock_http:
             mock_registry.return_value = registry
             mock_http.return_value = http_server
 
@@ -180,8 +180,8 @@ class TestRouterManager:
     @pytest.mark.asyncio
     async def test_unmount_router(self, manager, http_server, plugin, registry):
         """测试卸载 Router。"""
-        with patch("src.core.components.managers.router_manager.get_global_registry") as mock_registry, \
-             patch("src.core.components.managers.router_manager.get_http_server") as mock_http:
+        with patch("src.core.managers.router_manager.get_global_registry") as mock_registry, \
+             patch("src.core.managers.router_manager.get_http_server") as mock_http:
             mock_registry.return_value = registry
             mock_http.return_value = http_server
 
@@ -208,8 +208,8 @@ class TestRouterManager:
     @pytest.mark.asyncio
     async def test_mount_plugin_routers(self, manager, http_server, plugin, registry):
         """测试挂载插件的所有 Router。"""
-        with patch("src.core.components.managers.router_manager.get_global_registry") as mock_registry, \
-             patch("src.core.components.managers.router_manager.get_http_server") as mock_http:
+        with patch("src.core.managers.router_manager.get_global_registry") as mock_registry, \
+             patch("src.core.managers.router_manager.get_http_server") as mock_http:
             mock_registry.return_value = registry
             mock_http.return_value = http_server
 
@@ -222,8 +222,8 @@ class TestRouterManager:
     @pytest.mark.asyncio
     async def test_unmount_plugin_routers(self, manager, http_server, plugin, registry):
         """测试卸载插件的所有 Router。"""
-        with patch("src.core.components.managers.router_manager.get_global_registry") as mock_registry, \
-             patch("src.core.components.managers.router_manager.get_http_server") as mock_http:
+        with patch("src.core.managers.router_manager.get_global_registry") as mock_registry, \
+             patch("src.core.managers.router_manager.get_http_server") as mock_http:
             mock_registry.return_value = registry
             mock_http.return_value = http_server
 
@@ -238,8 +238,8 @@ class TestRouterManager:
     @pytest.mark.asyncio
     async def test_unmount_all_routers(self, manager, http_server, plugin, registry):
         """测试卸载所有 Router。"""
-        with patch("src.core.components.managers.router_manager.get_global_registry") as mock_registry, \
-             patch("src.core.components.managers.router_manager.get_http_server") as mock_http:
+        with patch("src.core.managers.router_manager.get_global_registry") as mock_registry, \
+             patch("src.core.managers.router_manager.get_http_server") as mock_http:
             mock_registry.return_value = registry
             mock_http.return_value = http_server
 
@@ -253,7 +253,7 @@ class TestRouterManager:
 
     def test_get_router_info(self, manager, registry):
         """测试获取 Router 信息。"""
-        with patch("src.core.components.managers.router_manager.get_global_registry") as mock_get:
+        with patch("src.core.managers.router_manager.get_global_registry") as mock_get:
             mock_get.return_value = registry
 
             info = manager.get_router_info("test_plugin:router:test_router")
@@ -269,7 +269,7 @@ class TestRouterManager:
 
     def test_get_all_router_info(self, manager, registry):
         """测试获取所有 Router 信息。"""
-        with patch("src.core.components.managers.router_manager.get_global_registry") as mock_get:
+        with patch("src.core.managers.router_manager.get_global_registry") as mock_get:
             mock_get.return_value = registry
 
             info_list = manager.get_all_router_info()
@@ -278,8 +278,8 @@ class TestRouterManager:
     @pytest.mark.asyncio
     async def test_reload_router(self, manager, http_server, plugin, registry):
         """测试重新加载 Router。"""
-        with patch("src.core.components.managers.router_manager.get_global_registry") as mock_registry, \
-             patch("src.core.components.managers.router_manager.get_http_server") as mock_http:
+        with patch("src.core.managers.router_manager.get_global_registry") as mock_registry, \
+             patch("src.core.managers.router_manager.get_http_server") as mock_http:
             mock_registry.return_value = registry
             mock_http.return_value = http_server
 
@@ -300,7 +300,7 @@ class TestGlobalRouterManager:
 
     def teardown_method(self):
         """清理全局管理器实例。"""
-        import src.core.components.managers.router_manager as module
+        import src.core.managers.router_manager as module
         module._global_router_manager = None
 
     def test_get_router_manager(self):
