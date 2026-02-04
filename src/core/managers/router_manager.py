@@ -256,8 +256,26 @@ class RouterManager:
         Examples:
             >>> await manager.mount_all_routers()
         """
-        # TODO: 从插件系统获取所有插件实例并挂载
-        logger.warning("mount_all_routers 需要插件系统支持，当前未实现")
+        from src.core.managers.plugin_manager import get_plugin_manager
+
+        plugin_manager = get_plugin_manager()
+        plugins = plugin_manager.get_all_plugins()
+
+        if not plugins:
+            logger.info("当前没有已加载插件，跳过挂载 Router")
+            return
+
+        mounted_router_count = 0
+        for plugin_name, plugin in plugins.items():
+            try:
+                mounted = await self.mount_plugin_routers(plugin)
+                mounted_router_count += len(mounted)
+            except Exception as e:
+                logger.error(f"挂载插件 {plugin_name} 的 Router 失败: {e}")
+
+        logger.info(
+            f"所有插件 Router 挂载完成: plugins={len(plugins)}, mounted_routers={mounted_router_count}"
+        )
 
     async def unmount_all_routers(self) -> None:
         """卸载所有已挂载的 Router 组件。

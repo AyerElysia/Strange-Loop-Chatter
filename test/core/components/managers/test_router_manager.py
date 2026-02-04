@@ -251,6 +251,22 @@ class TestRouterManager:
             await manager.unmount_all_routers()
             assert len(manager.get_all_mounted_routers()) == 0
 
+    @pytest.mark.asyncio
+    async def test_mount_all_routers(self, manager, http_server, plugin, registry):
+        """测试挂载所有已加载插件的 Router。"""
+        mock_plugin_manager = AsyncMock()
+        mock_plugin_manager.get_all_plugins.return_value = {"test_plugin": plugin}
+
+        with patch("src.core.managers.router_manager.get_global_registry") as mock_registry, \
+             patch("src.core.managers.router_manager.get_http_server") as mock_http, \
+               patch("src.core.managers.plugin_manager.get_plugin_manager") as mock_get_pm:
+            mock_registry.return_value = registry
+            mock_http.return_value = http_server
+            mock_get_pm.return_value = mock_plugin_manager
+
+            await manager.mount_all_routers()
+            assert len(manager.get_all_mounted_routers()) == 2
+
     def test_get_router_info(self, manager, registry):
         """测试获取 Router 信息。"""
         with patch("src.core.managers.router_manager.get_global_registry") as mock_get:
