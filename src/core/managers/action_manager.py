@@ -279,7 +279,10 @@ class ActionManager:
             result = await action_instance.execute(**kwargs)
             return result
         except Exception as e:
-            logger.error(f"执行 Action 失败 ({signature}): {e}")
+            logger.error(
+                f"执行 Action 失败 ({signature}): {e}",
+                exc_info=True,
+            )
             raise RuntimeError(f"Action 执行失败: {e}") from e
 
     def clear_schema_cache(self, signature: str | None = None) -> None:

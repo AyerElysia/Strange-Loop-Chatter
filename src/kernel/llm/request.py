@@ -24,6 +24,10 @@ from .policy.base import Policy
 from .response import LLMResponse
 from .roles import ROLE
 from .types import ModelEntry, ModelSet
+from src.kernel.logger import get_logger
+
+
+logger = get_logger("llm_request")
 
 
 def _normalize_tool_result_payload(payload: LLMPayload) -> LLMPayload:
@@ -114,7 +118,7 @@ class LLMRequest:
 
             try:
                 with timer:
-                    message, tool_calls, stream_iter = await client.create(
+                    create_task = client.create(
                         model_name=model_identifier,
                         payloads=payloads,
                         tools=tools,
@@ -122,6 +126,15 @@ class LLMRequest:
                         model_set=model,
                         stream=stream,
                     )
+
+                    timeout_seconds = model.get("timeout")
+                    if isinstance(timeout_seconds, (int, float)) and timeout_seconds > 0:
+                        message, tool_calls, stream_iter = await asyncio.wait_for(
+                            create_task,
+                            timeout=float(timeout_seconds),
+                        )
+                    else:
+                        message, tool_calls, stream_iter = await create_task
 
                 resp = LLMResponse(
                     _stream=stream_iter,

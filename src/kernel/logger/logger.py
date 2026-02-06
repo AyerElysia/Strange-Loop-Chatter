@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
 from datetime import datetime
 from functools import lru_cache
@@ -188,6 +189,7 @@ class Logger:
         with self._lock:
             # 合并元数据
             all_metadata = {**self.metadata, **metadata}
+            exc_info = all_metadata.pop("exc_info", None)
 
             # 构建时间戳
             now = datetime.now()
@@ -217,6 +219,21 @@ class Logger:
                 metadata_text = Text(metadata_str, style="dim")
                 self.console.print(metadata_text)
 
+            if exc_info:
+                import traceback
+
+                if exc_info is True:
+                    exc_type, exc_val, exc_tb = sys.exc_info()
+                    exc_lines = traceback.format_exception(exc_type, exc_val, exc_tb)
+                elif isinstance(exc_info, BaseException):
+                    exc_lines = traceback.format_exception(type(exc_info), exc_info, exc_info.__traceback__)
+                else:
+                    exc_lines = [str(exc_info)]
+
+                if exc_lines:
+                    exc_text = Text("".join(exc_lines), style="dim")
+                    self.console.print(exc_text)
+
             # 输出到文件（如果启用）
             if self._enable_file:
                 global _global_file_handler
@@ -226,6 +243,8 @@ class Logger:
                     if all_metadata:
                         metadata_str = " | ".join([f"{k}={v}" for k, v in all_metadata.items()])
                         log_line += f"\n  {metadata_str}"
+                    if exc_info:
+                        log_line += "\n" + "".join(exc_lines)
                     log_line += "\n"
 
                     _global_file_handler.write(log_line)

@@ -10,6 +10,10 @@ from typing import Any, AsyncIterator
 from ..payload import Image, LLMPayload, Text, Tool, ToolResult
 from ..roles import ROLE
 from .base import StreamEvent
+from src.kernel.logger import get_logger
+
+
+logger = get_logger("llm_openai_client")
 
 
 def _is_data_url(value: str) -> bool:
@@ -107,6 +111,52 @@ def _payloads_to_openai_messages(payloads: list[LLMPayload]) -> tuple[list[dict[
     return messages, tools
 
 
+async def _direct_http_chat(
+    *,
+    base_url: str,
+    api_key: str,
+    timeout: float | None,
+    params: dict[str, Any],
+) -> tuple[str | None, list[dict[str, Any]] | None]:
+    
+    import httpx
+
+    endpoint = base_url.rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(endpoint, headers=headers, json=params)
+        resp.raise_for_status()
+        data = resp.json()
+
+    choices = data.get("choices") or []
+    if not choices:
+        return "", []
+
+    msg = choices[0].get("message") or {}
+    content = msg.get("content") or ""
+    tool_calls = []
+    for tc in msg.get("tool_calls", []) or []:
+        fn = tc.get("function") or {}
+        args = fn.get("arguments")
+        try:
+            args = json.loads(args) if isinstance(args, str) else args
+        except Exception:
+            pass
+        tool_calls.append(
+            {
+                "id": tc.get("id"),
+                "name": fn.get("name", ""),
+                "args": args or {},
+            }
+        )
+
+    return content, tool_calls
+
+
 class OpenAIChatClient:
     """OpenAI provider。
 
@@ -134,12 +184,37 @@ class OpenAIChatClient:
             if cached is not None:
                 return cached
 
-        try:
-            from openai import AsyncOpenAI
-        except Exception as e:  # pragma: no cover
-            raise RuntimeError("openai SDK 未安装，请执行 `uv add openai`") from e
 
-        kwargs: dict[str, Any] = {"api_key": api_key}
+        from openai import AsyncOpenAI
+        import httpx
+
+
+        class _LoggingAsyncTransport(httpx.AsyncBaseTransport):
+            def __init__(self, inner: "httpx.AsyncBaseTransport") -> None:
+                self._inner = inner
+
+            async def handle_async_request(self, request: "httpx.Request") -> "httpx.Response":
+                response = await self._inner.handle_async_request(request)
+                return response
+
+        disable_keepalive = False
+        if base_url:
+            disable_keepalive = base_url.startswith("http://127.0.0.1") or base_url.startswith("http://localhost")
+
+        limits = None
+        headers = None
+        if disable_keepalive:
+            limits = httpx.Limits(max_connections=20, max_keepalive_connections=0, keepalive_expiry=0.0)
+            headers = {"Connection": "close"}
+
+        transport = _LoggingAsyncTransport(httpx.AsyncHTTPTransport())
+        http_client = httpx.AsyncClient(
+            transport=transport,
+            limits=limits,
+            headers=headers,
+        )
+
+        kwargs: dict[str, Any] = {"api_key": api_key, "http_client": http_client}
         if base_url:
             kwargs["base_url"] = base_url
         if isinstance(timeout, (int, float)):
@@ -188,6 +263,9 @@ class OpenAIChatClient:
         if not isinstance(extra_params, dict):
             raise ValueError("model.extra_params 必须是 dict")
 
+        extra_params = dict(extra_params)
+        direct_http = bool(extra_params.pop("direct_http", False))
+
         params: dict[str, Any] = {
             "model": model_name,
             "messages": messages,
@@ -201,6 +279,17 @@ class OpenAIChatClient:
 
         # 允许每模型注入额外参数（如 top_p/response_format/tool_choice 等）
         params.update(extra_params)
+
+        if direct_http:
+            if stream:
+                raise RuntimeError("direct_http 暂不支持 stream=true")
+            content, tool_calls = await _direct_http_chat(
+                base_url=base_url or "",
+                api_key=api_key,
+                timeout=float(timeout) if isinstance(timeout, (int, float)) else None,
+                params=params,
+            )
+            return content or "", tool_calls or [], None
 
         if not stream:
             resp = await client.chat.completions.create(**params)
