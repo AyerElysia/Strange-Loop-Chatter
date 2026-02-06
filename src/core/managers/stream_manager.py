@@ -441,7 +441,7 @@ class StreamManager:
 
         return stream
     
-    async def activate_stream(self, stream_id: str) -> None:
+    async def activate_stream(self, stream_id: str) -> "ChatStream | None":
         """激活流，更新其最后活跃时间。
 
         Args:
@@ -451,7 +451,20 @@ class StreamManager:
             >>> await sm.activate_stream("abc123")
 
         """
-        await self._update_stream_active_time(stream_id)
+        stream = self._streams.get(stream_id)
+        if stream is None:
+            stream_record = await self._streams_crud.get_by(stream_id=stream_id)
+            if not stream_record:
+                return None
+            stream = await self.build_stream_from_database(stream_id)
+            if stream:
+                self._streams[stream_id] = stream
+
+        if stream:
+            stream.update_active_time()
+            await self._update_stream_active_time(stream_id)
+
+        return stream
         
     # ==================== Private Helper Methods ====================
 

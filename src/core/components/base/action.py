@@ -356,11 +356,46 @@ class BaseAction(ABC, LLMUsable):
                 target_stream_id = stream_id or self.chat_stream.stream_id
                 platform = self.chat_stream.platform
                 chat_type = self.chat_stream.chat_type
+                context = self.chat_stream.context
 
                 bot_info =await get_adapter_manager().get_bot_info_by_platform(platform)
 
                 # 转换 content 为字符串
                 content_str = str(content) if not isinstance(content, str) else content
+
+                target_user_id = None
+                target_user_name = None
+                target_group_id = None
+                target_group_name = None
+
+                def _get_last_context_message() -> Message | None:
+                    if context.unread_messages:
+                        return context.unread_messages[-1]
+                    if context.history_messages:
+                        return context.history_messages[-1]
+                    return context.current_message
+
+                last_msg = _get_last_context_message()
+
+                if chat_type == "group":
+                    if last_msg:
+                        target_group_id = last_msg.extra.get("group_id")
+                        target_group_name = last_msg.extra.get("group_name")
+                else:
+                    target_user_id = context.triggering_user_id
+                    if not target_user_id and last_msg:
+                        target_user_id = last_msg.sender_id
+                        target_user_name = last_msg.sender_name
+
+                extra: dict[str, Any] = {}
+                if target_user_id:
+                    extra["target_user_id"] = target_user_id
+                if target_user_name:
+                    extra["target_user_name"] = target_user_name
+                if target_group_id:
+                    extra["target_group_id"] = target_group_id
+                if target_group_name:
+                    extra["target_group_name"] = target_group_name
 
                 message = Message(
                     message_id=f"action_{self.action_name}_{id(self)}",
@@ -371,6 +406,7 @@ class BaseAction(ABC, LLMUsable):
                     platform=platform,
                     chat_type=chat_type,
                     stream_id=target_stream_id,
+                    **extra,
                 )
 
             # 获取 MessageSender 并发送消息

@@ -257,9 +257,14 @@ class ActionManager:
 
         # 如果流不存在，创建新的流
         if not chat_stream:
+            group_id = message.extra.get("group_id") if hasattr(message, "extra") else ""
+            if not group_id and hasattr(message, "extra"):
+                group_id = message.extra.get("target_group_id") or ""
+
             chat_stream = await stream_manager.get_or_create_stream(
                 platform=message.platform,
                 user_id=message.sender_id,
+                group_id=group_id,
                 chat_type=message.chat_type,
             )
 

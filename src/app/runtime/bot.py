@@ -149,9 +149,10 @@ class Bot:
         self.ui.update_phase_status("初始化内核", "启动中...")
 
         # Step 1: Config
-        from src.core.config import init_core_config
+        from src.core.config import init_core_config, init_model_config
 
         self.config = init_core_config(self.config_path)
+        init_model_config("config/model.toml")
         self.ui.update_phase_status("配置", "已加载")
 
         # Step 2: Logger

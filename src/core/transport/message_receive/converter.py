@@ -130,9 +130,11 @@ class MessageConverter:
         # 构建内容
         content = self._build_content(result, message_type)
 
-        # 提取用户信息
+        # 提取用户/群信息
         user_info = message_info.get("user_info") or {}
         group_info = message_info.get("group_info")
+        group_id = group_info.get("group_id") if group_info else None
+        group_name = group_info.get("group_name") if group_info else None
 
         return Message(
             message_id=message_info.get("message_id", ""),
@@ -151,6 +153,8 @@ class MessageConverter:
             media=result.media,
             at_users=result.at_users,
             unknown_segments=result.unknown_segments,
+            group_id=group_id,
+            group_name=group_name,
         )
 
     # ─── message → envelope ───────────────────
@@ -188,24 +192,34 @@ class MessageConverter:
             "time": message.time if isinstance(message.time, float) else time.time(),
         }
 
+        target_user_id = message.extra.get("target_user_id") or message.sender_id
+        target_user_name = message.extra.get("target_user_name") or message.sender_name
         user_info_dict: dict[str, Any] = {
             "platform": message.platform,
-            "user_id": message.sender_id,
-            "user_nickname": message.sender_name,
+            "user_id": target_user_id,
+            "user_nickname": target_user_name,
         }
         if message.sender_cardname:
             user_info_dict["user_cardname"] = message.sender_cardname
         msg_info["user_info"] = user_info_dict  # type: ignore[typeddict-unknown-key]
 
+        group_id = message.extra.get("target_group_id") or message.extra.get("group_id")
+        group_name = message.extra.get("target_group_name") or message.extra.get("group_name")
         if message.chat_type == "group" and message.stream_id:
-            # 从 stream_id 提取 group_id（格式：platform:group:group_id）
-            parts = message.stream_id.split(":")
-            group_id = parts[2] if len(parts) >= 3 else ""
-            msg_info["group_info"] = {  # type: ignore[typeddict-unknown-key]
-                "platform": message.platform,
-                "group_id": group_id,
-                "group_name": "",
-            }
+            if not group_id:
+                from src.core.managers.stream_manager import get_stream_manager
+
+                stream_info = await get_stream_manager().get_stream_info(message.stream_id)
+                if stream_info:
+                    group_id = stream_info.get("group_id") or ""
+                    group_name = stream_info.get("group_name") or ""
+
+            if group_id:
+                msg_info["group_info"] = {  # type: ignore[typeddict-unknown-key]
+                    "platform": message.platform,
+                    "group_id": group_id,
+                    "group_name": group_name or "",
+                }
 
         envelope: MessageEnvelope = {
             "direction": "outgoing",

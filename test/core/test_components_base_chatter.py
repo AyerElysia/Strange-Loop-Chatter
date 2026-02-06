@@ -1,13 +1,14 @@
 """测试 src.core.components.base.chatter 模块。"""
 
+from datetime import datetime
 from typing import Generator
-
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 
 from src.core.components.base.chatter import BaseChatter, ChatterResult, Failure, Success, Wait
 from src.core.components.types import ChatType
+from src.core.models.message import Message
 
 
 class ConcreteChatter(BaseChatter):
@@ -262,3 +263,148 @@ class TestChatterExecutePatterns:
         assert len(results) == 1
         assert isinstance(results[0], Failure)
         assert results[0].error == "立即失败"
+
+
+class TestFetchAndFlushUnreads:
+    """测试 fetch_and_flush_unreads 方法。"""
+
+    @pytest.mark.asyncio
+    async def test_fetch_empty_unreads(self, mock_plugin):
+        """测试获取空的未读消息。"""
+        chatter = ConcreteChatter("stream_123", mock_plugin)
+
+        # Mock stream manager
+        with patch('src.core.managers.stream_manager.get_stream_manager') as mock_sm:
+            mock_stream = MagicMock()
+            mock_stream.context.unread_messages = []
+            mock_sm.return_value._streams.get.return_value = mock_stream
+
+            text, messages = await chatter.fetch_and_flush_unreads()
+
+            assert text == ""
+            assert messages == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_message(self, mock_plugin):
+        """测试获取单条消息。"""
+        chatter = ConcreteChatter("stream_123", mock_plugin)
+
+        # 创建测试消息
+        msg = Message(
+            message_id="msg_1",
+            time=datetime.now().timestamp(),
+            content="你好",
+            sender_id="user_1",
+            sender_name="Alice"
+        )
+
+        with patch('src.core.managers.stream_manager.get_stream_manager') as mock_sm:
+            mock_stream = MagicMock()
+            mock_stream.context.unread_messages = [msg]
+            mock_stream.context.add_history_message = MagicMock()
+            mock_sm.return_value._streams.get.return_value = mock_stream
+
+            text, messages = await chatter.fetch_and_flush_unreads()
+
+            assert "Alice" in text
+            assert "你好" in text
+            assert len(messages) == 1
+            mock_stream.context.add_history_message.assert_called_once_with(msg)
+            assert len(mock_stream.context.unread_messages) == 0
+
+    @pytest.mark.asyncio
+    async def test_fetch_multiple_messages_grouped(self, mock_plugin):
+        """测试获取多条消息（分组模式）。"""
+        chatter = ConcreteChatter("stream_123", mock_plugin)
+
+        messages = [
+            Message(
+                message_id=f"msg_{i}",
+                time=datetime.now().timestamp(),
+                content=f"消息{i}",
+                sender_id=f"user_{i}",
+                sender_name=f"User{i}"
+            )
+            for i in range(3)
+        ]
+
+        with patch('src.core.managers.stream_manager.get_stream_manager') as mock_sm:
+            mock_stream = MagicMock()
+            mock_stream.context.unread_messages = messages
+            mock_stream.context.add_history_message = MagicMock()
+            mock_sm.return_value._streams.get.return_value = mock_stream
+
+            text, fetched = await chatter.fetch_and_flush_unreads(format_as_group=True)
+
+            # 验证格式
+            lines = text.split("\n")
+            assert len(lines) == 3
+            assert "User0" in lines[0]
+            assert "消息0" in lines[0]
+
+            # 验证flush
+            assert len(fetched) == 3
+            assert mock_stream.context.add_history_message.call_count == 3
+            assert len(mock_stream.context.unread_messages) == 0
+
+    @pytest.mark.asyncio
+    async def test_fetch_non_grouped(self, mock_plugin):
+        """测试非分组模式。"""
+        chatter = ConcreteChatter("stream_123", mock_plugin)
+
+        msg = Message(
+            message_id="msg_1",
+            time=datetime.now().timestamp(),
+            content="测试",
+            sender_id="user_1",
+            sender_name="Test"
+        )
+
+        with patch('src.core.managers.stream_manager.get_stream_manager') as mock_sm:
+            mock_stream = MagicMock()
+            mock_stream.context.unread_messages = [msg]
+            mock_stream.context.add_history_message = MagicMock()
+            mock_sm.return_value._streams.get.return_value = mock_stream
+
+            text, messages = await chatter.fetch_and_flush_unreads(format_as_group=False)
+
+            assert text == ""  # 非分组模式不返回格式化文本
+            assert len(messages) == 1
+
+    @pytest.mark.asyncio
+    async def test_fetch_with_missing_stream(self, mock_plugin):
+        """测试流不存在的情况。"""
+        chatter = ConcreteChatter("stream_123", mock_plugin)
+
+        with patch('src.core.managers.stream_manager.get_stream_manager') as mock_sm:
+            mock_sm.return_value._streams.get.return_value = None
+
+            text, messages = await chatter.fetch_and_flush_unreads()
+
+            assert text == ""
+            assert messages == []
+
+    @pytest.mark.asyncio
+    async def test_custom_time_format(self, mock_plugin):
+        """测试自定义时间格式。"""
+        chatter = ConcreteChatter("stream_123", mock_plugin)
+
+        msg = Message(
+            message_id="msg_1",
+            time=datetime(2024, 1, 1, 14, 30).timestamp(),
+            content="测试",
+            sender_id="user_1",
+            sender_name="Test"
+        )
+
+        with patch('src.core.managers.stream_manager.get_stream_manager') as mock_sm:
+            mock_stream = MagicMock()
+            mock_stream.context.unread_messages = [msg]
+            mock_stream.context.add_history_message = MagicMock()
+            mock_sm.return_value._streams.get.return_value = mock_stream
+
+            # 使用完整时间格式
+            text, _ = await chatter.fetch_and_flush_unreads(time_format="%Y-%m-%d %H:%M")
+
+            assert "2024-01-01" in text
+            assert "14:30" in text

@@ -121,6 +121,26 @@ class StreamContext:
 
         return True
 
+    def flush_unreads_to_history(self) -> list["Message"]:
+        """将未读消息flush到历史消息列表。
+
+        Returns:
+            list[Message]: 已flush的消息列表
+
+        Examples:
+            >>> flushed = context.flush_unreads_to_history()
+            >>> print(f"Flushed {len(flushed)} messages")
+        """
+        if not self.unread_messages:
+            return []
+
+        flushed = list(self.unread_messages)  # Copy
+        for msg in flushed:
+            self.add_history_message(msg)
+
+        self.unread_messages.clear()
+        return flushed
+
 
 class ChatStream:
     """聊天流对象，存储一个完整的聊天上下文。

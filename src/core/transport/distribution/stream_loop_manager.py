@@ -167,12 +167,12 @@ class StreamLoopManager:
             # 创建新的驱动器任务
             try:
                 from src.core.transport.distribution.loop import run_chat_stream
-
-                loop_task = asyncio.create_task(
+                from src.kernel.concurrency import get_task_manager
+                loop_task = get_task_manager().create_task(
                     run_chat_stream(stream_id, self),
                     name=f"chat_stream_{stream_id[:16]}",
                 )
-                context.stream_loop_task = loop_task
+                context.stream_loop_task = loop_task.task
 
                 self._stats["active_streams"] += 1
                 self._stats["total_loops"] += 1
@@ -307,16 +307,29 @@ class StreamLoopManager:
             # 获取此流的 Chatter
             chatter = chatter_manager.get_chatter_by_stream(stream_id)
             if not chatter:
-                # 暂时没有 Chatter 绑定，跳过（未来可添加默认 Chatter 选择逻辑）
-                logger.debug(f"未找到绑定的 Chatter: {stream_id[:8]}")
-                return False
+                from src.core.managers.stream_manager import get_stream_manager
+
+                sm = get_stream_manager()
+                chat_stream = sm._streams.get(stream_id)
+                if not chat_stream:
+                    logger.debug(f"未找到流实例，无法绑定 Chatter: {stream_id[:8]}")
+                    return False
+
+                chatter = chatter_manager.get_or_create_chatter_for_stream(
+                    stream_id,
+                    chat_stream.chat_type,
+                    chat_stream.platform,
+                )
+                if not chatter:
+                    logger.debug(f"未找到绑定的 Chatter: {stream_id[:8]}")
+                    return False
 
             # 执行 Chatter
             async with self._processing_semaphore:
-                result_gen = await chatter.execute(list(unread_messages))
+                result_gen = chatter.execute(list(unread_messages))
                 # 消费生成器结果
                 if result_gen is not None:
-                    for result in result_gen:
+                    async for result in result_gen:
                         logger.debug(f"Chatter 结果: {result}")
 
             # 清空未读消息

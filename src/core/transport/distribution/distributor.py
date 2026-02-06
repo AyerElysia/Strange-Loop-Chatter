@@ -46,10 +46,15 @@ async def _on_message_received(event_name: str, params: dict) -> tuple[EventDeci
         # 1. 获取或创建 ChatStream
         # message.stream_id 已经是标准哈希格式（由 extract_stream_id 生成）
         sm = get_stream_manager()
+        group_id = message.extra.get("group_id") if hasattr(message, "extra") else ""
+        user_id = message.sender_id if message.chat_type != "group" else ""
+
         chat_stream = await sm.get_or_create_stream(
             platform=message.platform,
             stream_id=message.stream_id,
             chat_type=message.chat_type,
+            user_id=user_id,
+            group_id=group_id or "",
         )
 
         stream_id = chat_stream.stream_id

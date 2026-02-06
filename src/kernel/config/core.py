@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
-from typing import Any, Callable, TypeVar, Self
+from dataclasses import dataclass
+from typing import Any, Callable, TypeVar, Self, get_args, get_origin
 
 import tomllib
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic_core import PydanticUndefined
 
 from .types import ConfigData, TOMLData
 
@@ -85,6 +87,10 @@ class ConfigBase(BaseModel):
         """
 
         path = Path(path)
+        # 确保文件存在
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
         original_text = path.read_text(encoding="utf-8")
         with path.open("rb") as f:
             raw = tomllib.load(f)
@@ -169,14 +175,45 @@ def _eval_default_factory(factory: Any) -> Any:
         return factory({})
 
 
-def _iter_sections(config_model: type[ConfigBase]) -> list[tuple[str, type[SectionBase]]]:
-    sections: list[tuple[str, type[SectionBase]]] = []
+def _iter_sections(config_model: type[ConfigBase]) -> list[_SectionInfo]:
+    sections: list[_SectionInfo] = []
     for field_name, model_field in config_model.model_fields.items():
         annotation = model_field.annotation
-        if isinstance(annotation, type) and issubclass(annotation, SectionBase):
-            sections.append((_get_section_name(annotation, field_name), annotation))
-    sections.sort(key=lambda x: x[0])
+        section_model, is_list = _get_section_model_from_annotation(annotation)
+        if section_model is not None:
+            sections.append(
+                _SectionInfo(
+                    name=_get_section_name(section_model, field_name),
+                    model=section_model,
+                    is_list=is_list,
+                )
+            )
+    sections.sort(key=lambda x: x.name)
     return sections
+
+
+@dataclass(frozen=True)
+class _SectionInfo:
+    name: str
+    model: type[SectionBase]
+    is_list: bool
+
+
+def _get_section_model_from_annotation(
+    annotation: Any,
+) -> tuple[type[SectionBase] | None, bool]:
+    if isinstance(annotation, type) and issubclass(annotation, SectionBase):
+        return annotation, False
+
+    origin = get_origin(annotation)
+    if origin is list:
+        args = get_args(annotation)
+        if args:
+            item = args[0]
+            if isinstance(item, type) and issubclass(item, SectionBase):
+                return item, True
+
+    return None, False
 
 
 def _merge_with_model_defaults(
@@ -189,44 +226,97 @@ def _merge_with_model_defaults(
     """
 
     merged: ConfigData = {}
-    for section_name, section_model in _iter_sections(config_model):
-        raw_section = raw.get(section_name)
+    for section in _iter_sections(config_model):
+        raw_section = raw.get(section.name)
+
+        if section.is_list:
+            items_out: list[dict[str, Any]] = []
+            if isinstance(raw_section, list):
+                for item in raw_section:
+                    if not isinstance(item, dict):
+                        continue
+                    items_out.append(_merge_section_fields(section.model, item))
+            merged[section.name] = items_out
+            continue
+
         if not isinstance(raw_section, dict):
             raw_section = {}
 
-        section_out: dict[str, Any] = {}
-        for key, field in section_model.model_fields.items():
-            annotation = field.annotation
-            default_value = (
-                field.default
-                if field.default is not None and field.default is not ...
-                else None
-            )
-            if field.default_factory is not None:
-                try:
-                    default_value = _eval_default_factory(field.default_factory)
-                except Exception:
-                    default_value = None
+        merged[section.name] = _merge_section_fields(section.model, raw_section)
 
-            if key in raw_section:
-                candidate = raw_section[key]
-                try:
-                    section_out[key] = TypeAdapter(annotation).validate_python(candidate)
-                    continue
-                except Exception:
-                    pass
-
-            if default_value is not None:
-                section_out[key] = default_value
-            else:
-                section_out[key] = _placeholder_for_type(annotation)
-
-        merged[section_name] = section_out
     return merged
 
 
+def _merge_section_fields(
+    section_model: type[SectionBase],
+    raw_section: dict[str, Any],
+) -> dict[str, Any]:
+    section_out: dict[str, Any] = {}
+    for key, field in section_model.model_fields.items():
+        annotation = field.annotation
+        nested_model, is_list = _get_section_model_from_annotation(annotation)
+
+        if nested_model is not None:
+            if is_list:
+                raw_list = raw_section.get(key)
+                items_out: list[dict[str, Any]] = []
+                if isinstance(raw_list, list):
+                    for item in raw_list:
+                        if not isinstance(item, dict):
+                            continue
+                        items_out.append(_merge_section_fields(nested_model, item))
+                section_out[key] = items_out
+            else:
+                raw_nested = raw_section.get(key)
+                if not isinstance(raw_nested, dict):
+                    raw_nested = {}
+                section_out[key] = _merge_section_fields(nested_model, raw_nested)
+            continue
+
+        default_value = (
+            field.default
+            if field.default is not None
+            and field.default is not ...
+            and field.default is not PydanticUndefined
+            else None
+        )
+        if field.default_factory is not None:
+            try:
+                default_value = _eval_default_factory(field.default_factory)
+            except Exception:
+                default_value = None
+
+        if key in raw_section:
+            candidate = raw_section[key]
+            try:
+                section_out[key] = TypeAdapter(annotation).validate_python(candidate)
+                continue
+            except Exception:
+                pass
+
+        if default_value is not None:
+            section_out[key] = default_value
+        else:
+            section_out[key] = _placeholder_for_type(annotation)
+
+    return section_out
+
+
 def _placeholder_for_type(annotation: Any) -> Any:
-    origin = getattr(annotation, "__origin__", None)
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+
+    if origin is list:
+        return []
+    if origin is dict:
+        return {}
+
+    if args and type(None) in args:
+        for arg in args:
+            if arg is type(None):
+                continue
+            return _placeholder_for_type(arg)
+
     if annotation in (str,):
         return ""
     if annotation in (int,):
@@ -235,9 +325,9 @@ def _placeholder_for_type(annotation: Any) -> Any:
         return 0.0
     if annotation in (bool,):
         return False
-    if origin is list or annotation is list:
+    if annotation is list:
         return []
-    if origin is dict or annotation is dict:
+    if annotation is dict:
         return {}
     return ""
 
@@ -251,54 +341,134 @@ def _render_toml_with_signature(
     lines: list[str] = []
     sections = _iter_sections(config_model)
 
-    for idx, (section_name, section_model) in enumerate(sections):
+    for idx, section in enumerate(sections):
         if idx != 0:
             lines.append("")
 
+        section_data = data.get(section.name)
+        if section.is_list:
+            items: list[dict[str, Any]] = []
+            if isinstance(section_data, list):
+                items = [item for item in section_data if isinstance(item, dict)]
+            if not items:
+                items = [_merge_section_fields(section.model, {})]
+
+            for item_idx, item in enumerate(items):
+                _render_section_block(
+                    lines,
+                    section.name,
+                    section.model,
+                    item,
+                    is_list=True,
+                    include_doc=(item_idx == 0),
+                )
+                if item_idx != len(items) - 1:
+                    lines.append("")
+            continue
+
+        if not isinstance(section_data, dict):
+            section_data = {}
+
+        _render_section_block(
+            lines,
+            section.name,
+            section.model,
+            section_data,
+            is_list=False,
+            include_doc=True,
+        )
+
+    while lines and lines[-1] == "":
+        lines.pop()
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_section_block(
+    lines: list[str],
+    section_name: str,
+    section_model: type[SectionBase],
+    section_data: dict[str, Any],
+    *,
+    is_list: bool,
+    include_doc: bool,
+) -> None:
+    if include_doc:
         section_doc = inspect.getdoc(section_model) or ""
         if section_doc:
             for doc_line in section_doc.splitlines():
                 lines.append(f"# {doc_line}")
 
+    if is_list:
+        lines.append(f"[[{section_name}]]")
+    else:
         lines.append(f"[{section_name}]")
 
-        section_data = data.get(section_name)
-        if not isinstance(section_data, dict):
-            section_data = {}
+    for field_name, field in section_model.model_fields.items():
+        annotation = field.annotation
+        nested_model, nested_is_list = _get_section_model_from_annotation(annotation)
 
-        for field_name, field in section_model.model_fields.items():
-            description = field.description or ""
-            if description:
-                for doc_line in description.splitlines():
-                    lines.append(f"# {doc_line}")
+        if nested_model is not None:
+            nested_data = section_data.get(field_name)
+            if nested_is_list:
+                nested_items: list[dict[str, Any]] = []
+                if isinstance(nested_data, list):
+                    nested_items = [item for item in nested_data if isinstance(item, dict)]
+                if not nested_items:
+                    nested_items = [_merge_section_fields(nested_model, {})]
 
-            annotation = field.annotation
-            type_text = _type_repr(annotation)
-
-            default_text = None
-            if field.default_factory is not None:
-                try:
-                    default_text = _toml_format_value(
-                        _eval_default_factory(field.default_factory)
+                for nested_idx, item in enumerate(nested_items):
+                    lines.append("")
+                    _render_section_block(
+                        lines,
+                        f"{section_name}.{field_name}",
+                        nested_model,
+                        item,
+                        is_list=True,
+                        include_doc=(nested_idx == 0),
                     )
-                except Exception:
-                    default_text = None
-            elif field.default is not None and field.default is not ...:
-                default_text = _toml_format_value(field.default)
+                continue
 
-            sig_parts = [f"type={type_text}"]
-            if default_text is not None:
-                sig_parts.append(f"default={default_text}")
-            else:
-                sig_parts.append("default=<required>")
-
-            lines.append("# signature: " + ", ".join(sig_parts))
-
-            value = section_data.get(field_name)
-            lines.append(f"{field_name} = {_toml_format_value(value)}")
+            if not isinstance(nested_data, dict):
+                nested_data = {}
             lines.append("")
+            _render_section_block(
+                lines,
+                f"{section_name}.{field_name}",
+                nested_model,
+                nested_data,
+                is_list=False,
+                include_doc=True,
+            )
+            continue
 
-        while lines and lines[-1] == "":
-            lines.pop()
+        description = field.description or ""
+        if description:
+            for doc_line in description.splitlines():
+                lines.append(f"# {doc_line}")
 
-    return "\n".join(lines).rstrip() + "\n"
+        type_text = _type_repr(annotation)
+
+        default_text = None
+        if field.default_factory is not None:
+            try:
+                default_text = _toml_format_value(_eval_default_factory(field.default_factory))
+            except Exception:
+                default_text = None
+        elif field.default is not None and field.default is not ...:
+            default_text = _toml_format_value(field.default)
+
+        sig_parts = [f"type={type_text}"]
+        if default_text is not None:
+            sig_parts.append(f"default={default_text}")
+        else:
+            sig_parts.append("default=<required>")
+
+        lines.append("# signature: " + ", ".join(sig_parts))
+
+        value = section_data.get(field_name)
+        lines.append(f"{field_name} = {_toml_format_value(value)}")
+        lines.append("")
+
+    while lines and lines[-1] == "":
+        lines.pop()

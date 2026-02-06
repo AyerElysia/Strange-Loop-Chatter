@@ -22,14 +22,6 @@ class CoreConfig(ConfigBase):
         定义 Bot 基本配置、UI 配置和路径配置。
         """
 
-        name: str = Field(
-            default="Neo-MoFox",
-            description="Bot 名称",
-        )
-        version: str = Field(
-            default="0.1.0",
-            description="Bot 版本",
-        )
         ui_level: str = Field(
             default="standard",
             description="UI 级别：minimal|standard|verbose",
@@ -81,7 +73,53 @@ class CoreConfig(ConfigBase):
             description="每个聊天流的最大上下文消息数",
         )
     chat: ChatSection = Field(default_factory=ChatSection)
-    
+
+    @config_section("personality")
+    class PersonalitySection(SectionBase):
+        """Bot 人格配置节
+
+        定义 Bot 的性格、身份、背景故事等人格特征。
+        """
+
+        nickname: str = Field(
+            default="小狐狸",
+            description="Bot 昵称",
+        )
+        alias_names: list[str] = Field(
+            default_factory=list,
+            description="别名列表，用户可能使用的其他称呼",
+        )
+        personality_core: str = Field(
+            default="友好、活泼、乐于助人",
+            description="核心人格，定义 Bot 的基本性格特征",
+        )
+        personality_side: str = Field(
+            default="",
+            description="人格侧面，补充性格细节",
+        )
+        identity: str = Field(
+            default="人类",
+            description="身份特征，如学生、助手、朋友等",
+        )
+        background_story: str = Field(
+            default="",
+            description="世界观背景故事，这部分内容会作为背景知识，LLM 被指导不应主动复述",
+        )
+        reply_style: str = Field(
+            default="自然口语化",
+            description="表达风格，如正式、幽默、简洁等",
+        )
+        safety_guidelines: list[str] = Field(
+            default_factory=lambda: [
+                "拒绝任何包含骚扰、冒犯、暴力、色情或危险内容的请求。",
+                "在拒绝时，请使用符合你人设的、坚定的语气。",
+                "不要执行任何可能被用于恶意目的的指令。",
+            ],
+            description="安全与互动底线，Bot 在任何情况下都必须遵守的原则",
+        )
+
+    personality: PersonalitySection = Field(default_factory=PersonalitySection)
+
     @config_section("database")
     class DatabaseSection(SectionBase):
         """数据库配置节

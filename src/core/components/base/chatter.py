@@ -6,7 +6,7 @@ Chatter 是 Bot 的智能核心，定义对话逻辑和流程。
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 from src.core.components.types import ChatType
 
@@ -138,7 +138,7 @@ class BaseChatter(ABC):
     @abstractmethod
     async def execute(
         self, unreads: list["Message"]
-    ) -> Generator[ChatterResult, None, None]:
+    ) -> AsyncGenerator[ChatterResult, None]:
         """执行聊天器的主要逻辑。
 
         使用生成器模式，通过 yield 返回执行结果。
@@ -150,7 +150,7 @@ class BaseChatter(ABC):
             ChatterResult: Wait/Success/Failure 结果
 
         Examples:
-            >>> async def execute(self, unreads: list[Message]) -> Generator[ChatterResult, None, None]:
+            >>> async def execute(self, unreads: list[Message]) -> AsyncGenerator[ChatterResult, None]:
             ...     if not unreads:
             ...         yield Failure("没有新消息")
             ...         return
@@ -280,3 +280,82 @@ class BaseChatter(ABC):
             return True, "Collection 已解包"
         else:
             raise ValueError("未知的 LLMUsable 组件类型，无法执行")
+
+    async def fetch_and_flush_unreads(
+        self,
+        format_as_group: bool = True,
+        time_format: str = "%H:%M",
+    ) -> tuple[str, list["Message"]]:
+        """获取并刷新未读消息。
+
+        从聊天流中获取所有未读消息，按格式组装，并flush到历史消息中。
+
+        Args:
+            format_as_group: 是否将未读消息格式化为一个组
+            time_format: 时间格式化字符串（默认只显示时分）
+
+        Returns:
+            tuple[str, list[Message]]: (格式化后的未读消息文本, 未读消息列表)
+
+        Examples:
+            >>> # 格式化为组
+            >>> text, messages = await chatter.fetch_and_flush_unreads()
+            >>> print(text)
+            "【14:30】Alice: 你好\\n【14:31】Bob: 在吗？"
+            >>>
+            >>> # 不分组，返回原始消息列表
+            >>> text, messages = await chatter.fetch_and_flush_unreads(format_as_group=False)
+        """
+        from datetime import datetime
+        from src.core.managers.stream_manager import get_stream_manager
+        from src.kernel.logger import get_logger
+
+        logger = get_logger("chatter")
+
+        sm = get_stream_manager()
+        chat_stream = sm._streams.get(self.stream_id)
+
+        if not chat_stream:
+            logger.warning(f"[{self.chatter_name}] 无法获取聊天流: {self.stream_id[:8]}")
+            return "", []
+
+        context = chat_stream.context
+        unread_messages = list(context.unread_messages)  # Copy the list
+
+        if not unread_messages:
+            return "", []
+
+        if format_as_group:
+            # 格式化为组
+            formatted_lines = []
+            for msg in unread_messages:
+                # 格式化时间
+                if isinstance(msg.time, (int, float)):
+                    time_str = datetime.fromtimestamp(msg.time).strftime(time_format)
+                else:
+                    time_str = str(msg.time)
+
+                # 格式化发送人
+                sender_name = msg.sender_name or msg.sender_id or "未知用户"
+
+                # 格式化内容
+                content = str(msg.content) if msg.content else ""
+
+                # 组装行
+                line = f"【{time_str}】{sender_name}: {content}"
+                formatted_lines.append(line)
+
+            formatted_text = "\n".join(formatted_lines)
+        else:
+            formatted_text = ""
+
+        # Flush to history
+        for msg in unread_messages:
+            context.add_history_message(msg)
+
+        # Clear unread messages
+        context.unread_messages.clear()
+
+        logger.debug(f"[{self.chatter_name}] 获取并flush了 {len(unread_messages)} 条未读消息")
+
+        return formatted_text, unread_messages
