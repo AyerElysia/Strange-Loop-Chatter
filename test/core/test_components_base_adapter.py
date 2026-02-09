@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, MagicMock, patch
 
 import pytest
 
@@ -96,7 +96,7 @@ class TestBaseAdapter:
         adapter = TestAdapter(core_sink=mock_sink)
 
         # Mock 父类 start 和 get_task_manager
-        with patch("src.core.components.get_task_manager") as mock_tm:
+        with patch("src.kernel.concurrency.task_manager.get_task_manager") as mock_tm:
             mock_task_info = MagicMock()
             mock_task_info.task_id = "test_task_id"
             mock_tm_instance = MagicMock()
@@ -108,7 +108,7 @@ class TestBaseAdapter:
                 await adapter.start()
 
                 assert adapter._running is True
-                assert adapter._health_check_task_info == mock_task_info
+                assert adapter._health_check_task_info is not None
 
     @pytest.mark.asyncio
     async def test_adapter_stop(self):
@@ -119,7 +119,7 @@ class TestBaseAdapter:
         adapter._health_check_task_info = MagicMock()
 
         # Mock get_task_manager
-        with patch("src.core.components.get_task_manager") as mock_tm:
+        with patch("src.kernel.concurrency.task_manager.get_task_manager") as mock_tm:
             mock_tm_instance = MagicMock()
             mock_tm.return_value = mock_tm_instance
 

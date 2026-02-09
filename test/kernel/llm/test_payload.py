@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.kernel.llm.payload.content import Action, Audio, Image, Text
+from src.kernel.llm.payload.content import Audio, Image, Text
 from src.kernel.llm.payload.payload import LLMPayload, _normalize_content
 from src.kernel.llm.roles import ROLE
 
@@ -37,14 +37,12 @@ class TestNormalizeContent:
             Text(text="Text"),
             Image(value="image.jpg"),
             Audio(value="audio.mp3"),
-            Action(action=object),
         ]
         result = _normalize_content(content_list)
-        assert len(result) == 4
+        assert len(result) == 3
         assert isinstance(result[0], Text)
         assert isinstance(result[1], Image)
         assert isinstance(result[2], Audio)
-        assert isinstance(result[3], Action)
 
 
 class TestLLMPayload:
@@ -82,16 +80,6 @@ class TestLLMPayload:
         """Test creating payload with ASSISTANT role."""
         payload = LLMPayload(ROLE.ASSISTANT, Text(text="Hi there!"))
         assert payload.role == ROLE.ASSISTANT
-
-    def test_payload_with_tool_role(self) -> None:
-        """Test creating payload with TOOL role."""
-        from src.kernel.llm.payload import Tool
-
-        class MockTool:
-            pass
-
-        payload = LLMPayload(ROLE.TOOL, Tool(tool=MockTool))
-        assert payload.role == ROLE.TOOL
 
     def test_payload_with_tool_result_role(self) -> None:
         """Test creating payload with TOOL_RESULT role."""

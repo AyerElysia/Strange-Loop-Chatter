@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.kernel.llm.context import LLMContextManager
-from src.kernel.llm.payload import LLMPayload, Text, Tool, ToolResult
+from src.kernel.llm.payload import LLMPayload, Text, ToolResult
 from src.kernel.llm.request import LLMRequest
 from src.kernel.llm.roles import ROLE
 

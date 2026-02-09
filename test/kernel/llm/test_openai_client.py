@@ -13,7 +13,6 @@ from src.kernel.llm import (
     LLMPayload,
     ROLE,
     Text,
-    Tool,
     ToolResult,
 )
 

@@ -228,9 +228,10 @@ class ConsoleUIManager:
             return
 
         # VERBOSE: 完整 ASCII 艺术字横幅 + 边框
+        from rich.align import Align
+        
         try:
             import pyfiglet
-            from rich.align import Align
 
             ascii_art = pyfiglet.figlet_format(bot_name, font="slant")
             # 用 Panel 包裹居中的 ASCII 艺术字
@@ -246,8 +247,8 @@ class ConsoleUIManager:
                     subtitle_align="center",
                 )
             )
-        except Exception:
-            # 如果 pyfiglet 失败，使用装饰性文本
+        except ImportError:
+            # 如果 pyfiglet 未安装，使用装饰性文本
             self.console.print()
             self.console.print(
                 Panel(

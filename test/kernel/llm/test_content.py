@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
-from src.kernel.llm.payload.content import Action, Audio, Content, Image, Text
+from src.kernel.llm.payload.content import Audio, Content, Image, Text
 
 
 class TestContent:
@@ -164,47 +164,6 @@ class TestAudio:
         assert audio1 != audio3
 
 
-class TestAction:
-    """Test cases for Action content."""
-
-    def test_action_creation(self) -> None:
-        """Test creating Action content."""
-        action = Action(action=Mock)
-        assert action.action == Mock
-
-    def test_action_is_content_subclass(self) -> None:
-        """Test that Action is a Content subclass."""
-        assert isinstance(Action(action=Mock), Content)
-
-    def test_action_is_frozen(self) -> None:
-        """Test that Action is frozen."""
-        action = Action(action=Mock)
-        with pytest.raises(Exception):
-            action.action = MagicMock
-
-    def test_action_has_slots(self) -> None:
-        """Test that Action uses slots."""
-        action = Action(action=Mock)
-        with pytest.raises(AttributeError):
-            action.__dict__
-
-    def test_action_equality(self) -> None:
-        """Test Action equality."""
-        action1 = Action(action=Mock)
-        action2 = Action(action=Mock)
-        action3 = Action(action=MagicMock)
-        assert action1 == action2
-        assert action1 != action3
-
-    def test_action_with_class(self) -> None:
-        """Test Action with actual class."""
-
-        class MyAction:
-            pass
-
-        action = Action(action=MyAction)
-        assert action.action == MyAction
-
 
 class TestMixedContent:
     """Test cases for using different content types together."""
@@ -215,13 +174,11 @@ class TestMixedContent:
             Text(text="Hello"),
             Image(value="pic.jpg"),
             Audio(value="audio.mp3"),
-            Action(action=Mock),
         ]
 
         assert isinstance(contents[0], Text)
         assert isinstance(contents[1], Image)
         assert isinstance(contents[2], Audio)
-        assert isinstance(contents[3], Action)
 
         assert all(isinstance(c, Content) for c in contents)
 

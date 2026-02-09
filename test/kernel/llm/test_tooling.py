@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from src.kernel.llm.payload.tooling import (
-    Tool,
     ToolCall,
     ToolExecutor,
     ToolRegistry,
@@ -161,41 +160,6 @@ class TestToolCall:
         call2 = ToolCall(id="call_2", name="test", args={"a": 1})
         assert call1 != call2
 
-
-# ============================================================================
-# Tool Tests
-# ============================================================================
-
-
-class TestTool:
-    """Test cases for Tool class."""
-
-    def test_tool_creation(self) -> None:
-        """Test creating Tool."""
-        tool = Tool(tool=GetTimeTool)
-        assert tool.tool == GetTimeTool
-
-    def test_tool_to_openai_tool_with_openai_format(self) -> None:
-        """Test to_openai_tool with OpenAI format schema."""
-        tool = Tool(tool=GetTimeTool)
-        openai_tool = tool.to_openai_tool()
-        assert openai_tool["type"] == "function"
-        assert "function" in openai_tool
-        assert openai_tool["function"]["name"] == "get_time"
-
-    def test_tool_to_openai_tool_with_simple_format(self) -> None:
-        """Test to_openai_tool with simple format schema."""
-        tool = Tool(tool=WeatherTool)
-        openai_tool = tool.to_openai_tool()
-        assert openai_tool["type"] == "function"
-        assert "function" in openai_tool
-        assert openai_tool["function"]["name"] == "get_weather"
-
-    def test_tool_is_frozen(self) -> None:
-        """Test that Tool is frozen."""
-        tool = Tool(tool=GetTimeTool)
-        with pytest.raises(Exception):
-            tool.tool = WeatherTool
 
 
 # ============================================================================
@@ -476,16 +440,3 @@ class TestToolIntegration:
 
         assert tool_call.name == "get_time"
         assert result.call_id == tool_call.id
-
-    def test_multiple_tools_in_payload(self) -> None:
-        """Test using multiple tools in a payload."""
-        from src.kernel.llm.payload import LLMPayload, Tool
-        from src.kernel.llm.roles import ROLE
-
-        payload = LLMPayload(
-            ROLE.TOOL,
-            [Tool(tool=GetTimeTool), Tool(tool=WeatherTool)],
-        )
-
-        assert len(payload.content) == 2
-        assert all(isinstance(c, Tool) for c in payload.content)

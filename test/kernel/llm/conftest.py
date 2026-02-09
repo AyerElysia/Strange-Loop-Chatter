@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 
 from src.kernel.llm.model_client.base import ChatModelClient, StreamEvent
-from src.kernel.llm.payload import LLMPayload, Text, Tool, ToolResult, ToolCall
+from src.kernel.llm.payload import LLMPayload, Text, ToolResult, ToolCall
 from src.kernel.llm.roles import ROLE
 
 

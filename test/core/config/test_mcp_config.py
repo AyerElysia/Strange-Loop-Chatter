@@ -141,14 +141,15 @@ class TestMCPConfig:
 class TestGlobalMCPConfig:
     """测试全局 MCP 配置管理。"""
 
-    def test_init_mcp_config_default(self):
+    def test_init_mcp_config_default(self, temp_dir: Path):
         """测试使用默认配置初始化。"""
         import src.core.config.mcp_config as mcp_config_module
         original_config = mcp_config_module._global_mcp_config
         mcp_config_module._global_mcp_config = None
 
         try:
-            config = init_mcp_config()
+            config_path = temp_dir / "mcp.toml"
+            config = init_mcp_config(str(config_path))
             assert config is not None
             assert isinstance(config, MCPConfig)
         finally:
@@ -193,29 +194,31 @@ lab = "https://api.example.com/sse"
         finally:
             mcp_config_module._global_mcp_config = original_config
 
-    def test_get_mcp_config_after_init(self):
+    def test_get_mcp_config_after_init(self, temp_dir: Path):
         """测试初始化后获取配置。"""
         import src.core.config.mcp_config as mcp_config_module
         original_config = mcp_config_module._global_mcp_config
         mcp_config_module._global_mcp_config = None
 
         try:
-            init_mcp_config()
+            config_path = temp_dir / "mcp.toml"
+            init_mcp_config(str(config_path))
             config = get_mcp_config()
 
             assert isinstance(config, MCPConfig)
         finally:
             mcp_config_module._global_mcp_config = original_config
 
-    def test_init_mcp_config_multiple_times(self):
+    def test_init_mcp_config_multiple_times(self, temp_dir: Path):
         """测试多次初始化更新配置。"""
         import src.core.config.mcp_config as mcp_config_module
         original_config = mcp_config_module._global_mcp_config
         mcp_config_module._global_mcp_config = None
 
         try:
-            config1 = init_mcp_config()
-            config2 = init_mcp_config()
+            config_path = temp_dir / "mcp.toml"
+            config1 = init_mcp_config(str(config_path))
+            config2 = init_mcp_config(str(config_path))
 
             # 第二次应该返回新创建的实例（因为重新初始化了）
             assert config2 is not None

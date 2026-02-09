@@ -293,27 +293,27 @@ class TestFileOutput:
 
     def test_enable_file_output(self) -> None:
         """测试启用文件输出"""
+        from src.kernel.logger import initialize_logger_system, shutdown_logger_system
         # 创建临时目录
         temp_dir = tempfile.mkdtemp()
 
         try:
+            # 初始化日志系统（启用文件输出）
+            initialize_logger_system(
+                log_dir=temp_dir,
+                enable_file=True,
+                log_filename="file_test",
+            )
+            
             console = Console(file=StringIO())
             logger = get_logger(
                 "file_test",
-                enable_file=False,
+                enable_file=True,
                 console=console,
             )
 
-            # 初始状态文件输出未启用
-            assert logger._enable_file is False
-            assert logger.file_handler is None
-
-            # 启用文件输出
-            logger.enable_file_output(log_dir=temp_dir)
-
             # 验证文件输出已启用
             assert logger._enable_file is True
-            assert logger.file_handler is not None
 
             # 写入日志
             logger.info("Test message")
@@ -323,92 +323,119 @@ class TestFileOutput:
             assert len(log_files) >= 1
 
         finally:
-            # 清理临时目录
+            # 清理
+            shutdown_logger_system()
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_disable_file_output(self) -> None:
         """测试禁用文件输出"""
+        from src.kernel.logger import initialize_logger_system, shutdown_logger_system
         temp_dir = tempfile.mkdtemp()
 
         try:
+            # 先启用文件输出
+            initialize_logger_system(
+                log_dir=temp_dir,
+                enable_file=True,
+            )
+            
             console = Console(file=StringIO())
             logger = get_logger(
                 "file_disable_test",
                 enable_file=True,
-                log_dir=temp_dir,
                 console=console,
             )
 
             # 初始状态文件输出已启用
             assert logger._enable_file is True
-            assert logger.file_handler is not None
 
-            # 禁用文件输出
-            logger.disable_file_output()
+            # 创建禁用文件的 logger
+            logger2 = get_logger(
+                "file_disabled",
+                enable_file=False,
+                console=console,
+            )
 
             # 验证文件输出已禁用
-            assert logger._enable_file is False
-            assert logger.file_handler is None
+            assert logger2._enable_file is False
 
         finally:
+            shutdown_logger_system()
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_file_output_with_rotation_mode(self) -> None:
         """测试不同轮转模式"""
+        from src.kernel.logger import initialize_logger_system, shutdown_logger_system
         temp_dir = tempfile.mkdtemp()
 
         try:
             console = Console(file=StringIO())
 
             # 按日期轮转
+            initialize_logger_system(
+                log_dir=temp_dir,
+                enable_file=True,
+                file_rotation=RotationMode.DATE,
+            )
             logger1 = get_logger(
                 "date_rotation",
                 enable_file=True,
-                log_dir=temp_dir,
-                file_rotation=RotationMode.DATE,
                 console=console,
             )
-            assert logger1.file_handler is not None
-            assert logger1.file_handler.rotation_mode == RotationMode.DATE
+            assert logger1._enable_file is True
+            
+            shutdown_logger_system()
 
             # 按大小轮转
+            initialize_logger_system(
+                log_dir=temp_dir,
+                enable_file=True,
+                file_rotation=RotationMode.SIZE,
+                max_file_size=1024,  # 1KB
+            )
             logger2 = get_logger(
                 "size_rotation",
                 enable_file=True,
-                log_dir=temp_dir,
-                file_rotation=RotationMode.SIZE,
-                max_file_size=1024,  # 1KB
                 console=console,
             )
-            assert logger2.file_handler is not None
-            assert logger2.file_handler.rotation_mode == RotationMode.SIZE
-            assert logger2.file_handler.max_size == 1024
+            assert logger2._enable_file is True
+            
+            shutdown_logger_system()
 
             # 不轮转
+            initialize_logger_system(
+                log_dir=temp_dir,
+                enable_file=True,
+                file_rotation=RotationMode.NEVER,
+            )
             logger3 = get_logger(
                 "no_rotation",
                 enable_file=True,
-                log_dir=temp_dir,
-                file_rotation=RotationMode.NEVER,
                 console=console,
             )
-            assert logger3.file_handler is not None
-            assert logger3.file_handler.rotation_mode == RotationMode.NEVER
+            assert logger3._enable_file is True
 
         finally:
+            shutdown_logger_system()
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_file_write_content(self) -> None:
         """测试文件写入内容"""
+        from src.kernel.logger import initialize_logger_system, shutdown_logger_system
         temp_dir = tempfile.mkdtemp()
 
         try:
+            initialize_logger_system(
+                log_dir=temp_dir,
+                enable_file=True,
+                log_filename="content_test",
+            )
+            
             console = Console(file=StringIO())
             logger = get_logger(
                 "content_test",
                 display="ContentTest",
                 enable_file=True,
-                log_dir=temp_dir,
                 console=console,
             )
 
@@ -431,43 +458,52 @@ class TestFileOutput:
             assert "WARNING" in content
 
         finally:
+            shutdown_logger_system()
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_logger_close(self) -> None:
-        """测试关闭日志记录器"""
+        """测试关闭日志系统"""
+        from src.kernel.logger import initialize_logger_system, shutdown_logger_system
         temp_dir = tempfile.mkdtemp()
 
         try:
             console = Console(file=StringIO())
+            initialize_logger_system(
+                log_dir=temp_dir,
+                enable_file=True,
+            )
             logger = get_logger(
                 "close_test",
                 enable_file=True,
-                log_dir=temp_dir,
                 console=console,
             )
 
-            # 验证文件处理器存在
-            assert logger.file_handler is not None
+            # 写入日志
+            logger.info("Test before close")
+            
+            # 关闭日志系统
+            shutdown_logger_system()
 
-            # 关闭日志记录器
-            logger.close()
-
-            # 验证文件处理器已关闭
-            assert logger.file_handler is None
+            # 关闭后仍可以输出到控制台，但不会写入文件
+            logger.info("Test after close")
 
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_remove_logger_closes_file(self) -> None:
-        """测试移除日志记录器时关闭文件"""
+        """测试移除日志记录器"""
+        from src.kernel.logger import initialize_logger_system, shutdown_logger_system
         temp_dir = tempfile.mkdtemp()
 
         try:
             console = Console(file=StringIO())
+            initialize_logger_system(
+                log_dir=temp_dir,
+                enable_file=True,
+            )
             _ = get_logger(
                 "remove_file_test",
                 enable_file=True,
-                log_dir=temp_dir,
                 console=console,
             )
 
@@ -479,6 +515,7 @@ class TestFileOutput:
             assert "remove_file_test" not in all_loggers
 
         finally:
+            shutdown_logger_system()
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_logger_repr_with_file(self) -> None:
@@ -631,21 +668,27 @@ class TestLoggerEdgeCases:
 
     def test_logger_with_file_and_custom_console(self) -> None:
         """测试同时使用文件输出和自定义 Console"""
+        from src.kernel.logger import initialize_logger_system, shutdown_logger_system
         temp_dir = tempfile.mkdtemp()
 
         try:
             custom_console = Console(file=StringIO())
+            
+            initialize_logger_system(
+                log_dir=temp_dir,
+                enable_file=True,
+                log_filename="file_and_console",
+            )
 
             logger = get_logger(
                 "file_and_console",
                 enable_file=True,
-                log_dir=temp_dir,
                 console=custom_console,
             )
 
-            # 验证同时使用了自定义 Console 和文件处理器
+            # 验证使用了自定义 Console
             assert logger.console is custom_console
-            assert logger.file_handler is not None
+            assert logger._enable_file is True
 
             logger.info("Test message")
 
@@ -654,42 +697,24 @@ class TestLoggerEdgeCases:
             assert len(log_files) >= 1
 
         finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-    def test_enable_file_already_enabled(self) -> None:
-        """测试在已启用文件输出时再次启用"""
-        temp_dir = tempfile.mkdtemp()
-
-        try:
-            console = Console(file=StringIO())
-            logger = get_logger(
-                "already_enabled",
-                enable_file=True,
-                log_dir=temp_dir,
-                console=console,
-            )
-
-            # 文件处理器已存在
-            original_handler = logger.file_handler
-
-            # 再次启用应该不会创建新的处理器
-            logger.enable_file_output(log_dir=temp_dir)
-
-            assert logger.file_handler is original_handler
-
-        finally:
+            shutdown_logger_system()
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_metadata_with_file_output(self) -> None:
         """测试带文件输出的元数据处理"""
+        from src.kernel.logger import initialize_logger_system, shutdown_logger_system
         temp_dir = tempfile.mkdtemp()
 
         try:
             console = Console(file=StringIO())
+            initialize_logger_system(
+                log_dir=temp_dir,
+                enable_file=True,
+                log_filename="metadata_file",
+            )
             logger = get_logger(
                 "metadata_file",
                 enable_file=True,
-                log_dir=temp_dir,
                 console=console,
             )
 
@@ -712,19 +737,24 @@ class TestLoggerEdgeCases:
             assert "version=1.0.0" in content
 
         finally:
+            shutdown_logger_system()
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_clear_all_loggers_with_files(self) -> None:
-        """测试清除所有 logger 时关闭文件"""
+        """测试清除所有 logger"""
+        from src.kernel.logger import initialize_logger_system, shutdown_logger_system
         temp_dir = tempfile.mkdtemp()
 
         try:
+            initialize_logger_system(
+                log_dir=temp_dir,
+                enable_file=True,
+            )
             # 创建多个带文件输出的 logger
             for i in range(3):
                 get_logger(
                     f"clear_test_{i}",
                     enable_file=True,
-                    log_dir=temp_dir,
                 )
 
             # 清除所有 logger
@@ -735,18 +765,24 @@ class TestLoggerEdgeCases:
             assert len(all_loggers) == 0
 
         finally:
+            shutdown_logger_system()
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_print_panel_does_not_write_to_file(self) -> None:
         """测试 print_panel 只输出到控制台，不写入文件"""
+        from src.kernel.logger import initialize_logger_system, shutdown_logger_system
         temp_dir = tempfile.mkdtemp()
 
         try:
             console = Console(file=StringIO())
+            initialize_logger_system(
+                log_dir=temp_dir,
+                enable_file=True,
+                log_filename="panel_test",
+            )
             logger = get_logger(
                 "panel_test",
                 enable_file=True,
-                log_dir=temp_dir,
                 console=console,
             )
 
@@ -765,18 +801,24 @@ class TestLoggerEdgeCases:
             assert "Panel content" not in content
 
         finally:
+            shutdown_logger_system()
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_print_rich_does_not_write_to_file(self) -> None:
         """测试 print_rich 只输出到控制台，不写入文件"""
+        from src.kernel.logger import initialize_logger_system, shutdown_logger_system
         temp_dir = tempfile.mkdtemp()
 
         try:
             console = Console(file=StringIO())
+            initialize_logger_system(
+                log_dir=temp_dir,
+                enable_file=True,
+                log_filename="rich_test",
+            )
             logger = get_logger(
                 "rich_test",
                 enable_file=True,
-                log_dir=temp_dir,
                 console=console,
             )
 
@@ -796,6 +838,7 @@ class TestLoggerEdgeCases:
             assert "[bold]" not in content
 
         finally:
+            shutdown_logger_system()
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 

@@ -41,8 +41,10 @@ class TestBaseConfig:
 
     def test_get_default_path(self):
         """测试获取默认路径。"""
+        TestConfig._plugin_ = "test_plugin"
         path = TestConfig.get_default_path()
         assert isinstance(path, Path)
+        assert path == Path("config/plugins/test_plugin/test_config.toml")
         assert "test_plugin" in str(path)
         assert "test_config.toml" in str(path)
         assert path == Path("config/plugins/test_plugin/test_config.toml")
@@ -55,7 +57,8 @@ class TestBaseConfig:
 
         assert UnknownConfig.get_signature() is None
 
-        # 设置 plugin_name 后
+        # 设置 _plugin_ 后
+        TestConfig._plugin_ = "test_plugin"
         assert TestConfig.get_signature() == "test_plugin:config:test_config"
 
     def test_get_default_path_different_plugin(self):
@@ -64,6 +67,7 @@ class TestBaseConfig:
             config_name: ClassVar[str] = "other_config"
             plugin_name: ClassVar[str] = "other_plugin"
 
+        OtherConfig._plugin_ = "other_plugin"
         path = OtherConfig.get_default_path()
         assert path == Path("config/plugins/other_plugin/other_config.toml")
 
@@ -71,6 +75,7 @@ class TestBaseConfig:
     @patch("src.core.components.base.config.Path.mkdir")
     def test_generate_default(self, mock_mkdir, mock_write):
         """测试生成默认配置。"""
+        TestConfig._plugin_ = "test_plugin"
         TestConfig.generate_default()
 
         # 检查是否创建了目录
@@ -140,6 +145,7 @@ class TestBaseConfig:
     @patch("src.core.components.base.config.BaseConfig.load")
     def test_reload(self, mock_load, mock_exists):
         """测试重新加载配置。"""
+        TestConfig._plugin_ = "test_plugin"
         mock_exists.return_value = True
         mock_load.return_value = MagicMock()
 
@@ -153,6 +159,7 @@ class TestBaseConfig:
     @patch("src.core.components.base.config.Path.exists")
     def test_reload_file_not_found(self, mock_exists):
         """测试重新加载（文件不存在）。"""
+        TestConfig._plugin_ = "test_plugin"
         mock_exists.return_value = False
 
         with pytest.raises(FileNotFoundError, match="配置文件未找到"):

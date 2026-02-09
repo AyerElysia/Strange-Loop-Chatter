@@ -17,7 +17,7 @@ class TestChatSection:
         config = CoreConfig.ChatSection()
 
         assert config.default_chat_mode == "normal"
-        assert config.max_context_size == 100
+        assert config.max_context_size == 20
 
     def test_custom_chat_config(self):
         """测试自定义聊天配置。"""
@@ -185,14 +185,15 @@ class TestCoreConfig:
 class TestGlobalCoreConfig:
     """测试全局 Core 配置管理。"""
 
-    def test_init_core_config_default(self):
+    def test_init_core_config_default(self, temp_dir: Path):
         """测试使用默认配置初始化。"""
         import src.core.config.core_config as core_config_module
         original_config = core_config_module._global_config
         core_config_module._global_config = None
 
         try:
-            config = init_core_config()
+            config_path = temp_dir / "core.toml"
+            config = init_core_config(str(config_path))
             assert config is not None
             assert isinstance(config, CoreConfig)
         finally:
@@ -242,29 +243,31 @@ allow_operator_promotion = true
         finally:
             core_config_module._global_config = original_config
 
-    def test_get_core_config_after_init(self):
+    def test_get_core_config_after_init(self, temp_dir: Path):
         """测试初始化后获取配置。"""
         import src.core.config.core_config as core_config_module
         original_config = core_config_module._global_config
         core_config_module._global_config = None
 
         try:
-            init_core_config()
+            config_path = temp_dir / "core.toml"
+            init_core_config(str(config_path))
             config = get_core_config()
 
             assert isinstance(config, CoreConfig)
         finally:
             core_config_module._global_config = original_config
 
-    def test_init_core_config_multiple_times(self):
+    def test_init_core_config_multiple_times(self, temp_dir: Path):
         """测试多次初始化更新配置。"""
         import src.core.config.core_config as core_config_module
         original_config = core_config_module._global_config
         core_config_module._global_config = None
 
         try:
-            config1 = init_core_config()
-            config2 = init_core_config()
+            config_path = temp_dir / "core.toml"
+            config1 = init_core_config(str(config_path))
+            config2 = init_core_config(str(config_path))
 
             # 第二次应该返回新创建的实例（因为重新初始化了）
             assert config2 is not None

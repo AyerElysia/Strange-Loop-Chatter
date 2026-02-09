@@ -14,7 +14,7 @@ from src.kernel.llm.exceptions import (
     LLMTimeoutError,
 )
 from src.kernel.llm.model_client.base import StreamEvent
-from src.kernel.llm.payload import LLMPayload, Text, Tool, ToolResult
+from src.kernel.llm.payload import LLMPayload, Text, ToolResult
 from src.kernel.llm.request import LLMRequest
 from src.kernel.llm.roles import ROLE
 

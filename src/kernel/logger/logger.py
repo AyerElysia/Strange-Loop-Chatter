@@ -558,6 +558,12 @@ def remove_logger(name: str) -> None:
         _loggers.pop(name, None)
 
 
+def clear_all_loggers() -> None:
+    """清除所有日志记录器"""
+    with _lock:
+        _loggers.clear()
+
+
 def get_all_loggers() -> dict[str, Logger]:
     """获取所有日志记录器
 

@@ -26,7 +26,7 @@ class ConcreteChatter(BaseChatter):
             yield Failure("没有新消息")
             return
 
-        yield Wait("处理中")
+        yield Wait(1.0)
         yield Success("处理完成", {"count": len(unreads)})
 
 
@@ -35,8 +35,11 @@ class TestChatterResultTypes:
 
     def test_wait_creation(self):
         """测试 Wait 创建。"""
-        wait = Wait("等待原因")
-        assert wait.reason == "等待原因"
+        wait = Wait(time=5.0)
+        assert wait.time == 5.0
+        
+        wait_no_time = Wait()
+        assert wait_no_time.time is None
 
     def test_success_creation(self):
         """测试 Success 创建。"""
@@ -100,7 +103,7 @@ class TestBaseChatter:
 
         assert len(results) == 2
         assert isinstance(results[0], Wait)
-        assert results[0].reason == "处理中"
+        assert results[0].time == 1.0
         assert isinstance(results[1], Success)
         assert results[1].message == "处理完成"
 
@@ -208,9 +211,9 @@ class TestChatterExecutePatterns:
             chatter_name = "multi_wait"
 
             async def execute(self, unreads: list) -> Generator[ChatterResult, None, None]:
-                yield Wait("步骤1")
-                yield Wait("步骤2")
-                yield Wait("步骤3")
+                yield Wait(time=1.0)
+                yield Wait(time=2.0)
+                yield Wait(time=3.0)
                 yield Success("完成")
 
         chatter = MultiWaitChatter("stream_123", mock_plugin)
@@ -221,9 +224,9 @@ class TestChatterExecutePatterns:
 
         assert len(results) == 4
         assert all(isinstance(r, Wait) for r in results[:3])
-        assert results[0].reason == "步骤1"
-        assert results[1].reason == "步骤2"
-        assert results[2].reason == "步骤3"
+        assert results[0].time == 1.0
+        assert results[1].time == 2.0
+        assert results[2].time == 3.0
         assert isinstance(results[3], Success)
 
     @pytest.mark.asyncio
@@ -277,7 +280,8 @@ class TestFetchAndFlushUnreads:
         with patch('src.core.managers.stream_manager.get_stream_manager') as mock_sm:
             mock_stream = MagicMock()
             mock_stream.context.unread_messages = []
-            mock_sm.return_value._streams.get.return_value = mock_stream
+            # 确保 _streams 是一个字典，支持 .get() 方法
+            mock_sm.return_value._streams = {"stream_123": mock_stream}
 
             text, messages = await chatter.fetch_and_flush_unreads()
 
@@ -300,9 +304,11 @@ class TestFetchAndFlushUnreads:
 
         with patch('src.core.managers.stream_manager.get_stream_manager') as mock_sm:
             mock_stream = MagicMock()
+            # 需要让 unread_messages 是一个真实的列表
             mock_stream.context.unread_messages = [msg]
             mock_stream.context.add_history_message = MagicMock()
-            mock_sm.return_value._streams.get.return_value = mock_stream
+            # 设置 _streams 为字典
+            mock_sm.return_value._streams = {"stream_123": mock_stream}
 
             text, messages = await chatter.fetch_and_flush_unreads()
 
@@ -332,7 +338,7 @@ class TestFetchAndFlushUnreads:
             mock_stream = MagicMock()
             mock_stream.context.unread_messages = messages
             mock_stream.context.add_history_message = MagicMock()
-            mock_sm.return_value._streams.get.return_value = mock_stream
+            mock_sm.return_value._streams = {"stream_123": mock_stream}
 
             text, fetched = await chatter.fetch_and_flush_unreads(format_as_group=True)
 
@@ -364,7 +370,7 @@ class TestFetchAndFlushUnreads:
             mock_stream = MagicMock()
             mock_stream.context.unread_messages = [msg]
             mock_stream.context.add_history_message = MagicMock()
-            mock_sm.return_value._streams.get.return_value = mock_stream
+            mock_sm.return_value._streams = {"stream_123": mock_stream}
 
             text, messages = await chatter.fetch_and_flush_unreads(format_as_group=False)
 
@@ -401,7 +407,7 @@ class TestFetchAndFlushUnreads:
             mock_stream = MagicMock()
             mock_stream.context.unread_messages = [msg]
             mock_stream.context.add_history_message = MagicMock()
-            mock_sm.return_value._streams.get.return_value = mock_stream
+            mock_sm.return_value._streams = {"stream_123": mock_stream}
 
             # 使用完整时间格式
             text, _ = await chatter.fetch_and_flush_unreads(time_format="%Y-%m-%d %H:%M")

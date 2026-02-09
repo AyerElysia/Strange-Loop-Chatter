@@ -283,7 +283,7 @@ async def test_chatter_get_llm_usables_respects_state():
         await manager.seal_collection_components("test_plugin:collection:c1", plugin=plugin)
 
     # 让 chatter 内部使用我们的 manager（包含该测试的 stream 解包状态）
-    with patch("src.core.managers.collection_manager.get_collection_manager") as mock_mgr:
+    with patch("src.core.components.base.chatter_collection_manager") as mock_mgr:
         mock_mgr.return_value = manager
 
         chatter = DummyChatter(stream_id="s1", plugin=plugin)

@@ -11,7 +11,7 @@ import pytest
 from src.kernel.llm.model_client.base import ChatModelClient, StreamEvent
 from src.kernel.llm.model_client.openai_client import OpenAIChatClient, _image_to_data_url, _is_data_url, _payloads_to_openai_messages
 from src.kernel.llm.model_client.registry import ModelClientRegistry
-from src.kernel.llm.payload import Image, LLMPayload, Text, Tool, ToolResult
+from src.kernel.llm.payload import Image, LLMPayload, Text, ToolResult
 from src.kernel.llm.roles import ROLE
 
 

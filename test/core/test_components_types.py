@@ -57,7 +57,6 @@ class TestEventType:
         assert EventType.ON_PLUGIN_UNLOADED.value == "on_plugin_unloaded"
         assert EventType.ON_COMPONENT_LOADED.value == "on_component_loaded"
         assert EventType.ON_COMPONENT_UNLOADED.value == "on_component_unloaded"
-        assert EventType.ON_ERROR.value == "on_error"
         assert EventType.CUSTOM.value == "custom"
 
 

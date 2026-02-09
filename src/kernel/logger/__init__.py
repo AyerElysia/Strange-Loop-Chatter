@@ -50,6 +50,7 @@ from .logger import (
     get_logger,
     remove_logger,
     get_all_loggers,
+    clear_all_loggers,
     shutdown_logger_system,
     install_rich_traceback_formatter,
     LOG_OUTPUT_EVENT,
@@ -72,6 +73,7 @@ __all__ = [
     # 辅助函数
     "remove_logger",
     "get_all_loggers",
+    "clear_all_loggers",
     "get_rich_color",
     "install_rich_traceback_formatter",
     "DEFAULT_LEVEL_COLORS",

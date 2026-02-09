@@ -15,7 +15,6 @@ from src.kernel.llm import (
     LLMConfigurationError,
     LLMRequest,
     Text,
-    Tool,
     ToolResult,
 )
 

@@ -186,7 +186,6 @@ class TestModelTasksSection:
         assert hasattr(tasks, "sub_actor")
         assert hasattr(tasks, "vlm")
         assert hasattr(tasks, "voice")
-        assert hasattr(tasks, "utils_video")
         assert hasattr(tasks, "tool_use")
 
     def test_get_existing_task(self):
@@ -283,8 +282,8 @@ class TestModelConfig:
 
         config._build_cache_dicts()
 
-        assert "openai" in config._api_providers_dict
-        assert "gpt4" in config._models_dict
+        assert "openai" in config._api_providers_dict # type: ignore
+        assert "gpt4" in config._models_dict # type: ignore
 
     def test_get_provider(self):
         """测试获取提供商。"""
@@ -480,14 +479,15 @@ class TestModelConfig:
 class TestGlobalModelConfig:
     """测试全局模型配置管理。"""
 
-    def test_init_model_config_default(self):
+    def test_init_model_config_default(self, temp_dir: Path):
         """测试使用默认配置初始化。"""
         # 清除全局配置
         import src.core.config.model_config as model_config_module
 
         model_config_module._global_model_config = None
 
-        config = init_model_config()
+        config_path = temp_dir / "models.toml"
+        config = init_model_config(str(config_path))
         assert config is not None
         assert isinstance(config, ModelConfig)
 
@@ -537,21 +537,22 @@ max_tokens = 1000
         finally:
             model_config_module._global_model_config = original_config
 
-    def test_get_model_config_after_init(self):
+    def test_get_model_config_after_init(self, temp_dir: Path):
         """测试初始化后获取配置。"""
         import src.core.config.model_config as model_config_module
         original_config = model_config_module._global_model_config
         model_config_module._global_model_config = None
 
         try:
-            init_model_config()
+            config_path = temp_dir / "models.toml"
+            init_model_config(str(config_path))
             config = get_model_config()
 
             assert isinstance(config, ModelConfig)
         finally:
             model_config_module._global_model_config = original_config
 
-    def test_init_model_config_multiple_times(self):
+    def test_init_model_config_multiple_times(self, temp_dir: Path):
         """测试多次初始化更新配置。"""
         import src.core.config.model_config as model_config_module
         original_config = model_config_module._global_model_config
@@ -559,9 +560,10 @@ max_tokens = 1000
 
         try:
             # 第一次初始化
-            config1 = init_model_config()
+            config_path = temp_dir / "models.toml"
+            config1 = init_model_config(str(config_path))
             # 第二次初始化会更新全局配置
-            config2 = init_model_config()
+            config2 = init_model_config(str(config_path))
 
             # 第二次应该返回新创建的实例（因为重新初始化了）
             assert config2 is not None
