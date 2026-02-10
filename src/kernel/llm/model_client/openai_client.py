@@ -12,11 +12,8 @@ from src.kernel.llm.payload.tooling import LLMUsable
 
 from ..payload import Image, LLMPayload, Text, ToolCall, ToolResult
 from ..roles import ROLE
+from ..exceptions import LLMError
 from .base import StreamEvent
-from src.kernel.logger import get_logger
-
-
-logger = get_logger("llm_openai_client")
 
 
 def _is_data_url(value: str) -> bool:
@@ -383,6 +380,8 @@ class OpenAIChatClient:
             resp = await loop.run_in_executor(
                 self._get_sync_http_executor(), _sync_create
             )
+            if not resp.choices:
+                raise LLMError(f"OpenAI API returned an empty choices list. Response: {resp}")
             msg = resp.choices[0].message
             tool_calls = []
             if getattr(msg, "tool_calls", None):
@@ -416,13 +415,12 @@ class OpenAIChatClient:
                         "args": args,
                     }
                 )
-            logger.debug(
-                f"OpenAI create (sync) done: model={model_name} request={request_name}"
-            )
             return msg.content or "", tool_calls, None
 
         if not stream:
             resp = await client.chat.completions.create(**params)
+            if not resp.choices:
+                raise LLMError(f"OpenAI API returned an empty choices list. Response: {resp}")
             msg = resp.choices[0].message
             tool_calls = []
             if getattr(msg, "tool_calls", None):
@@ -462,6 +460,8 @@ class OpenAIChatClient:
 
         async def iter_events() -> AsyncIterator[StreamEvent]:
             async for chunk in stream_resp:
+                if not chunk.choices:
+                    continue
                 choice = chunk.choices[0]
                 delta = choice.delta
 

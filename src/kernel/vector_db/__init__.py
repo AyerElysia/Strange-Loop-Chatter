@@ -19,7 +19,7 @@
         collection_name="memory",
         embeddings=[[0.1, 0.2, 0.3]],
         documents=["这是一个人类发送的消息"],
-        metadatas=[{"chat_id": "12345", "timestamp": 123456789.0}],
+        metadatas=[{"stream_id": "12345", "timestamp": 123456789.0}],
         ids=["msg_001"]
     )
 
@@ -28,7 +28,7 @@
         collection_name="memory",
         query_embeddings=[[0.11, 0.21, 0.31]],
         n_results=5,
-        where={"chat_id": "12345"}
+        where={"stream_id": "12345"}
     )
     # results 字典包含: 'ids', 'distances', 'metadatas', 'documents'
     ```

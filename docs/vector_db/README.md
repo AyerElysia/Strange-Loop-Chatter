@@ -58,8 +58,8 @@ await vdb.add(
     embeddings=[[0.1, 0.2, 0.3], [0.2, 0.3, 0.4]],
     documents=["Hello world", "Good morning"],
     metadatas=[
-        {"chat_id": "chat_1", "timestamp": 1000},
-        {"chat_id": "chat_2", "timestamp": 2000}
+        {"stream_id": "chat_1", "timestamp": 1000},
+        {"stream_id": "chat_2", "timestamp": 2000}
     ],
     ids=["msg_001", "msg_002"]
 )

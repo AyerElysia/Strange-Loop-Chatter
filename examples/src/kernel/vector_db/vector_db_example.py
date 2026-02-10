@@ -55,7 +55,7 @@ async def main() -> None:
         collection_name="semantic_cache",
         embeddings=[[0.1, 0.2, 0.3, 0.4, 0.5]],
         documents=["这是一个人类发送的消息"],
-        metadatas=[{"chat_id": "12345", "timestamp": 1234567890.0}],
+        metadatas=[{"stream_id": "12345", "timestamp": 1234567890.0}],
         ids=["msg_001"]
     )
     logger.info("[OK] 添加消息到 semantic_cache")
@@ -162,7 +162,7 @@ async def main() -> None:
         collection_name="semantic_cache",
         embeddings=[[0.1, 0.2, 0.3, 0.4, 0.5]],
         documents=["这是一个更新后的消息内容"],
-        metadatas=[{"chat_id": "12345", "timestamp": 1234567895.0, "updated": True}],
+        metadatas=[{"stream_id": "12345", "timestamp": 1234567895.0, "updated": True}],
         ids=["msg_001"]
     )
 
