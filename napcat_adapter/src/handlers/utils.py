@@ -4,7 +4,6 @@ import io
 import ssl
 import time
 import weakref
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import orjson
@@ -18,9 +17,9 @@ if TYPE_CHECKING:
 
 logger = get_logger("napcat_adapter")
 
-# 简单的缓存实现，通过 JSON 文件实现磁盘一价存储
-_CACHE_FILE = Path(__file__).resolve().parent / "napcat_cache.json"
+# 简单的缓存实现，通过 kernel.storage 实现磁盘持久化存储
 _CACHE_LOCK = asyncio.Lock()
+_CACHE_LOADED = False
 _CACHE: dict[str, dict[str, dict[str, Any]]] = {
     "group_info": {},
     "group_detail_info": {},
@@ -46,27 +45,43 @@ def register_adapter(adapter: "NapcatAdapter") -> None:
     logger.debug("Napcat adapter registered in utils for websocket access")
 
 
-def _load_cache_from_disk() -> None:
-    if not _CACHE_FILE.exists():
+async def _ensure_cache_loaded() -> None:
+    """确保缓存已从磁盘加载"""
+    global _CACHE_LOADED
+    if _CACHE_LOADED:
         return
+
+    async with _CACHE_LOCK:
+        if _CACHE_LOADED:
+            return
+
+        from src.kernel.storage import json_store
+
+        try:
+            data = await json_store.load("napcat_cache")
+            if isinstance(data, dict):
+                for key, section in _CACHE.items():
+                    cached_section = data.get(key)
+                    if isinstance(cached_section, dict):
+                        section.update(cached_section)
+        except Exception as e:
+            logger.debug(f"Failed to load napcat cache: {e}")
+
+        _CACHE_LOADED = True
+
+
+async def _save_cache_to_disk() -> None:
+    """保存缓存到磁盘"""
+    from src.kernel.storage import json_store
+
     try:
-        data = orjson.loads(_CACHE_FILE.read_bytes())
-        if isinstance(data, dict):
-            for key, section in _CACHE.items():
-                cached_section = data.get(key)
-                if isinstance(cached_section, dict):
-                    section.update(cached_section)
+        await json_store.save("napcat_cache", _CACHE)
     except Exception as e:
-        logger.debug(f"Failed to load napcat cache: {e}")
-
-
-def _save_cache_to_disk_locked() -> None:
-    """重要提示：不要在持有 _CACHE_LOCK 时调用此函数"""
-    _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _CACHE_FILE.write_bytes(orjson.dumps(_CACHE))
+        logger.debug(f"Write napcat cache failed: {e}")
 
 
 async def _get_cached(section: str, key: str, ttl: int) -> Any | None:
+    await _ensure_cache_loaded()
     now = time.time()
     async with _CACHE_LOCK:
         entry = _CACHE.get(section, {}).get(key)
@@ -77,17 +92,18 @@ async def _get_cached(section: str, key: str, ttl: int) -> Any | None:
             return entry.get("data")
         _CACHE.get(section, {}).pop(key, None)
         try:
-            _save_cache_to_disk_locked()
+            await _save_cache_to_disk()
         except Exception:
             pass
         return None
 
 
 async def _set_cached(section: str, key: str, data: Any) -> None:
+    await _ensure_cache_loaded()
     async with _CACHE_LOCK:
         _CACHE.setdefault(section, {})[key] = {"data": data, "ts": time.time()}
         try:
-            _save_cache_to_disk_locked()
+            await _save_cache_to_disk()
         except Exception:
             logger.debug("Write napcat cache failed")
 
@@ -123,10 +139,6 @@ async def _call_adapter_api(
     except Exception as e:
         logger.error(f"{action} 调用失败: {e}")
         return None
-
-
-# 加载缓存到内存一次，避免在每次调用缓存时重复加载
-_load_cache_from_disk()
 
 
 class SSLAdapter(urllib3.PoolManager):
