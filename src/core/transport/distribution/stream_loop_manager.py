@@ -61,8 +61,11 @@ class StreamLoopManager:
         # 对话执行生成器：stream_id -> generator
         self._chatter_genes: dict[str, AsyncGenerator[Any, None]] = {}
 
-        # 等待状态：stream_id -> {"wait_until": float | None, "wait_for_messages": bool}
-        self._wait_states: dict[str, dict[str, Any]] = {}
+        # 等待状态：stream_id -> (last_yield, yielded_at, unread_count_at_yield)
+        # - last_yield: Chatter 产出的 Wait/Stop 对象
+        # - yielded_at: 产出该状态的时间戳
+        # - unread_count_at_yield: 产出该状态时的未读消息数
+        self._wait_states: dict[str, tuple[Any, float, int]] = {}
 
         # 并发控制
         self._processing_semaphore = asyncio.Semaphore(max_concurrent_streams)
@@ -138,7 +141,6 @@ class StreamLoopManager:
 
         # 快速路径：任务已在运行
         if not force and context.stream_loop_task and not context.stream_loop_task.done():
-            logger.debug(f"[管理器] stream={stream_id[:8]}, 任务已在运行")
             return True
 
         # 获取或创建启动锁
@@ -161,14 +163,27 @@ class StreamLoopManager:
 
             # 创建新的驱动器任务
             try:
+                from src.core.config import get_core_config
                 from src.core.transport.distribution.loop import run_chat_stream
-                from src.kernel.concurrency import get_task_manager
+                from src.kernel.concurrency import get_task_manager, get_watchdog
+
+                tick_interval = get_core_config().bot.tick_interval
+
                 loop_task = get_task_manager().create_task(
                     run_chat_stream(stream_id, self),
                     name=f"chat_stream_{stream_id[:16]}",
+                    daemon=True,
                 )
                 context.stream_loop_task = loop_task.task
 
+                get_watchdog().register_stream(
+                    stream_id=stream_id,
+                    tick_interval=tick_interval,
+                    warning_threshold=tick_interval * 2,
+                    restart_threshold=tick_interval * 5,
+                    restart_callback=lambda: self.restart_stream_loop(stream_id),
+                    )
+                
                 self._stats["active_streams"] += 1
                 self._stats["total_loops"] += 1
 
@@ -209,6 +224,17 @@ class StreamLoopManager:
         logger.debug(f"停止流循环: {stream_id[:8]}")
         return True
 
+    async def restart_stream_loop(self, stream_id: str) -> bool:
+        """强制重启指定流的驱动器任务。
+
+        Args:
+            stream_id: 流 ID
+
+        Returns:
+            bool: 是否成功重启
+        """
+        return await self.start_stream_loop(stream_id, force=True)
+    
     # ========================================================================
     # 内部方法 — 上下文管理
     # ========================================================================
@@ -268,32 +294,41 @@ class StreamLoopManager:
         Returns:
             bool: 是否可以继续执行 (True: 满足条件或无等待, False: 仍在等待)
         """
+        from src.core.components.base.chatter import Wait, Stop
+
         wait_state = self._wait_states.get(stream_id)
         if not wait_state:
             return True
 
-        wait_until = wait_state.get("wait_until")
-        wait_for_messages = wait_state.get("wait_for_messages", False)
-        unread_count_at_wait = int(wait_state.get("unread_count_at_wait", 0))
-
+        last_yield, yielded_at, unread_count_at_yield = wait_state
+        unread_count_now = len(context.unread_messages)
         now = time.time()
 
-        # 条件 1：时间条件（未设置则视为满足）
-        time_ready = True
-        if wait_until is not None:
-            time_ready = now >= wait_until
+        wait_time = getattr(last_yield, "time", None)
 
-        # 条件 2：消息条件（未要求则视为满足）
-        message_ready = True
-        if wait_for_messages:
-            message_ready = len(context.unread_messages) > unread_count_at_wait
+        if isinstance(last_yield, Wait):
+            if wait_time is None:
+                # Wait(None): 仅有新未读消息时恢复
+                if unread_count_now <= unread_count_at_yield:
+                    return False
+            else:
+                # Wait(seconds): 到达时间阈值后恢复
+                if now < yielded_at + float(wait_time):
+                    return False
 
-        # 语义：当两个条件都存在时，需同时满足；否则满足已启用的条件即可
-        if time_ready and message_ready:
+        elif isinstance(last_yield, Stop):
+            # Stop(seconds): 冷却结束且出现新未读消息时恢复
+            cooldown_ready = now >= yielded_at + float(wait_time)
+            message_ready = unread_count_now > unread_count_at_yield
+            if not (cooldown_ready and message_ready):
+                return False
+        else:
+            # 非预期类型，不阻塞后续流程
             self._wait_states.pop(stream_id, None)
             return True
 
-        return False
+        self._wait_states.pop(stream_id, None)
+        return True
 
     # ========================================================================
     # 辅助方法

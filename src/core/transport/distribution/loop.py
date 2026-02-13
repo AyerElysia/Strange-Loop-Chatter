@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from src.core.config import get_core_config
+from src.kernel.concurrency import get_watchdog
 from src.core.transport.distribution.tick import ConversationTick
 from src.core.components.base.chatter import Wait, Success, Failure, Stop
 from src.kernel.logger import get_logger, COLOR
@@ -110,6 +111,8 @@ async def run_chat_stream(
         # 2. 消费 Tick 事件
         async for tick in tick_generator:
             try:
+                get_watchdog().feed_dog(stream_id=stream_id)
+
                 context = await manager._get_stream_context(stream_id)
                 if not context:
                     continue
@@ -132,10 +135,12 @@ async def run_chat_stream(
                     chatter = chatter_manager.get_chatter_by_stream(stream_id)
                     if not chatter:
                         from src.core.managers import get_stream_manager
+
                         sm = get_stream_manager()
-                        chat_stream = sm._streams.get(stream_id)
+                        chat_stream = await sm.get_or_create_stream(stream_id)
                         if not chat_stream:
                             continue
+
                         chatter = chatter_manager.get_or_create_chatter_for_stream(
                             stream_id, chat_stream.chat_type, chat_stream.platform
                         )
@@ -161,13 +166,7 @@ async def run_chat_stream(
                     context.is_chatter_processing = True
                     
                     # 执行一步迭代
-                    if asyncio.iscoroutine(chatter_gene):
-                        chatter_gene = await chatter_gene
-                        manager._chatter_genes[stream_id] = chatter_gene
-
-                    logger.debug(f"[驱动器] stream={stream_id[:8]}, 准备执行 chatter_gene.__anext__()")
-                    result = await chatter_gene.__anext__()
-                    logger.debug(f"[驱动器] stream={stream_id[:8]}, chatter_gene.__anext__() 返回: {type(result).__name__}")
+                    result = await anext(chatter_gene)
                     
                     # 4. 根据执行结果处理状态
                     if isinstance(result, Success):
@@ -177,20 +176,21 @@ async def run_chat_stream(
                         # 执行失败，输出警告并等待下一 Tick
                         logger.warning(f"[驱动器] stream={stream_id[:8]}, Chatter 返回 Failure: {result.error}")
                     elif isinstance(result, Wait):
-                        # 记录等待状态
-                        manager._wait_states[stream_id] = {
-                            "wait_until": time.time() + result.time if result.time is not None else None,
-                            "wait_for_messages": result.time is None
-                        }
+                        # 记录等待状态（直接保存上次 yield 对象）
+                        manager._wait_states[stream_id] = (
+                            result,
+                            time.time(),
+                            len(context.unread_messages),
+                        )
                         logger.debug(f"[驱动器] stream={stream_id[:8]}, 进入 Wait 状态 (time={result.time})")
                     elif isinstance(result, Stop):
                         # 记录等待状态并销毁生成器。
                         # Stop 语义：经过冷却后，仅当出现“新的未读消息”才重启对话。
-                        manager._wait_states[stream_id] = {
-                            "wait_until": time.time() + result.time,
-                            "wait_for_messages": True,
-                            "unread_count_at_wait": len(context.unread_messages),
-                        }
+                        manager._wait_states[stream_id] = (
+                            result,
+                            time.time(),
+                            len(context.unread_messages),
+                        )
                         logger.debug(f"[驱动器] stream={stream_id[:8]}, 进入 Stop 状态 (time={result.time})，销毁生成器")
                         manager._chatter_genes.pop(stream_id, None)
                         

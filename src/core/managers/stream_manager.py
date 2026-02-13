@@ -122,7 +122,7 @@ class StreamManager:
         # 并发保护：同一个 stream_id 的创建/加载必须串行化
         lock = self._get_stream_lock(stream_id)
         async with lock:
-            # 二次检查，避免等待锁期间已被其他协程创建
+            # 检查，避免等待锁期间已被其他协程创建
             existed = self._streams.get(stream_id)
             if existed is not None:
                 logger.debug(f"获取已存在的流实例: {stream_id}")
@@ -295,7 +295,7 @@ class StreamManager:
             # 更新流实例内容
             chat_stream = self._streams.get(stream_id)
             if chat_stream:
-                chat_stream.context.add_history_message(message)
+                chat_stream.context.add_unread_message(message)
                 chat_stream.update_active_time()
 
             # 更新流活跃时间

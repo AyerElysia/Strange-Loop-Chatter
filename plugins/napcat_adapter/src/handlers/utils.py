@@ -93,7 +93,6 @@ async def _get_cached(section: str, key: str, ttl: int) -> Any | None:
         return entry.get("data")
     _CACHE.get(section, {}).pop(key, None)
 
-    # 在锁外执行 IO 操作，避免长时间持有琐导致死锁或性能下降
     try:
         await _save_cache_to_disk()
     except Exception:
@@ -105,7 +104,6 @@ async def _set_cached(section: str, key: str, data: Any) -> None:
     await _ensure_cache_loaded()
     _CACHE.setdefault(section, {})[key] = {"data": data, "ts": time.time()}
 
-    # 在锁外执行 IO 操作
     try:
         await _save_cache_to_disk()
     except Exception:

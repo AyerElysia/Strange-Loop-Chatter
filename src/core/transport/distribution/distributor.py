@@ -14,9 +14,12 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from src.core.components.types import EventType
 from src.kernel.event import EventDecision, get_event_bus
 from src.kernel.logger import get_logger, COLOR
+from src.core.models.message import Message
 
 logger = get_logger("distributor", display="消息分发", color=COLOR.MAGENTA)
 
@@ -37,7 +40,7 @@ async def _on_message_received(_: str, params: dict) -> tuple[EventDecision, dic
     from src.core.managers.stream_manager import get_stream_manager
     from src.core.transport.distribution.stream_loop_manager import get_stream_loop_manager
 
-    message = params.get("message")
+    message: Message = cast(Message, params.get("message"))
     if message is None:
         logger.warning("ON_MESSAGE_RECEIVED 事件缺少 message 参数")
         return EventDecision.PASS, params
@@ -60,11 +63,8 @@ async def _on_message_received(_: str, params: dict) -> tuple[EventDecision, dic
         stream_id = chat_stream.stream_id
         context = chat_stream.context
 
-        # 2. 持久化消息到数据库 + 更新内存中的历史消息
+        # 2. 持久化消息到数据库 + 更新未读消息
         await sm.add_message(message)
-
-        # 3. 将消息添加到未读列表
-        context.add_unread_message(message)
 
         # 4. 尝试启动该流的 Tick 驱动器（如果已在运行则跳过）
         slm = get_stream_loop_manager()

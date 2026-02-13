@@ -280,9 +280,10 @@ class Bot:
         self.ui.update_phase_status("事件总线", "已初始化")
 
         # Step 4: Task Manager
-        from src.kernel.concurrency import get_task_manager
+        from src.kernel.concurrency import get_task_manager, get_watchdog
 
         self.task_manager = get_task_manager()
+        get_watchdog().start()
         self.ui.update_phase_status("任务管理器", "已初始化")
 
         # Step 5: Scheduler
@@ -720,6 +721,7 @@ class Bot:
         try:
             await self.initialize()
             await self.run()
+
         except KeyboardInterrupt:
             # 用户中断
             if self.logger:

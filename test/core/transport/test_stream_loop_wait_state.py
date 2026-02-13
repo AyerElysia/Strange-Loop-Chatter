@@ -1,8 +1,19 @@
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 
 from src.core.transport.distribution.stream_loop_manager import StreamLoopManager
+
+
+class Wait:
+    def __init__(self, time: float | None) -> None:
+        self.time = time
+
+
+class Stop:
+    def __init__(self, time: float) -> None:
+        self.time = time
 
 
 def test_wait_state_check_requires_new_message_after_stop() -> None:
@@ -10,11 +21,7 @@ def test_wait_state_check_requires_new_message_after_stop() -> None:
     manager = StreamLoopManager()
     stream_id = "stream-stop-check"
 
-    manager._wait_states[stream_id] = {
-        "wait_until": 1.0,
-        "wait_for_messages": True,
-        "unread_count_at_wait": 2,
-    }
+    manager._wait_states[stream_id] = (Stop(time=0.0), 0.0, 2)
 
     # 冷却时间已过，但没有新消息（仍是 2 条）
     context_same = SimpleNamespace(unread_messages=[1, 2])
@@ -30,10 +37,7 @@ def test_wait_state_check_wait_for_messages_only() -> None:
     manager = StreamLoopManager()
     stream_id = "stream-wait-msg"
 
-    manager._wait_states[stream_id] = {
-        "wait_until": None,
-        "wait_for_messages": True,
-    }
+    manager._wait_states[stream_id] = (Wait(time=None), time.time(), 0)
 
     context_empty = SimpleNamespace(unread_messages=[])
     assert manager._wait_state_check(stream_id, context_empty) is False
@@ -47,16 +51,10 @@ def test_wait_state_check_wait_for_time_only() -> None:
     manager = StreamLoopManager()
     stream_id = "stream-wait-time"
 
-    manager._wait_states[stream_id] = {
-        "wait_until": 4102444800.0,  # 2100-01-01
-        "wait_for_messages": False,
-    }
+    manager._wait_states[stream_id] = (Wait(time=4102444800.0), 0.0, 0)  # 2100-01-01
 
     context_any = SimpleNamespace(unread_messages=[])
     assert manager._wait_state_check(stream_id, context_any) is False
 
-    manager._wait_states[stream_id] = {
-        "wait_until": 1.0,
-        "wait_for_messages": False,
-    }
+    manager._wait_states[stream_id] = (Wait(time=0.0), time.time(), 0)
     assert manager._wait_state_check(stream_id, context_any) is True
