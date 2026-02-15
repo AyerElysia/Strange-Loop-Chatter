@@ -3,11 +3,12 @@
 import json
 from datetime import datetime
 from typing import Generator
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.core.components.base.chatter import BaseChatter, ChatterResult, Failure, Success, Wait
+from src.core.components.base.tool import BaseTool
 from src.core.components.types import ChatType
 from src.core.models.message import Message
 
@@ -136,6 +137,97 @@ class TestBaseChatter:
         assert len(results) == 2
         assert isinstance(results[1], Success)
         assert results[1].data == {"count": 5}
+
+    @pytest.mark.asyncio
+    async def test_modify_llm_usables_uses_owner_plugin_instance(self):
+        """测试跨插件组件实例化时使用组件所属插件实例。"""
+
+        class CrossPluginTool(BaseTool):
+            tool_name = "cross_tool"
+            tool_description = "cross tool"
+            _signature_ = "plugin_b:tool:cross_tool"
+
+            def __init__(self, plugin):
+                super().__init__(plugin)
+                if getattr(plugin, "plugin_name", "") != "plugin_b":
+                    raise ValueError("plugin mismatch")
+
+            async def execute(self, *args, **kwargs):
+                return True, "ok"
+
+        class CrossPluginChatter(BaseChatter):
+            chatter_name = "cross_plugin_chatter"
+
+            async def execute(self):
+                if False:
+                    yield Success("never")  # pragma: no cover
+
+        chatter_plugin = MagicMock()
+        chatter_plugin.plugin_name = "plugin_a"
+
+        owner_plugin = MagicMock()
+        owner_plugin.plugin_name = "plugin_b"
+
+        chatter = CrossPluginChatter("stream_123", chatter_plugin)
+
+        mock_stream = MagicMock()
+        mock_stream.stream_id = "stream_123"
+        mock_stream.context = MagicMock()
+        mock_stream.context.current_message = None
+
+        with patch("src.core.components.base.chatter.get_stream_manager") as mock_sm, patch(
+            "src.core.components.base.chatter.get_plugin_manager"
+        ) as mock_pm:
+            mock_sm.return_value.get_or_create_stream = AsyncMock(return_value=mock_stream)
+            mock_pm.return_value.get_plugin.return_value = owner_plugin
+
+            result = await chatter.modify_llm_usables([CrossPluginTool])
+
+        assert CrossPluginTool in result
+
+    @pytest.mark.asyncio
+    async def test_exec_llm_usable_uses_owner_plugin_instance(self):
+        """测试执行跨插件 Tool 时向管理器传入所属插件实例。"""
+
+        class CrossPluginTool(BaseTool):
+            tool_name = "cross_tool"
+            tool_description = "cross tool"
+            _signature_ = "plugin_b:tool:cross_tool"
+
+            async def execute(self, *args, **kwargs):
+                return True, "ok"
+
+        class CrossPluginChatter(BaseChatter):
+            chatter_name = "cross_plugin_chatter"
+
+            async def execute(self):
+                if False:
+                    yield Success("never")  # pragma: no cover
+
+        chatter_plugin = MagicMock()
+        chatter_plugin.plugin_name = "plugin_a"
+        owner_plugin = MagicMock()
+        owner_plugin.plugin_name = "plugin_b"
+
+        message = MagicMock()
+
+        chatter = CrossPluginChatter("stream_123", chatter_plugin)
+
+        with patch("src.core.components.base.chatter.get_plugin_manager") as mock_pm, patch(
+            "src.core.components.base.chatter.get_tool_use"
+        ) as mock_tool_use:
+            mock_pm.return_value.get_plugin.return_value = owner_plugin
+            mock_tool_use.return_value.execute_tool = AsyncMock(return_value=(True, "ok"))
+
+            ok, payload = await chatter.exec_llm_usable(CrossPluginTool, message)
+
+        assert ok is True
+        assert payload == "ok"
+        mock_tool_use.return_value.execute_tool.assert_awaited_once_with(
+            "plugin_b:tool:cross_tool",
+            owner_plugin,
+            message,
+        )
 
 
 class TestChatterAttributes:

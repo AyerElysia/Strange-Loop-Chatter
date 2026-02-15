@@ -19,6 +19,7 @@ from src.core.managers import (
     get_tool_use,
     get_action_manager,
     get_stream_manager,
+    get_plugin_manager,
 )
 from src.kernel.concurrency import get_task_manager
 from src.kernel.logger import get_logger, COLOR
@@ -185,7 +186,7 @@ class BaseChatter(ABC):
     async def get_llm_usables(self) -> list[type["LLMUsable"]]:
         """获取可用的 LLMUsable 组件列表。
 
-        从插件中获取所有可用的 Action、Tool、Collection 组件。
+        从全局注册表中获取所有可用的 Action、Tool、Collection 组件。
 
         Returns:
             list[type[LLMUsable]]: LLMUsable 组件类列表
@@ -194,6 +195,7 @@ class BaseChatter(ABC):
             >>> usables = await self.get_llm_usables()
             >>> [MyAction, MyTool, MyCollection]
         """
+        from src.core.components.registry import get_global_registry
         from src.core.components.types import ComponentType, ComponentState
         from src.core.components.state_manager import get_global_state_manager
 
@@ -201,35 +203,31 @@ class BaseChatter(ABC):
 
         state_manager = get_global_state_manager()
         collection_manager = get_collection_manager()
+        registry = get_global_registry()
 
-        # 获取所有组件
-        components = self.plugin.get_components()
+        # 从全局注册表按类型收集组件
+        llm_usable_components: list[tuple[str, str, type]] = []
 
-        for component_cls in components:
-            # 检查是否是 LLMUsable（Action、Tool、Collection）
-            sig = getattr(component_cls, "_signature_", None)
-            if sig:
-                # 仅返回“可用”的组件
-                if state_manager.get_state(sig) != ComponentState.ACTIVE:
+        for comp_type in (
+            ComponentType.ACTION,
+            ComponentType.TOOL,
+            ComponentType.COLLECTION,
+        ):
+            components = registry.get_by_type(comp_type)
+            for sig, component_cls in components.items():
+                llm_usable_components.append((sig, comp_type.value, component_cls))
+
+        for sig, comp_type, component_cls in llm_usable_components:
+            # 仅返回“可用”的组件
+            if state_manager.get_state(sig) != ComponentState.ACTIVE:
+                continue
+
+            # Collection 解包只影响当前聊天流：对 Action/Tool 做 stream 级门控过滤
+            if comp_type in (ComponentType.ACTION.value, ComponentType.TOOL.value):
+                if not collection_manager.is_component_available(sig, self.stream_id):
                     continue
-                sig_parts = sig.split(":")
-                if len(sig_parts) == 3:
-                    comp_type = sig_parts[1]
-                    if comp_type in (
-                        ComponentType.ACTION.value,
-                        ComponentType.TOOL.value,
-                        ComponentType.COLLECTION.value,
-                    ):
-                        # Collection 解包只影响当前聊天流：对 Action/Tool 做 stream 级门控过滤
-                        if comp_type in (
-                            ComponentType.ACTION.value,
-                            ComponentType.TOOL.value,
-                        ):
-                            if not collection_manager.is_component_available(
-                                sig, self.stream_id
-                            ):
-                                continue
-                        usables.append(component_cls)
+
+            usables.append(component_cls)
 
         return usables
 
@@ -278,9 +276,10 @@ class BaseChatter(ABC):
             signature = usable_cls.get_signature() or usable_cls.__name__
 
             try:
+                component_plugin = self._resolve_component_plugin(signature)
                 instance: BaseAction | BaseTool | BaseCollection
                 if issubclass(usable_cls, BaseAction):
-                    instance = usable_cls(chat_stream=chat_stream, plugin=self.plugin)
+                    instance = usable_cls(chat_stream=chat_stream, plugin=component_plugin)
 
                     current_msg = chat_context.current_message
                     if current_msg:
@@ -290,9 +289,9 @@ class BaseChatter(ABC):
                             else str(current_msg.content or "")
                         )
                 elif issubclass(usable_cls, BaseTool):
-                    instance = usable_cls(plugin=self.plugin)
+                    instance = usable_cls(plugin=component_plugin)
                 elif issubclass(usable_cls, BaseCollection):
-                    instance = usable_cls(plugin=self.plugin)
+                    instance = usable_cls(plugin=component_plugin)
                 else:
                     continue
 
@@ -353,6 +352,24 @@ class BaseChatter(ABC):
 
         return available
 
+    def _resolve_component_plugin(self, signature: str | None) -> "BasePlugin":
+        """根据组件签名解析其所属插件实例。"""
+        if not signature:
+            return self.plugin
+
+        try:
+            from src.core.components.types import parse_signature
+
+            plugin_name = parse_signature(signature)["plugin_name"]
+        except Exception:
+            return self.plugin
+
+        target_plugin = get_plugin_manager().get_plugin(plugin_name)
+        if target_plugin:
+            return target_plugin
+
+        return self.plugin
+
     async def exec_llm_usable(
         self,
         usable_cls: type[LLMUsable],
@@ -386,14 +403,17 @@ class BaseChatter(ABC):
             raise ValueError("无法直接执行 Chatter 组件")
 
         if issubclass(usable_cls, BaseTool):
+            owner_plugin = self._resolve_component_plugin(sig)
             manager = get_tool_use()
-            return await manager.execute_tool(sig, self.plugin, message, **kwargs)
+            return await manager.execute_tool(sig, owner_plugin, message, **kwargs)
         elif issubclass(usable_cls, BaseAction):
+            owner_plugin = self._resolve_component_plugin(sig)
             manager = get_action_manager()
-            return await manager.execute_action(sig, self.plugin, message, **kwargs)
+            return await manager.execute_action(sig, owner_plugin, message, **kwargs)
         elif issubclass(usable_cls, BaseCollection):
+            owner_plugin = self._resolve_component_plugin(sig)
             manager = get_collection_manager()
-            await manager.unpack_collection(sig, self.stream_id, plugin=self.plugin)
+            await manager.unpack_collection(sig, self.stream_id, plugin=owner_plugin)
             return True, "Collection 已解包"
         else:
             raise ValueError("未知的 LLMUsable 组件类型，无法执行")
