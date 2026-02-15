@@ -15,7 +15,11 @@ from .roles import ROLE
 from .context import LLMContextManager
 from .request import LLMRequest
 from .response import LLMResponse
-from .types import ModelEntry, ModelSet
+from .embedding_request import EmbeddingRequest
+from .embedding_response import EmbeddingResponse
+from .rerank_request import RerankRequest
+from .rerank_response import RerankItem, RerankResponse
+from .types import ModelEntry, ModelSet, RequestType
 
 from .payload import (
 	Audio,
@@ -55,10 +59,16 @@ __all__ = [
 	# 核心类
 	"ROLE",
 	"LLMRequest",
+	"EmbeddingRequest",
+	"RerankRequest",
 	"LLMContextManager",
 	"LLMResponse",
+	"EmbeddingResponse",
+	"RerankResponse",
+	"RerankItem",
 	"LLMPayload",
 	# 类型定义
+	"RequestType",
 	"ModelEntry",
 	"ModelSet",
 	# 内容类型

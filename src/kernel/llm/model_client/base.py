@@ -35,3 +35,31 @@ class ChatModelClient(Protocol):
         - stream_iter: 流式迭代器；非流则为 None
         """
         ...
+
+
+class EmbeddingModelClient(Protocol):
+    async def create_embedding(
+        self,
+        *,
+        model_name: str,
+        inputs: list[str],
+        request_name: str,
+        model_set: Any,
+    ) -> list[list[float]]:
+        """发起 embedding 请求并返回向量列表。"""
+        ...
+
+
+class RerankModelClient(Protocol):
+    async def create_rerank(
+        self,
+        *,
+        model_name: str,
+        query: str,
+        documents: list[Any],
+        top_n: int | None,
+        request_name: str,
+        model_set: Any,
+    ) -> list[dict[str, Any]]:
+        """发起 rerank 请求并返回排序结果。"""
+        ...

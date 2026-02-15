@@ -1,5 +1,18 @@
 from enum import Enum
-from src.kernel.llm import LLMContextManager, LLMRequest, ModelSet, ToolRegistry, LLMUsable, ToolExecutor, ToolCall, ToolResult
+from typing import Any
+
+from src.kernel.llm import (
+    EmbeddingRequest,
+    LLMContextManager,
+    LLMRequest,
+    LLMUsable,
+    ModelSet,
+    RerankRequest,
+    ToolCall,
+    ToolExecutor,
+    ToolRegistry,
+    ToolResult,
+)
 from src.core.config import get_model_config
 
 class TaskType(Enum):
@@ -11,7 +24,8 @@ class TaskType(Enum):
     VOICE = "voice"
     VIDEO = "video"
     TOOL_USE = "tool_use"
-    
+
+
 def create_llm_request(
     model_set: ModelSet,
     request_name: str = "",
@@ -31,6 +45,36 @@ def create_llm_request(
         model_set=model_set,
         request_name=request_name,
         context_manager=context_manager,
+    )
+
+
+def create_embedding_request(
+    model_set: ModelSet,
+    request_name: str = "",
+    inputs: list[str] | None = None,
+) -> EmbeddingRequest:
+    """创建 EmbeddingRequest 实例。"""
+    return EmbeddingRequest(
+        model_set=model_set,
+        request_name=request_name,
+        inputs=list(inputs or []),
+    )
+
+
+def create_rerank_request(
+    model_set: ModelSet,
+    request_name: str = "",
+    query: str = "",
+    documents: list[Any] | None = None,
+    top_n: int | None = None,
+) -> RerankRequest:
+    """创建 RerankRequest 实例。"""
+    return RerankRequest(
+        model_set=model_set,
+        request_name=request_name,
+        query=query,
+        documents=list(documents or []),
+        top_n=top_n,
     )
 
 def get_model_set_by_task(name: str) -> ModelSet:

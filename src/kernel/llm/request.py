@@ -27,7 +27,7 @@ from .policy import RoundRobinPolicy
 from .policy.base import Policy
 from .response import LLMResponse
 from .roles import ROLE
-from .types import ModelEntry, ModelSet
+from .types import ModelEntry, ModelSet, RequestType
 from .token_counter import count_payload_tokens
 
 
@@ -72,6 +72,7 @@ class LLMRequest:
     clients: ModelClientRegistry | None = None
     context_manager: LLMContextManager | None = None
     enable_metrics: bool = True  # 是否启用指标收集
+    request_type: RequestType = RequestType.COMPLETIONS
 
     def __post_init__(self) -> None:
         if self.payloads is None:

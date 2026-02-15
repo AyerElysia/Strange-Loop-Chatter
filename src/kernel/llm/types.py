@@ -3,7 +3,16 @@
 提供 LLM 模块使用的类型别名和 TypedDict 定义。
 """
 
+from enum import Enum
 from typing import Any, TypeAlias, TypedDict
+
+
+class RequestType(str, Enum):
+    """LLM 请求类型。"""
+
+    COMPLETIONS = "completions"
+    EMBEDDINGS = "embeddings"
+    RERANK = "rerank"
 
 
 class ModelEntry(TypedDict, total=True):
@@ -33,6 +42,7 @@ ModelSet: TypeAlias = list[ModelEntry]
 
 
 __all__ = [
+    "RequestType",
     "ModelEntry",
     "ModelSet",
 ]

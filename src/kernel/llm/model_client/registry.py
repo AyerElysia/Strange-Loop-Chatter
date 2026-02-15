@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..exceptions import LLMConfigurationError
-from .base import ChatModelClient
+from .base import ChatModelClient, EmbeddingModelClient, RerankModelClient
 from .openai_client import OpenAIChatClient
 from ..types import ModelEntry
 
@@ -40,3 +40,19 @@ class ModelClientRegistry:
         if self.openai is None:
             raise LLMConfigurationError("OpenAI client 未配置")
         return self.openai
+
+    def get_embedding_client_for_model(self, model: ModelEntry) -> EmbeddingModelClient:
+        """根据单个模型配置获取 embedding client。"""
+
+        client = self.get_client_for_model(model)
+        if not hasattr(client, "create_embedding"):
+            raise LLMConfigurationError("当前 client 不支持 embeddings 请求")
+        return client  # type: ignore[return-value]
+
+    def get_rerank_client_for_model(self, model: ModelEntry) -> RerankModelClient:
+        """根据单个模型配置获取 rerank client。"""
+
+        client = self.get_client_for_model(model)
+        if not hasattr(client, "create_rerank"):
+            raise LLMConfigurationError("当前 client 不支持 rerank 请求")
+        return client  # type: ignore[return-value]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import asyncio
+import math
 import threading
 import inspect
 from concurrent.futures import ThreadPoolExecutor
@@ -636,3 +637,203 @@ class OpenAIChatClient:
                     close_sync()
 
         return None, None, iter_events()
+
+    async def create_embedding(
+        self,
+        *,
+        model_name: str,
+        inputs: list[str],
+        request_name: str,
+        model_set: Any,
+    ) -> list[list[float]]:
+        """发起 embedding 请求。"""
+        del request_name
+        if not isinstance(model_set, dict):
+            raise TypeError("OpenAIChatClient 期望 model_set 为单个模型配置 dict")
+        if not inputs:
+            raise ValueError("inputs 不能为空")
+
+        api_key = str(model_set.get("api_key") or "")
+        if not api_key:
+            raise ValueError("model.api_key 不能为空")
+
+        base_url = model_set.get("base_url")
+        base_url = str(base_url) if base_url else None
+        timeout = model_set.get("timeout")
+
+        extra_params = model_set.get("extra_params")
+        if extra_params is None:
+            extra_params = {}
+        if not isinstance(extra_params, dict):
+            raise ValueError("model.extra_params 必须是 dict")
+
+        extra_params = dict(extra_params)
+        trust_env = extra_params.pop("trust_env", None)
+        trust_env = bool(trust_env) if trust_env is not None else True
+        force_ipv4 = bool(extra_params.pop("force_ipv4", False))
+        extra_params.pop("context_reserve_ratio", None)
+        extra_params.pop("context_reserve_tokens", None)
+
+        client = self._get_client(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=float(timeout) if isinstance(timeout, (int, float)) else None,
+            trust_env=trust_env,
+            force_ipv4=force_ipv4,
+        )
+
+        params: dict[str, Any] = {
+            "model": model_name,
+            "input": inputs,
+        }
+        params.update(extra_params)
+
+        resp = await client.embeddings.create(**params)
+        data = getattr(resp, "data", None)
+        if not data:
+            return []
+
+        out: list[list[float]] = []
+        for item in data:
+            vec = getattr(item, "embedding", None)
+            if isinstance(vec, list):
+                out.append([float(v) for v in vec])
+        return out
+
+    async def create_rerank(
+        self,
+        *,
+        model_name: str,
+        query: str,
+        documents: list[Any],
+        top_n: int | None,
+        request_name: str,
+        model_set: Any,
+    ) -> list[dict[str, Any]]:
+        """发起 rerank 请求。"""
+        del request_name
+        if not isinstance(model_set, dict):
+            raise TypeError("OpenAIChatClient 期望 model_set 为单个模型配置 dict")
+        if not query:
+            raise ValueError("query 不能为空")
+        if not documents:
+            raise ValueError("documents 不能为空")
+
+        api_key = str(model_set.get("api_key") or "")
+        if not api_key:
+            raise ValueError("model.api_key 不能为空")
+
+        base_url = model_set.get("base_url")
+        base_url = str(base_url) if base_url else None
+        timeout = model_set.get("timeout")
+
+        extra_params = model_set.get("extra_params")
+        if extra_params is None:
+            extra_params = {}
+        if not isinstance(extra_params, dict):
+            raise ValueError("model.extra_params 必须是 dict")
+
+        extra_params = dict(extra_params)
+        trust_env = extra_params.pop("trust_env", None)
+        trust_env = bool(trust_env) if trust_env is not None else True
+        force_ipv4 = bool(extra_params.pop("force_ipv4", False))
+        extra_params.pop("context_reserve_ratio", None)
+        extra_params.pop("context_reserve_tokens", None)
+
+        client = self._get_client(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=float(timeout) if isinstance(timeout, (int, float)) else None,
+            trust_env=trust_env,
+            force_ipv4=force_ipv4,
+        )
+
+        rerank_api = getattr(client, "rerank", None)
+        rerank_create = getattr(rerank_api, "create", None) if rerank_api is not None else None
+        if callable(rerank_create):
+            params: dict[str, Any] = {
+                "model": model_name,
+                "query": query,
+                "documents": documents,
+            }
+            if isinstance(top_n, int) and top_n > 0:
+                params["top_n"] = top_n
+            maybe_resp = rerank_create(**params)
+            if inspect.isawaitable(maybe_resp):
+                resp = await maybe_resp
+            else:
+                resp = maybe_resp
+            data = getattr(resp, "results", None) or getattr(resp, "data", None) or []
+            out: list[dict[str, Any]] = []
+            for rec in data:
+                idx = getattr(rec, "index", None)
+                score = getattr(rec, "relevance_score", None)
+                if score is None:
+                    score = getattr(rec, "score", None)
+                index = int(idx) if isinstance(idx, int) else 0
+                out.append(
+                    {
+                        "index": index,
+                        "score": float(score) if isinstance(score, (int, float)) else 0.0,
+                        "document": documents[index] if 0 <= index < len(documents) else None,
+                    }
+                )
+            return out
+
+        text_documents = [self._to_document_text(doc) for doc in documents]
+        embeddings = await self.create_embedding(
+            model_name=model_name,
+            inputs=[query, *text_documents],
+            request_name="",
+            model_set=model_set,
+        )
+        if len(embeddings) < 2:
+            return []
+
+        query_vec = embeddings[0]
+        doc_vecs = embeddings[1:]
+        scored: list[dict[str, Any]] = []
+        for idx, vec in enumerate(doc_vecs):
+            scored.append(
+                {
+                    "index": idx,
+                    "score": self._cosine_similarity(query_vec, vec),
+                    "document": documents[idx],
+                }
+            )
+
+        scored.sort(key=lambda item: item["score"], reverse=True)
+        if isinstance(top_n, int) and top_n > 0:
+            return scored[:top_n]
+        return scored
+
+    @staticmethod
+    def _to_document_text(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            return json.dumps(value, ensure_ascii=False)
+        return str(value)
+
+    @staticmethod
+    def _cosine_similarity(left: list[float], right: list[float]) -> float:
+        if not left or not right:
+            return 0.0
+        size = min(len(left), len(right))
+        if size == 0:
+            return 0.0
+
+        dot = 0.0
+        left_norm = 0.0
+        right_norm = 0.0
+        for i in range(size):
+            lv = float(left[i])
+            rv = float(right[i])
+            dot += lv * rv
+            left_norm += lv * lv
+            right_norm += rv * rv
+
+        denom = math.sqrt(left_norm) * math.sqrt(right_norm)
+        if denom == 0:
+            return 0.0
+        return dot / denom
