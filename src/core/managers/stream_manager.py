@@ -303,6 +303,70 @@ class StreamManager:
 
             return db_message
 
+    async def add_sent_message_to_history(
+        self,
+        message: "Message",
+    ) -> "Messages":
+        """添加“已发送消息”到流历史消息。
+
+        与 ``add_message`` 不同：
+        - 该方法会将消息直接写入 ``history_messages``
+        - 不会写入 ``unread_messages``
+
+        Args:
+            message: 运行时消息对象
+
+        Returns:
+            Messages: 创建或已存在的数据库消息记录
+        """
+        stream_id = message.stream_id
+
+        lock = self._get_stream_lock(stream_id)
+        async with lock:
+            message_data = {
+                "message_id": message.message_id,
+                "stream_id": stream_id,
+                "person_id": getattr(message, "person_id", None),
+                "time": message.time,
+                "message_type": message.message_type.value,
+                "content": str(message.content),
+                "processed_plain_text": message.processed_plain_text,
+                "reply_to": message.reply_to,
+                "platform": message.platform,
+            }
+
+            db_message = await self._messages_crud.get_by(
+                message_id=message.message_id,
+                platform=message.platform,
+                stream_id=stream_id,
+            )
+            if not db_message:
+                db_message = await self._messages_crud.create(message_data)
+
+            chat_stream = self._streams.get(stream_id)
+            if chat_stream:
+                context = chat_stream.context
+
+                # 移除同 ID 的未读消息，避免同一条消息同时出现在 unread/history
+                context.unread_messages = [
+                    msg
+                    for msg in context.unread_messages
+                    if getattr(msg, "message_id", None) != message.message_id
+                ]
+
+                exists_in_history = any(
+                    getattr(msg, "message_id", None) == message.message_id
+                    for msg in context.history_messages
+                )
+                if not exists_in_history:
+                    context.add_history_message(message)
+
+                chat_stream.update_active_time()
+
+            await self._update_stream_active_time(stream_id)
+
+            return db_message
+
     # ==================== Stream Lifecycle ====================
 
     async def delete_stream(
