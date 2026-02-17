@@ -61,7 +61,7 @@ class CoreConfig(ConfigBase):
             description="LLM 接口预检超时时间（秒）",
         )
         tick_interval: float = Field(
-            default=5,
+            default=15,
             description="主循环 tick 间隔（秒），过短可能增加消耗，过长可能降低响应速度",
         )
 

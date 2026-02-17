@@ -10,7 +10,7 @@ from src.core.transport.message_send.message_sender import MessageSender
 
 
 @pytest.mark.asyncio
-async def test_send_message_overrides_sender_with_bot_info() -> None:
+async def test_send_message_overrides_sender_with_bot_info(monkeypatch: pytest.MonkeyPatch) -> None:
     """发送消息时应使用 adapter 的 bot 信息覆盖 sender 字段。"""
     sender = MessageSender()
 
@@ -22,6 +22,15 @@ async def test_send_message_overrides_sender_with_bot_info() -> None:
 
     sender._converter = SimpleNamespace(  # type: ignore[assignment]
         message_to_envelope=AsyncMock(return_value={"message_info": {}, "message_segment": []})
+    )
+
+    fake_stream_manager = SimpleNamespace(
+        get_or_create_stream=AsyncMock(return_value=SimpleNamespace()),
+        add_sent_message_to_history=AsyncMock(return_value=SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        "src.core.managers.stream_manager.get_stream_manager",
+        lambda: fake_stream_manager,
     )
 
     message = Message(
@@ -44,3 +53,5 @@ async def test_send_message_overrides_sender_with_bot_info() -> None:
     assert message.sender_cardname == "NeoBot"
     adapter.get_bot_info.assert_awaited_once()
     adapter._send_platform_message.assert_awaited_once()
+    fake_stream_manager.get_or_create_stream.assert_awaited_once()
+    fake_stream_manager.add_sent_message_to_history.assert_awaited_once_with(message)

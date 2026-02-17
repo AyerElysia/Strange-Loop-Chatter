@@ -114,11 +114,14 @@ class MessageSender:
             # 5. 发送
             await adapter._send_platform_message(envelope)
 
+            # 6. 写入历史消息
+            await self._persist_sent_message_to_history(message)
+
             logger.info(
                 f"消息发送成功: {message.message_id} → {adapter_signature}"
             )
 
-            # 6. 触发发送事件
+            # 7. 触发发送事件
             await self._emit_send_event(message, envelope, adapter_signature)
 
             return True
@@ -152,6 +155,34 @@ class MessageSender:
             logger.warning(
                 f"获取 Bot sender 信息失败，保留原 sender: message_id={message.message_id}, error={e}"
             )
+
+    async def _persist_sent_message_to_history(self, message: "Message") -> None:
+        """发送成功后，将消息写入聊天流历史。"""
+        if not message.stream_id:
+            logger.warning(
+                f"发送消息缺少 stream_id，跳过历史写入: message_id={message.message_id}"
+            )
+            return
+
+        from src.core.managers.stream_manager import get_stream_manager
+
+        sm = get_stream_manager()
+
+        group_id = str(
+            message.extra.get("target_group_id")
+            or message.extra.get("group_id")
+            or ""
+        )
+        user_id = str(message.extra.get("target_user_id") or "")
+
+        await sm.get_or_create_stream(
+            stream_id=message.stream_id,
+            platform=message.platform,
+            user_id=user_id,
+            group_id=group_id,
+            chat_type=message.chat_type,
+        )
+        await sm.add_sent_message_to_history(message)
 
     def _infer_adapter_signature(self, message: "Message") -> str | None:
         """推断目标 Adapter 签名。

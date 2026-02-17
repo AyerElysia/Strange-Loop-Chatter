@@ -203,9 +203,9 @@ class NoticeHandler:
         # 设置消息段
         msg_builder.seg_list([handled_segment])
 
-        # 设置 additional_config（包含 notice 相关配置）
+        # 设置 extra（包含 notice 相关配置）
         envelope = msg_builder.build()
-        envelope["message_info"]["additional_config"] = notice_config
+        envelope["message_info"]["extra"] = notice_config
         return envelope
 
     async def _handle_poke_notify(

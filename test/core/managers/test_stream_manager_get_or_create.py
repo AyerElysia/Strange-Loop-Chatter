@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.core.models.message import Message
+
 
 @pytest.mark.asyncio
 async def test_get_or_create_stream_concurrent_calls_create_once(monkeypatch) -> None:
@@ -87,3 +89,90 @@ async def test_create_new_stream_includes_bot_info(monkeypatch) -> None:
     assert stream.bot_id == "10001"
     assert stream.bot_nickname == "TestBot"
     adapter_manager.get_bot_info_by_platform.assert_awaited_once_with("qq")
+
+
+@pytest.mark.asyncio
+async def test_add_message_persists_sender_person_id() -> None:
+    """写入消息时应从 sender 信息推导 person_id，避免历史消息丢失用户身份。"""
+    from src.core.managers.stream_manager import StreamManager
+
+    manager = StreamManager()
+    manager._messages_crud.get_by = AsyncMock(return_value=None)
+    manager._messages_crud.create = AsyncMock(return_value=SimpleNamespace(id=1))
+    manager._streams_crud.get_by = AsyncMock(return_value=SimpleNamespace(id=1))
+    manager._streams_crud.update = AsyncMock(return_value=None)
+
+    helper = SimpleNamespace(generate_person_id=lambda platform, user_id: "hash_qq_user_123")
+    from src.core.utils import user_query_helper as user_query_module
+    original_helper = user_query_module.get_user_query_helper
+    user_query_module.get_user_query_helper = lambda: helper  # type: ignore[assignment]
+
+    stream_id = "stream-msg-001"
+    manager._streams[stream_id] = SimpleNamespace(
+        context=SimpleNamespace(add_unread_message=lambda _msg: None),
+        update_active_time=lambda: None,
+    )
+
+    message = Message(
+        message_id="m001",
+        content="hello",
+        processed_plain_text="hello",
+        sender_id="user_123",
+        sender_name="Alice",
+        platform="qq",
+        chat_type="private",
+        stream_id=stream_id,
+    )
+
+    try:
+        await manager.add_message(message)
+    finally:
+        user_query_module.get_user_query_helper = original_helper  # type: ignore[assignment]
+
+    created_data = manager._messages_crud.create.await_args.args[0]
+    assert created_data["person_id"] == "hash_qq_user_123"
+
+
+@pytest.mark.asyncio
+async def test_db_message_to_runtime_fallback_to_content_when_plain_text_missing(monkeypatch) -> None:
+    """数据库消息未保存 processed_plain_text 时，应回退 content，避免显示 None。"""
+    from src.core.managers.stream_manager import StreamManager
+
+    manager = StreamManager()
+    manager.get_stream_info = AsyncMock(return_value={"chat_type": "private"})  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "src.core.managers.get_stream_manager",
+        lambda: manager,
+    )
+
+    fake_person = SimpleNamespace(
+        person_id="hash_qq_user_001",
+        user_id="user_001",
+        nickname="Alice",
+        cardname="",
+    )
+    helper = SimpleNamespace(
+        person_crud=SimpleNamespace(get_by=AsyncMock(return_value=fake_person))
+    )
+    monkeypatch.setattr(
+        "src.core.utils.user_query_helper.get_user_query_helper",
+        lambda: helper,
+    )
+
+    db_message = SimpleNamespace(
+        message_id="db001",
+        stream_id="stream001",
+        person_id="hash_qq_user_001",
+        time=1700000000.0,
+        reply_to=None,
+        content="bot reply",
+        processed_plain_text=None,
+        message_type="text",
+        platform="qq",
+    )
+
+    runtime_msg = await manager._db_message_to_runtime(db_message)
+
+    assert runtime_msg.sender_name == "Alice"
+    assert runtime_msg.sender_id == "user_001"
+    assert runtime_msg.processed_plain_text == "bot reply"

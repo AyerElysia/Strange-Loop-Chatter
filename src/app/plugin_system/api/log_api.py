@@ -3,7 +3,7 @@ from src.kernel.logger import get_logger as kernel_get_logger, COLOR, Logger
 def get_logger(
     name: str,
     display: str | None = None,
-    color: COLOR | str = COLOR.WHITE,
+    color: COLOR | str | None = None,
     enable_event_broadcast: bool = True,
 ) -> Logger:
     """获取或创建日志记录器

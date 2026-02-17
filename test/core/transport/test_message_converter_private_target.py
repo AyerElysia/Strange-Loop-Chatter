@@ -16,15 +16,32 @@ async def test_message_to_envelope_private_target_prefers_stream_person(monkeypa
 
     fake_stream_manager = SimpleNamespace(
         get_stream_info=AsyncMock(return_value={
-            "person_id": "qq:user-888",
+            "person_id": "hash_person_888",
             "group_id": None,
             "group_name": None,
         })
     )
 
+    helper = SimpleNamespace(
+        person_crud=SimpleNamespace(
+            get_by=AsyncMock(
+                return_value=SimpleNamespace(
+                    person_id="hash_person_888",
+                    user_id="user-888",
+                    nickname="Alice",
+                    cardname="",
+                )
+            )
+        )
+    )
+
     monkeypatch.setattr(
         "src.core.managers.stream_manager.get_stream_manager",
         lambda: fake_stream_manager,
+    )
+    monkeypatch.setattr(
+        "src.core.utils.user_query_helper.get_user_query_helper",
+        lambda: helper,
     )
 
     message = Message(
@@ -47,3 +64,4 @@ async def test_message_to_envelope_private_target_prefers_stream_person(monkeypa
     assert user_info.get("user_id") == "user-888"
     assert user_info.get("user_nickname") == "NeoBot"
     fake_stream_manager.get_stream_info.assert_awaited_once_with("stream-private-1")
+    helper.person_crud.get_by.assert_awaited_once_with(person_id="hash_person_888")

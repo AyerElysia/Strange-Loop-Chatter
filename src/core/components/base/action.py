@@ -400,6 +400,7 @@ class BaseAction(ABC, LLMUsable):
                 message = Message(
                     message_id=f"action_{self.action_name}_{id(self)}",
                     content=content_str,
+                    processed_plain_text=content_str,
                     message_type=MessageType.TEXT,
                     sender_id=bot_info.get("bot_id", "") if bot_info else "",
                     sender_name=bot_info.get("bot_nickname", "Bot") if bot_info else "Bot",

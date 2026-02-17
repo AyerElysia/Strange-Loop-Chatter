@@ -361,8 +361,56 @@ class TestChatterExecutePatterns:
         assert results[0].error == "立即失败"
 
 
-class TestFetchAndFlushUnreads:
-    """测试 fetch_and_flush_unreads 方法。"""
+class TestUnreadsFlow:
+    """测试 fetch_unreads 与 flush_unreads 方法。"""
+
+    @pytest.mark.asyncio
+    async def test_fetch_unreads_only_does_not_mutate_context(self, mock_plugin):
+        """测试 fetch_unreads 仅读取，不会清空未读或写入历史。"""
+        chatter = ConcreteChatter("stream_123", mock_plugin)
+
+        msg = Message(
+            message_id="msg_1",
+            time=datetime.now().timestamp(),
+            content="测试",
+            sender_id="user_1",
+            sender_name="Test",
+        )
+
+        with patch('src.core.components.base.chatter.get_stream_manager') as mock_sm:
+            mock_stream = MagicMock()
+            mock_stream.context.unread_messages = [msg]
+            mock_stream.context.add_history_message = MagicMock()
+            mock_sm.return_value._streams = {"stream_123": mock_stream}
+
+            text, messages = await chatter.fetch_unreads()
+
+            payload = json.loads(text)
+            assert len(payload) == 1
+            assert len(messages) == 1
+            assert len(mock_stream.context.unread_messages) == 1
+            mock_stream.context.add_history_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_flush_unreads_only_moves_specified_messages(self, mock_plugin):
+        """测试 flush_unreads 仅搬运指定未读消息，不影响新增未读。"""
+        chatter = ConcreteChatter("stream_123", mock_plugin)
+
+        msg1 = Message(message_id="msg_1", content="1", sender_id="u1", sender_name="A")
+        msg2 = Message(message_id="msg_2", content="2", sender_id="u2", sender_name="B")
+
+        with patch('src.core.components.base.chatter.get_stream_manager') as mock_sm:
+            mock_stream = MagicMock()
+            mock_stream.context.unread_messages = [msg1, msg2]
+            mock_stream.context.add_history_message = MagicMock()
+            mock_sm.return_value._streams = {"stream_123": mock_stream}
+
+            flushed = await chatter.flush_unreads([msg1])
+
+            assert flushed == 1
+            assert len(mock_stream.context.unread_messages) == 1
+            assert mock_stream.context.unread_messages[0].message_id == "msg_2"
+            mock_stream.context.add_history_message.assert_called_once_with(msg1)
 
     @pytest.mark.asyncio
     async def test_fetch_empty_unreads(self, mock_plugin):
@@ -376,7 +424,7 @@ class TestFetchAndFlushUnreads:
             # 确保 _streams 是一个字典，支持 .get() 方法
             mock_sm.return_value._streams = {"stream_123": mock_stream}
 
-            text, messages = await chatter.fetch_and_flush_unreads()
+            text, messages = await chatter.fetch_unreads()
 
             assert text == ""
             assert messages == []
@@ -403,7 +451,8 @@ class TestFetchAndFlushUnreads:
             # 设置 _streams 为字典
             mock_sm.return_value._streams = {"stream_123": mock_stream}
 
-            text, messages = await chatter.fetch_and_flush_unreads()
+            text, messages = await chatter.fetch_unreads()
+            flushed = await chatter.flush_unreads(messages)
 
             payload = json.loads(text)
             assert len(payload) == 1
@@ -411,6 +460,7 @@ class TestFetchAndFlushUnreads:
             assert payload[0]["message_id"] == "msg_1"
             assert payload[0]["message_type"] == "text"
             assert len(messages) == 1
+            assert flushed == 1
             mock_stream.context.add_history_message.assert_called_once_with(msg)
             assert len(mock_stream.context.unread_messages) == 0
 
@@ -436,7 +486,8 @@ class TestFetchAndFlushUnreads:
             mock_stream.context.add_history_message = MagicMock()
             mock_sm.return_value._streams = {"stream_123": mock_stream}
 
-            text, fetched = await chatter.fetch_and_flush_unreads(format_as_group=True)
+            text, fetched = await chatter.fetch_unreads(format_as_group=True)
+            flushed = await chatter.flush_unreads(fetched)
 
             # 验证 JSON 格式
             payload = json.loads(text)
@@ -447,6 +498,7 @@ class TestFetchAndFlushUnreads:
 
             # 验证flush
             assert len(fetched) == 3
+            assert flushed == 3
             assert mock_stream.context.add_history_message.call_count == 3
             assert len(mock_stream.context.unread_messages) == 0
 
@@ -469,10 +521,12 @@ class TestFetchAndFlushUnreads:
             mock_stream.context.add_history_message = MagicMock()
             mock_sm.return_value._streams = {"stream_123": mock_stream}
 
-            text, messages = await chatter.fetch_and_flush_unreads(format_as_group=False)
+            text, messages = await chatter.fetch_unreads(format_as_group=False)
+            flushed = await chatter.flush_unreads(messages)
 
             assert text == ""  # 非分组模式不返回格式化文本
             assert len(messages) == 1
+            assert flushed == 1
 
     @pytest.mark.asyncio
     async def test_fetch_with_missing_stream(self, mock_plugin):
@@ -482,7 +536,7 @@ class TestFetchAndFlushUnreads:
         with patch('src.core.components.base.chatter.get_stream_manager') as mock_sm:
             mock_sm.return_value._streams.get.return_value = None
 
-            text, messages = await chatter.fetch_and_flush_unreads()
+            text, messages = await chatter.fetch_unreads()
 
             assert text == ""
             assert messages == []
@@ -507,7 +561,8 @@ class TestFetchAndFlushUnreads:
             mock_sm.return_value._streams = {"stream_123": mock_stream}
 
             # 使用完整时间格式
-            text, _ = await chatter.fetch_and_flush_unreads(time_format="%Y-%m-%d %H:%M")
+            text, messages = await chatter.fetch_unreads(time_format="%Y-%m-%d %H:%M")
+            await chatter.flush_unreads(messages)
 
             payload = json.loads(text)
             assert payload[0]["time"] == "2024-01-01 14:30"

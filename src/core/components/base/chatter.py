@@ -7,6 +7,8 @@ Chatter 是 Bot 的智能核心，定义对话逻辑和流程。
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncGenerator, cast
 
@@ -418,14 +420,12 @@ class BaseChatter(ABC):
         else:
             raise ValueError("未知的 LLMUsable 组件类型，无法执行")
 
-    async def fetch_and_flush_unreads(
+    async def fetch_unreads(
         self,
         format_as_group: bool = True,
         time_format: str = "%H:%M",
     ) -> tuple[str, list["Message"]]:
-        """获取并刷新未读消息。
-
-        从聊天流中获取所有未读消息，按 JSON 格式组装，并 flush 到历史消息中。
+        """仅读取未读消息，不修改上下文。
 
         Args:
             format_as_group: 是否将未读消息格式化为一个 JSON 组
@@ -433,19 +433,7 @@ class BaseChatter(ABC):
 
         Returns:
             tuple[str, list[Message]]: (格式化后的未读消息 JSON 文本, 未读消息列表)
-
-        Examples:
-            >>> # 格式化为 JSON 组
-            >>> text, messages = await chatter.fetch_and_flush_unreads()
-            >>> print(text)
-            "[{\"message_id\": \"msg_1\", \"time\": \"14:30\", ...}]"
-            >>>
-            >>> # 不分组，返回原始消息列表
-            >>> text, messages = await chatter.fetch_and_flush_unreads(format_as_group=False)
         """
-        from datetime import datetime
-        import json
-
         logger = get_logger("chatter")
 
         sm = get_stream_manager()
@@ -458,55 +446,89 @@ class BaseChatter(ABC):
             return "", []
 
         context = chat_stream.context
-        unread_messages = list(context.unread_messages)  # Copy the list
+        unread_messages = list(context.unread_messages)
 
         if not unread_messages:
             return "", []
 
-        if format_as_group:
-            # 格式化为 JSON 组
-            formatted_messages = []
-            for msg in unread_messages:
-                # 格式化时间
-                if isinstance(msg.time, (int, float)):
-                    time_str = datetime.fromtimestamp(msg.time).strftime(time_format)
-                elif isinstance(msg.time, datetime):
-                    time_str = msg.time.strftime(time_format)
-                else:
-                    time_str = str(msg.time)
+        if not format_as_group:
+            return "", unread_messages
 
-                # 组装消息字段
-                message_type_value = (
-                    msg.message_type.value
-                    if hasattr(msg.message_type, "value")
-                    else str(msg.message_type)
-                )
-                formatted_messages.append(
-                    {
-                        "message_id": msg.message_id,
-                        "time": time_str,
-                        "reply_to": msg.reply_to,
-                        "message_type": message_type_value,
-                        "processed_plain_text": msg.processed_plain_text,
-                        "sender_id": msg.sender_id,
-                        "sender_name": msg.sender_name,
-                        "sender_cardname": msg.sender_cardname,
-                    }
-                )
-
-            formatted_text = json.dumps(formatted_messages, ensure_ascii=False)
-        else:
-            formatted_text = ""
-
-        # Flush to history
+        formatted_messages = []
         for msg in unread_messages:
-            context.add_history_message(msg)
+            if isinstance(msg.time, (int, float)):
+                time_str = datetime.fromtimestamp(msg.time).strftime(time_format)
+            elif isinstance(msg.time, datetime):
+                time_str = msg.time.strftime(time_format)
+            else:
+                time_str = str(msg.time)
 
-        # Clear unread messages
-        context.unread_messages.clear()
+            message_type_value = (
+                msg.message_type.value
+                if hasattr(msg.message_type, "value")
+                else str(msg.message_type)
+            )
+            formatted_messages.append(
+                {
+                    "message_id": msg.message_id,
+                    "time": time_str,
+                    "reply_to": msg.reply_to,
+                    "message_type": message_type_value,
+                    "processed_plain_text": msg.processed_plain_text,
+                    "sender_id": msg.sender_id,
+                    "sender_name": msg.sender_name,
+                    "sender_cardname": msg.sender_cardname,
+                }
+            )
+
+        return json.dumps(formatted_messages, ensure_ascii=False), unread_messages
+
+    async def flush_unreads(self, unread_messages: list["Message"]) -> int:
+        """将指定未读消息从 unread 移入 history。
+
+        仅搬运传入的消息，避免将“读取时刻之后新增”的未读消息一并清空。
+
+        Args:
+            unread_messages: 待 flush 的未读消息快照
+
+        Returns:
+            int: 实际 flush 的消息数量
+        """
+        logger = get_logger("chatter")
+
+        if not unread_messages:
+            return 0
+
+        sm = get_stream_manager()
+        chat_stream = sm._streams.get(self.stream_id)
+
+        if not chat_stream:
+            logger.warning(
+                f"[{self.chatter_name}] 无法获取聊天流: {self.stream_id[:8]}"
+            )
+            return 0
+
+        context = chat_stream.context
+        pending_by_id: dict[str, Message] = {
+            msg.message_id: msg
+            for msg in unread_messages
+            if getattr(msg, "message_id", "")
+        }
+
+        flushed_count = 0
+        remained_unreads: list[Message] = []
+        for msg in context.unread_messages:
+            msg_id = getattr(msg, "message_id", "")
+            if msg_id and msg_id in pending_by_id:
+                context.add_history_message(msg)
+                flushed_count += 1
+            else:
+                remained_unreads.append(msg)
+
+        context.unread_messages = remained_unreads
 
         logger.debug(
-            f"[{self.chatter_name}] 获取并flush了 {len(unread_messages)} 条未读消息"
+            f"[{self.chatter_name}] flush 未读消息 {flushed_count} 条"
         )
 
-        return formatted_text, unread_messages
+        return flushed_count
