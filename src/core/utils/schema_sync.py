@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Dialect
 from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.sql.schema import MetaData, Table
@@ -106,7 +106,33 @@ async def _sync_table(
                 text(f"ALTER TABLE {table_ref} DROP COLUMN {quoted_col} CASCADE")
             )
         else:
-            await conn.execute(text(f"ALTER TABLE {table_ref} DROP COLUMN {quoted_col}"))
+            # SQLite: 先删除引用该列的索引，避免 DROP COLUMN 时报错
+            try:
+                indexes = await conn.run_sync(
+                    lambda sync_conn: inspect(sync_conn).get_indexes(model_table.name)
+                )
+                for idx in indexes:
+                    if col_name in (idx.get("column_names") or []):
+                        idx_name = idx["name"]
+                        await conn.execute(text(f"DROP INDEX IF EXISTS {idx_name}"))
+                        logger.info(
+                            f"已删除引用列 {col_name} 的索引: {idx_name}"
+                        )
+            except Exception as idx_err:
+                logger.warning(
+                    f"查询/删除索引时出错({model_table.name}.{col_name}): {idx_err}"
+                )
+
+            try:
+                await conn.execute(
+                    text(f"ALTER TABLE {table_ref} DROP COLUMN {quoted_col}")
+                )
+            except Exception as drop_err:
+                # SQLite 旧版本可能完全不支持 DROP COLUMN，记录警告后跳过
+                logger.warning(
+                    f"SQLite 删除列 {model_table.name}.{col_name} 失败，跳过: {drop_err}"
+                )
+                continue
         stats.columns_removed += 1
         logger.warning(f"已移除未定义列: {model_table.name}.{col_name}")
 
@@ -236,9 +262,12 @@ async def _alter_column_type(
         return
 
     if "sqlite" in db_type:
-        raise DatabaseInitializationError(
-            f"SQLite 不支持直接 ALTER TYPE，请手动迁移: {table.name}.{col_name}"
+        # SQLite 的类型亲和性意味着大多数类型差异在运行时不会造成问题，
+        # 不应因此阻止应用启动
+        logger.warning(
+            f"SQLite 不支持 ALTER TYPE，跳过类型修正: {table.name}.{col_name}"
         )
+        return
 
     raise DatabaseInitializationError(
         f"暂不支持的数据库类型: {db_type}，无法修正列类型 {table.name}.{col_name}"
@@ -266,9 +295,11 @@ async def _alter_column_nullability(
         return
 
     if "sqlite" in db_type:
-        raise DatabaseInitializationError(
-            f"SQLite 不支持直接 ALTER NULLABILITY，请手动迁移: {table.name}.{col_name}"
+        # SQLite 不支持修改可空性，但这通常不影响运行时行为，跳过即可
+        logger.warning(
+            f"SQLite 不支持 ALTER NULLABILITY，跳过可空性修正: {table.name}.{col_name}"
         )
+        return
 
     raise DatabaseInitializationError(
         f"暂不支持的数据库类型: {db_type}，无法修正可空性 {table.name}.{col_name}"
@@ -316,16 +347,21 @@ def _normalize_type(raw: str) -> str:
         "real": "float",
         "float8": "float",
         "bool": "boolean",
+        # 时间类型统一归一化为 "datetime"（SQLite 中 TIMESTAMP/DATE/DATETIME 都是 NUMERIC 亲和性，等价）
         "timestamp without time zone": "datetime",
         "timestamp with time zone": "datetime",
-        "character varying": "varchar",
-        "varchar": "varchar",
-        "string": "varchar",
+        "timestamp": "datetime",
+        "date": "datetime",
+        # SQLite 中 TEXT/VARCHAR/CLOB 完全等价（TEXT affinity）；
+        # ORM 模型统一使用 Text()，所以将 VARCHAR 系列也归一化为 "text"
+        "character varying": "text",
+        "varchar": "text",
+        "string": "text",
     }
 
     if value.startswith("character varying"):
-        value = "varchar"
+        value = "text"
     elif value.startswith("varchar"):
-        value = "varchar"
+        value = "text"
 
     return aliases.get(value, value)

@@ -959,10 +959,61 @@ async def migrate_action_records():
 
                 # SQLite: 数据迁移后尝试立即删除 chat_id 以解除 NOT NULL 约束
                 try:
+                    # 先删除引用 chat_id 的索引
+                    await session.execute(text("DROP INDEX IF EXISTS ix_action_records_chat_id"))
+                    # 再删除列
                     await session.execute(text("ALTER TABLE action_records DROP COLUMN chat_id"))
                     logger.info("SQLite: 数据迁移后立即删除 action_records.chat_id")
                 except Exception as e:
                     logger.warning(f"SQLite: 尝试立即删除 chat_id 失败: {e}")
+
+                    # 如果直接删除失败，尝试重建表策略（更稳健）
+                    try:
+                        logger.info("SQLite: 直接删除失败，尝试重建表策略...")
+                        # 1. 创建新表（结构参照 ActionRecords 模型定义）
+                        await session.execute(text("""
+                            CREATE TABLE action_records_new (
+                                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                                action_id VARCHAR(100) NOT NULL,
+                                stream_id VARCHAR(64) NOT NULL,
+                                person_id VARCHAR(100),
+                                time FLOAT NOT NULL,
+                                action_name TEXT NOT NULL,
+                                action_data TEXT NOT NULL,
+                                action_done BOOLEAN NOT NULL DEFAULT 0,
+                                action_build_into_prompt BOOLEAN NOT NULL DEFAULT 0,
+                                action_prompt_display TEXT NOT NULL
+                            )
+                        """))
+                        # 2. 从旧表复制数据
+                        await session.execute(text("""
+                            INSERT INTO action_records_new (
+                                id, action_id, stream_id, person_id, time,
+                                action_name, action_data, action_done,
+                                action_build_into_prompt, action_prompt_display
+                            )
+                            SELECT
+                                id, action_id, stream_id, person_id, time,
+                                action_name, action_data,
+                                COALESCE(action_done, 0),
+                                COALESCE(action_build_into_prompt, 0),
+                                COALESCE(action_prompt_display, '')
+                            FROM action_records
+                        """))
+                        # 3. 删除旧表
+                        await session.execute(text("DROP TABLE action_records"))
+                        # 4. 重命名新表
+                        await session.execute(text("ALTER TABLE action_records_new RENAME TO action_records"))
+
+                        # 5. 重建索引（参照 ActionRecords.__table_args__）
+                        await session.execute(text("CREATE INDEX idx_actionrecords_action_id ON action_records (action_id)"))
+                        await session.execute(text("CREATE INDEX idx_actionrecords_stream_id ON action_records (stream_id)"))
+                        await session.execute(text("CREATE INDEX idx_actionrecords_time ON action_records (time)"))
+                        await session.execute(text("CREATE INDEX idx_actionrecords_stream_time ON action_records (stream_id, time)"))
+
+                        logger.info("SQLite: 通过重建表成功移除 action_records.chat_id")
+                    except Exception as recreate_err:
+                        logger.error(f"SQLite: 重建 action_records 表失败: {recreate_err}")
 
             except Exception:
                 pass  # 字段可能不存在，跳过
