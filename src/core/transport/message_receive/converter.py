@@ -127,9 +127,14 @@ class MessageConverter:
         # 递归解析段列表
         result = self._parse_segments(segments, depth=0)
         
-        # 如果有媒体，使用 MediaManager 进行识别
+        # 如果有媒体，检查该聊天流是否需要 VLM 识别
         if result.media:
-            result = await self._recognize_media_with_manager(result)
+            # 提前提取 stream_id 用于判断是否跳过 VLM
+            stream_id = extract_stream_id(message_info)
+            if self._should_skip_vlm_for_stream(stream_id):
+                logger.debug(f"聊天流 {stream_id[:8]} 已注册跳过 VLM 识别，保留原始媒体数据")
+            else:
+                result = await self._recognize_media_with_manager(result)
 
         # 确定消息类型
         message_type = self._infer_message_type(result)
@@ -593,6 +598,22 @@ class MessageConverter:
         
         return result
     
+    @staticmethod
+    def _should_skip_vlm_for_stream(stream_id: str) -> bool:
+        """检查指定聊天流是否已注册跳过 VLM 识别。
+
+        Args:
+            stream_id: 聊天流 ID
+
+        Returns:
+            True 表示应跳过 VLM 识别
+        """
+        try:
+            from src.core.managers.media_manager import get_media_manager
+            return get_media_manager().should_skip_vlm(stream_id)
+        except Exception:
+            return False
+
     @staticmethod
     def _build_content(result: _ParseResult, message_type: MessageType) -> str | Any:
         """构建 Message.content 字段。
