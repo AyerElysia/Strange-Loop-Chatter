@@ -186,14 +186,32 @@ class MessageConverter:
         """
         seg_list: list[SegPayload] = []
 
-        # 构建文本段
-        text = message.processed_plain_text or (
-            message.content if isinstance(message.content, str) else ""
-        )
-        if text:
-            seg_list.append({"type": "text", "data": text})
+        # 非文本类型：根据 message_type 直接构建对应媒体段
+        _MEDIA_TYPES = {
+            MessageType.IMAGE,
+            MessageType.EMOJI,
+            MessageType.VOICE,
+            MessageType.VIDEO,
+            MessageType.FILE,
+        }
+        if message.message_type in _MEDIA_TYPES:
+            content_data = (
+                message.content if isinstance(message.content, str) else ""
+            )
+            if content_data:
+                seg_list.append({
+                    "type": message.message_type.value,
+                    "data": content_data,
+                })
+        else:
+            # 文本 / 混合消息
+            text = message.processed_plain_text or (
+                message.content if isinstance(message.content, str) else ""
+            )
+            if text:
+                seg_list.append({"type": "text", "data": text})
 
-        # 构建媒体段
+        # 构建额外媒体段（来自 extra["media"]）
         media_list: list[dict[str, Any]] = message.extra.get("media", [])
         for m in media_list:
             seg_list.append({"type": m.get("type", "unknown"), "data": m.get("data", "")})

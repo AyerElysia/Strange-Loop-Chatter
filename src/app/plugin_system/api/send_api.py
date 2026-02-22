@@ -263,7 +263,7 @@ async def _send_message(
     try:
         # 推断平台
         if not platform:
-            # 从 stream_id 推断平台（假设格式为 platform_type_id）
+            # TODO: 临时方案，待 send_api 重构后由上层统一传入 (platform, chat_type, target_id) 三元组
             platform = stream_id.split("_")[0] if "_" in stream_id else "qq"
 
         # 获取 bot 信息
@@ -274,27 +274,42 @@ async def _send_message(
             logger.error(f"无法获取平台 {platform} 的 bot 信息")
             return False
 
-        # 从 stream_id 推断聊天类型和目标
+        # 从 stream_manager 获取流的真实信息
+        from src.core.managers.stream_manager import get_stream_manager
+
+        stream_manager = get_stream_manager()
+        stream_info = await stream_manager.get_stream_info(stream_id)
+
         chat_type = "private"
         extra: dict[str, Any] = {}
 
-        if "group" in stream_id:
-            chat_type = "group"
-            # 尝试从 stream_id 提取群号
-            parts = stream_id.split("_")
-            if len(parts) >= 3:
-                extra["target_group_id"] = parts[-1]
-        else:
-            # 私聊，尝试提取用户 ID
-            parts = stream_id.split("_")
-            if len(parts) >= 3:
-                extra["target_user_id"] = parts[-1]
+        if stream_info:
+            # 从 stream_info 获取真实聊天类型
+            chat_type = stream_info.get("chat_type", "private")
+            group_id = stream_info.get("group_id")
+            if chat_type == "group" and group_id:
+                extra["target_group_id"] = str(group_id)
+            elif chat_type == "private":
+                person_id = stream_info.get("person_id")
+                if person_id:
+                    try:
+                        from src.core.utils.user_query_helper import get_user_query_helper
+
+                        person = await get_user_query_helper().person_crud.get_by(
+                            person_id=person_id
+                        )
+                        if person and person.user_id:
+                            extra["target_user_id"] = str(person.user_id)
+                    except Exception:
+                        pass
 
         # 构建消息
+        # 非文本类型不应将二进制/base64 数据放入 processed_plain_text
+        is_text = message_type == MessageType.TEXT
         message = Message(
             message_id=f"api_{message_type.value}_{id(content)}",
             content=content,
-            processed_plain_text=str(content) if isinstance(content, str) else "",
+            processed_plain_text=str(content) if is_text and isinstance(content, str) else "",
             message_type=message_type,
             sender_id=bot_info.get("bot_id", ""),
             sender_name=bot_info.get("bot_nickname", "Bot"),

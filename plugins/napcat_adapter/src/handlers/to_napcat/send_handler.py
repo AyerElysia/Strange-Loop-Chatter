@@ -102,7 +102,8 @@ class SendHandler:
             logger.error("无法识别的消息类型")
             return
         logger.debug(
-            f"准备发送到napcat的消息体: action='{action}', {id_name}='{target_id}', message='{processed_message}'"
+            f"准备发送到napcat的消息体: action='{action}', {id_name}='{target_id}', "
+            f"message={str(processed_message)[:500]}"
         )
         response = await self.send_message_to_napcat(
             action or "",
