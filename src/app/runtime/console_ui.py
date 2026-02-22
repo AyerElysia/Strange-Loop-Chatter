@@ -30,6 +30,7 @@ from rich.progress import (
     MofNCompleteColumn,
     Progress,
     SpinnerColumn,
+    TaskID,
     TaskProgressColumn,
     TextColumn,
     TimeElapsedColumn,
@@ -168,7 +169,9 @@ class ConsoleUIManager:
 
         # 启动进度上下文
         self._startup_progress: Progress | None = None
-        self._startup_task_id: int | None = None
+        self._startup_task_id: TaskID | None = None
+        self._plugin_task_id: TaskID | None = None
+        self._startup_live: Live | None = None
 
         # 统计数据（用于仪表盘）
         self._stats: dict[str, Any] = {
@@ -335,35 +338,104 @@ class ConsoleUIManager:
         return self._progress
 
     @contextmanager
-    def startup_progress(self, total_steps: int = 5) -> Iterator[None]:
-        """启动进度上下文管理器
+    def startup_progress(self, total_steps: int = 14) -> Iterator[None]:
+        """启动进度上下文管理器 —— 显示单一总体进度条
 
-        提供启动过程中的进度跟踪。
+        在整个初始化过程中呈现一条宽进度条，每个子阶段完成后推进一格，
+        而不是为每个阶段单独打印一行。
+
+        MINIMAL 模式下退化为纯文本输出。
 
         Args:
-            total_steps: 总步骤数
+            total_steps: 固定初始化步骤数（不含插件加载）
 
         Yields:
             None
         """
         if self.level == UILevel.MINIMAL:
-            # MINIMAL: 无进度条
             yield
             return
 
-        progress = self.create_progress_tracker()
+        if self.level == UILevel.STANDARD:
+            progress = Progress(
+                SpinnerColumn("dots"),
+                TextColumn(
+                    "[bold]{task.description}",
+                    table_column=None,
+                ),
+                BarColumn(
+                    bar_width=None,
+                    complete_style="cyan",
+                    finished_style="green",
+                ),
+                MofNCompleteColumn(),
+                TimeElapsedColumn(),
+                console=self.console,
+                expand=True,
+            )
+        else:  # VERBOSE
+            progress = Progress(
+                SpinnerColumn("dots12"),
+                TextColumn("[bold cyan]{task.description}"),
+                BarColumn(
+                    bar_width=None,
+                    style="#3a3a3a",
+                    complete_style="#00d787",
+                    finished_style="bold #00ff87",
+                    pulse_style="#00d787",
+                ),
+                MofNCompleteColumn(),
+                TextColumn("[dim]│[/dim]"),
+                TaskProgressColumn(),
+                TextColumn("[dim]│[/dim]"),
+                TimeElapsedColumn(),
+                TextColumn("[dim]/[/dim]"),
+                TimeRemainingColumn(),
+                console=self.console,
+                expand=True,
+            )
+
         self._startup_progress = progress
-        self._startup_task_id = progress.add_task("启动中...", total=total_steps)
+        self._startup_task_id = progress.add_task("初始化系统", total=total_steps)
+        self._plugin_task_id = None
+
+        live = Live(
+            progress,
+            console=self.console,
+            refresh_per_second=12,
+            vertical_overflow="visible",
+            transient=False,
+        )
+        self._startup_live = live
 
         try:
-            with progress:
+            with live:
                 yield
         finally:
             self._startup_progress = None
             self._startup_task_id = None
+            self._plugin_task_id = None
+            self._startup_live = None
+
+    def begin_plugin_loading(self, total_plugins: int) -> None:
+        """在启动进度条中添加插件加载子进度
+
+        在 ``startup_progress`` 上下文内调用，追加一条独立的插件进度任务，
+        显示在初始化进度条下方。
+
+        Args:
+            total_plugins: 待加载插件总数
+        """
+        if self._startup_progress is None or total_plugins <= 0:
+            return
+
+        self._plugin_task_id = self._startup_progress.add_task(
+            "加载插件",
+            total=total_plugins,
+        )
 
     def advance_startup(self, description: str = "") -> None:
-        """推进启动进度
+        """推进启动进度（兼容旧调用，新代码请直接用 update_phase_status）
 
         Args:
             description: 当前步骤描述
@@ -406,29 +478,40 @@ class ConsoleUIManager:
     ) -> None:
         """更新初始化阶段状态
 
-        根据 UI 级别显示不同风格的状态更新：
-        - MINIMAL: 简单文本 "Phase: Status"
-        - STANDARD: 带图标的彩色状态
-        - VERBOSE: 带进度指示的详细状态
+        当处于 ``startup_progress`` 上下文内时，更新总体进度条的描述并（对终态）
+        推进一格，而不是打印一行新文本。
+
+        终态判断：status 不以 ``...`` 结尾视为终态，会推进进度。
+        示例终态： 已加载 / 已初始化 / 已连接 / 已启动 / 已完成 / 已跳过
+        示例非终态：启动中... / 进行中... / 扫描中...
+
+        若未在 startup_progress 上下文内，则回退为按 UI 级别打印文本。
 
         Args:
-            phase: 阶段名称（如 "Initializing Kernel"）
+            phase: 阶段名称（如 "初始化内核"）
             status: 状态描述
-            total_steps: 总步骤数
-            completed_step: 已完成步骤数
+            total_steps: 总步骤数（仅非进度条模式使用）
+            completed_step: 已完成步骤数（仅非进度条模式使用）
         """
+        # ── 大进度条模式 ──────────────────────────────────────────
+        if self._startup_progress is not None and self._startup_task_id is not None:
+            is_terminal = not status.endswith("...")
+            desc = f"{phase}  [dim]· {status}[/dim]" if is_terminal else f"{phase}  [dim]{status}[/dim]"
+            self._startup_progress.update(self._startup_task_id, description=desc)
+            if is_terminal:
+                self._startup_progress.advance(self._startup_task_id)
+            return
+
+        # ── 回退：无进度条时按原逻辑打印 ─────────────────────────
         if self.level == UILevel.MINIMAL:
-            # MINIMAL: 纯文本
             self.console.print(f"  [{completed_step}/{total_steps}] {phase}: {status}")
         elif self.level == UILevel.STANDARD:
-            # STANDARD: 带图标的彩色状态
             icon = "✓" if completed_step == total_steps else "→"
             color = "green" if completed_step == total_steps else "cyan"
             self.console.print(
                 f"[{color}]{icon}[/{color}] [bold]{phase}[/bold]: {status}"
             )
         else:
-            # VERBOSE: 详细状态 + 进度条样式
             progress_bar = self._create_inline_progress(completed_step, total_steps)
             self.console.print(
                 f"[bold cyan]{phase}[/bold cyan] {progress_bar} [dim]{status}[/dim]"
@@ -483,39 +566,54 @@ class ConsoleUIManager:
     def update_plugin_progress(self, plugin_name: str, success: bool) -> None:
         """更新插件加载进度
 
-        根据 UI 级别显示不同风格的插件状态：
-        - MINIMAL: 仅失败时输出
-        - STANDARD: 带图标的状态行
-        - VERBOSE: 详细信息 + 统计
+        当处于 ``startup_progress`` 上下文且已调用 ``begin_plugin_loading`` 时，
+        推进插件进度条并向控制台打印一行日志（Rich Live 会将它置于进度条上方）。
+        否则退化为按 UI 级别打印文本。
 
         Args:
             plugin_name: 插件名称
             success: 是否加载成功
         """
+        # 统计更新
         if success:
             self._stats["plugins_loaded"] += 1
+        else:
+            self._stats["plugins_failed"] += 1
+
+        # ── 大进度条模式：推进插件任务 ─────────────────────────────
+        if self._startup_progress is not None and self._plugin_task_id is not None:
+            if success:
+                if self.level != UILevel.MINIMAL:
+                    loaded = self._stats["plugins_loaded"]
+                    self.console.print(
+                        f"  [green]✓[/green] [cyan]{plugin_name}[/cyan]"
+                        + (f" [dim](#{loaded})[/dim]" if self.level == UILevel.VERBOSE else "")
+                    )
+            else:
+                self.console.print(
+                    f"  [red]✗[/red] 插件加载失败: [cyan]{plugin_name}[/cyan]"
+                )
+            self._startup_progress.advance(self._plugin_task_id)
+            return
+
+        # ── 回退：无进度条时按原逻辑打印 ─────────────────────────
+        if success:
             if self.level == UILevel.MINIMAL:
-                # MINIMAL: 成功时不输出
                 pass
             elif self.level == UILevel.STANDARD:
-                # STANDARD: 简洁成功消息
                 self.console.print(
                     f"  [green]✓[/green] [cyan]{plugin_name}[/cyan]"
                 )
             else:
-                # VERBOSE: 详细成功消息
                 loaded = self._stats["plugins_loaded"]
                 self.console.print(
                     f"  [green]✓[/green] 已加载插件: [cyan bold]{plugin_name}[/cyan bold] "
                     f"[dim](#{loaded})[/dim]"
                 )
         else:
-            self._stats["plugins_failed"] += 1
             if self.level == UILevel.MINIMAL:
-                # MINIMAL: 失败总是输出
                 self.console.print(f"  FAILED: {plugin_name}")
             else:
-                # STANDARD/VERBOSE: 带样式的失败消息
                 self.console.print(
                     f"  [red]✗[/red] 插件加载失败: [cyan]{plugin_name}[/cyan]"
                 )

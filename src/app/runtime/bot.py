@@ -121,23 +121,26 @@ class Bot:
             BotInitializationError: 初始化失败
         """
         try:
-            # 显示启动横幅
+            # 显示启动横幅（在进度条之前）
             self.ui.show_banner(self.bot_version, self.bot_name)
 
             # 启动前优化 async 连接池/DNS 行为
             await self._optimize_async_network_runtime()
 
-            # Phase 1: Kernel 初始化
-            await self._initialize_kernel()
+            # 单一总体进度条贯穿全部初始化阶段
+            with self.ui.startup_progress(total_steps=14):
+                # Phase 1: Kernel 初始化
+                await self._initialize_kernel()
 
-            # Phase 2: Core 组件初始化
-            await self._initialize_core()
+                # Phase 2: Core 组件初始化
+                await self._initialize_core()
 
-            # Phase 3: 插件发现
-            await self._discover_plugins()
+                # Phase 3: 插件发现
+                await self._discover_plugins()
 
-            # Phase 4: 插件加载
-            await self._load_plugins()
+                # Phase 4: 插件加载（进度条追加插件子任务）
+                self.ui.begin_plugin_loading(len(self.load_order))
+                await self._load_plugins()
 
             self._initialized = True
 
@@ -455,6 +458,7 @@ class Bot:
 
         # 显示插件加载计划
         self.ui.display_plugin_plan(self.load_order, self.manifests)
+        self.ui.update_phase_status("发现插件", f"已发现 {len(self.load_order)} 个插件")
 
     async def _load_plugins(self) -> dict[str, bool]:
         """加载插件"""
