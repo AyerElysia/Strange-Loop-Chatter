@@ -15,7 +15,7 @@ def get_logger(
         enable_event_broadcast: 是否启用事件广播（发布到 on_log_output 事件）
 
     Returns:
-        Logger: 日志记录器实例
+        日志记录器实例
 
     Example:
         >>> logger = get_logger("my_logger", display="我的日志", color=COLOR.BLUE)

@@ -16,33 +16,63 @@ from src.kernel.db import QueryBuilder
 
 
 def _get_adapter_manager():
-	"""延迟获取 AdapterManager，避免导入时循环依赖。"""
+	"""延迟获取 AdapterManager，避免导入时循环依赖。
+
+	Returns:
+		适配器管理器实例
+	"""
 	from src.core.managers.adapter_manager import get_adapter_manager
 
 	return get_adapter_manager()
 
 
 def _get_command_manager():
-	"""延迟获取 CommandManager，避免导入时循环依赖。"""
+	"""延迟获取 CommandManager，避免导入时循环依赖。
+
+	Returns:
+		命令管理器实例
+	"""
 	from src.core.managers.command_manager import get_command_manager
 
 	return get_command_manager()
 
 
 def _validate_timestamp(value: float, name: str) -> None:
-	"""校验时间戳参数。"""
+	"""校验时间戳参数。
+
+	Args:
+		value: 时间戳数值
+		name: 参数名称
+
+	Returns:
+		None
+	"""
 	if not isinstance(value, int | float):
 		raise ValueError(f"{name} 必须是数字类型")
 
 
 def _validate_limit(limit: int) -> None:
-	"""校验 limit 参数。"""
+	"""校验 limit 参数。
+
+	Args:
+		limit: 限制数量
+
+	Returns:
+		None
+	"""
 	if not isinstance(limit, int) or limit < 0:
 		raise ValueError("limit 必须是非负整数")
 
 
 def _validate_stream_id(stream_id: str) -> None:
-	"""校验 stream_id 参数。"""
+	"""校验 stream_id 参数。
+
+	Args:
+		stream_id: 聊天流 ID
+
+	Returns:
+		None
+	"""
 	if not isinstance(stream_id, str):
 		raise ValueError("stream_id 必须是字符串类型")
 	if not stream_id:
@@ -50,13 +80,27 @@ def _validate_stream_id(stream_id: str) -> None:
 
 
 def _validate_limit_mode(limit_mode: str) -> None:
-	"""校验 limit_mode 参数。"""
+	"""校验 limit_mode 参数。
+
+	Args:
+		limit_mode: 排序模式
+
+	Returns:
+		None
+	"""
 	if limit_mode not in {"earliest", "latest"}:
 		raise ValueError("limit_mode 必须是 'earliest' 或 'latest'")
 
 
 def _resolve_ordering(limit_mode: str) -> tuple[str, str]:
-	"""根据 limit_mode 返回查询排序与最终输出排序。"""
+	"""根据 limit_mode 返回查询排序与最终输出排序。
+
+	Args:
+		limit_mode: 排序模式
+
+	Returns:
+		查询排序字段与结果排序字段
+	"""
 	_validate_limit_mode(limit_mode)
 	if limit_mode == "earliest":
 		return "time", "time"
@@ -64,7 +108,14 @@ def _resolve_ordering(limit_mode: str) -> tuple[str, str]:
 
 
 async def _load_person_info_map(person_ids: list[str]) -> dict[str, dict[str, Any]]:
-	"""批量加载 person_info，用于补全发送者字段。"""
+	"""批量加载 person_info，用于补全发送者字段。
+
+	Args:
+		person_ids: person_id 列表
+
+	Returns:
+		person_id 到人员信息的映射
+	"""
 	valid_ids = [person_id for person_id in person_ids if person_id]
 	if not valid_ids:
 		return {}
@@ -76,7 +127,14 @@ async def _load_person_info_map(person_ids: list[str]) -> dict[str, dict[str, An
 
 
 def _is_command_message(message: dict[str, Any]) -> bool:
-	"""判断消息是否为命令消息。"""
+	"""判断消息是否为命令消息。
+
+	Args:
+		message: 消息字典
+
+	Returns:
+		是否为命令消息
+	"""
 	text = str(
 		message.get("processed_plain_text")
 		or message.get("content")
@@ -86,7 +144,14 @@ def _is_command_message(message: dict[str, Any]) -> bool:
 
 
 async def _rows_to_message_dicts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-	"""将数据库消息行映射为最新消息字典结构。"""
+	"""将数据库消息行映射为最新消息字典结构。
+
+	Args:
+		rows: 数据库消息行列表
+
+	Returns:
+		消息字典列表
+	"""
 	person_map = await _load_person_info_map(
 		[str(row.get("person_id") or "") for row in rows]
 	)
@@ -138,7 +203,22 @@ async def _query_messages(
 	limit_mode: str = "latest",
 	filter_command: bool = False,
 ) -> list[dict[str, Any]]:
-	"""按条件查询消息并返回最新结构字典列表。"""
+	"""按条件查询消息并返回最新结构字典列表。
+
+	Args:
+		start_time: 起始时间戳，可选
+		end_time: 结束时间戳，可选
+		inclusive: 是否包含边界
+		before_time: 指定时间戳之前的消息，可选
+		stream_id: 聊天流 ID，可选
+		person_ids: 用户 person_id 列表，可选
+		limit: 限制数量
+		limit_mode: 排序模式
+		filter_command: 是否过滤命令消息
+
+	Returns:
+		消息字典列表
+	"""
 	order_for_query, order_for_result = _resolve_ordering(limit_mode)
 
 	query = QueryBuilder(Messages)
@@ -179,7 +259,14 @@ async def _query_messages(
 async def _apply_filter_bot(
 	messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-	"""按当前激活适配器 Bot 信息过滤机器人自身消息。"""
+	"""按当前激活适配器 Bot 信息过滤机器人自身消息。
+
+	Args:
+		messages: 消息字典列表
+
+	Returns:
+		过滤后的消息字典列表
+	"""
 	if not messages:
 		return []
 
@@ -212,7 +299,18 @@ async def get_messages_by_time(
 	limit_mode: str = "latest",
 	filter_bot: bool = False,
 ) -> list[dict[str, Any]]:
-	"""获取指定时间范围内的消息。"""
+	"""获取指定时间范围内的消息。
+
+	Args:
+		start_time: 起始时间戳
+		end_time: 结束时间戳
+		limit: 限制数量
+		limit_mode: 排序模式
+		filter_bot: 是否过滤机器人消息
+
+	Returns:
+		消息字典列表
+	"""
 	_validate_timestamp(start_time, "start_time")
 	_validate_timestamp(end_time, "end_time")
 	_validate_limit(limit)
@@ -238,7 +336,20 @@ async def get_messages_by_time_in_chat(
 	filter_bot: bool = False,
 	filter_command: bool = False,
 ) -> list[dict[str, Any]]:
-	"""获取指定 stream 中指定时间范围内的消息。"""
+	"""获取指定 stream 中指定时间范围内的消息。
+
+	Args:
+		stream_id: 聊天流 ID
+		start_time: 起始时间戳
+		end_time: 结束时间戳
+		limit: 限制数量
+		limit_mode: 排序模式
+		filter_bot: 是否过滤机器人消息
+		filter_command: 是否过滤命令消息
+
+	Returns:
+		消息字典列表
+	"""
 	_validate_stream_id(stream_id)
 	_validate_timestamp(start_time, "start_time")
 	_validate_timestamp(end_time, "end_time")
@@ -267,7 +378,20 @@ async def get_messages_by_time_in_chat_inclusive(
 	filter_bot: bool = False,
 	filter_command: bool = False,
 ) -> list[dict[str, Any]]:
-	"""获取指定 stream 中指定时间范围内的消息（包含边界）。"""
+	"""获取指定 stream 中指定时间范围内的消息（包含边界）。
+
+	Args:
+		stream_id: 聊天流 ID
+		start_time: 起始时间戳
+		end_time: 结束时间戳
+		limit: 限制数量
+		limit_mode: 排序模式
+		filter_bot: 是否过滤机器人消息
+		filter_command: 是否过滤命令消息
+
+	Returns:
+		消息字典列表
+	"""
 	_validate_stream_id(stream_id)
 	_validate_timestamp(start_time, "start_time")
 	_validate_timestamp(end_time, "end_time")
@@ -295,7 +419,19 @@ async def get_messages_by_time_in_chat_for_users(
 	limit: int = 0,
 	limit_mode: str = "latest",
 ) -> list[dict[str, Any]]:
-	"""获取指定 stream 中指定用户在时间范围内的消息。"""
+	"""获取指定 stream 中指定用户在时间范围内的消息。
+
+	Args:
+		stream_id: 聊天流 ID
+		start_time: 起始时间戳
+		end_time: 结束时间戳
+		person_ids: 用户 person_id 列表
+		limit: 限制数量
+		limit_mode: 排序模式
+
+	Returns:
+		消息字典列表
+	"""
 	_validate_stream_id(stream_id)
 	_validate_timestamp(start_time, "start_time")
 	_validate_timestamp(end_time, "end_time")
@@ -318,7 +454,18 @@ async def get_random_chat_messages(
 	limit_mode: str = "latest",
 	filter_bot: bool = False,
 ) -> list[dict[str, Any]]:
-	"""随机选择一个 stream，返回该 stream 在时间范围内的消息。"""
+	"""随机选择一个 stream，返回该 stream 在时间范围内的消息。
+
+	Args:
+		start_time: 起始时间戳
+		end_time: 结束时间戳
+		limit: 限制数量
+		limit_mode: 排序模式
+		filter_bot: 是否过滤机器人消息
+
+	Returns:
+		消息字典列表
+	"""
 	_validate_timestamp(start_time, "start_time")
 	_validate_timestamp(end_time, "end_time")
 	_validate_limit(limit)
@@ -362,7 +509,18 @@ async def get_messages_by_time_for_users(
 	limit: int = 0,
 	limit_mode: str = "latest",
 ) -> list[dict[str, Any]]:
-	"""获取指定用户在所有 stream 中指定时间范围内的消息。"""
+	"""获取指定用户在所有 stream 中指定时间范围内的消息。
+
+	Args:
+		start_time: 起始时间戳
+		end_time: 结束时间戳
+		person_ids: 用户 person_id 列表
+		limit: 限制数量
+		limit_mode: 排序模式
+
+	Returns:
+		消息字典列表
+	"""
 	_validate_timestamp(start_time, "start_time")
 	_validate_timestamp(end_time, "end_time")
 	_validate_limit(limit)
@@ -381,7 +539,16 @@ async def get_messages_before_time(
 	limit: int = 0,
 	filter_bot: bool = False,
 ) -> list[dict[str, Any]]:
-	"""获取指定时间戳之前的消息。"""
+	"""获取指定时间戳之前的消息。
+
+	Args:
+		timestamp: 时间戳
+		limit: 限制数量
+		filter_bot: 是否过滤机器人消息
+
+	Returns:
+		消息字典列表
+	"""
 	_validate_timestamp(timestamp, "timestamp")
 	_validate_limit(limit)
 
@@ -401,7 +568,17 @@ async def get_messages_before_time_in_chat(
 	limit: int = 0,
 	filter_bot: bool = False,
 ) -> list[dict[str, Any]]:
-	"""获取指定 stream 中指定时间戳之前的消息。"""
+	"""获取指定 stream 中指定时间戳之前的消息。
+
+	Args:
+		stream_id: 聊天流 ID
+		timestamp: 时间戳
+		limit: 限制数量
+		filter_bot: 是否过滤机器人消息
+
+	Returns:
+		消息字典列表
+	"""
 	_validate_stream_id(stream_id)
 	_validate_timestamp(timestamp, "timestamp")
 	_validate_limit(limit)
@@ -422,7 +599,16 @@ async def get_messages_before_time_for_users(
 	person_ids: list[str],
 	limit: int = 0,
 ) -> list[dict[str, Any]]:
-	"""获取指定用户在指定时间戳之前的消息。"""
+	"""获取指定用户在指定时间戳之前的消息。
+
+	Args:
+		timestamp: 时间戳
+		person_ids: 用户 person_id 列表
+		limit: 限制数量
+
+	Returns:
+		消息字典列表
+	"""
 	_validate_timestamp(timestamp, "timestamp")
 	_validate_limit(limit)
 
@@ -441,7 +627,18 @@ async def get_recent_messages(
 	limit_mode: str = "latest",
 	filter_bot: bool = False,
 ) -> list[dict[str, Any]]:
-	"""获取指定 stream 中最近一段时间的消息。"""
+	"""获取指定 stream 中最近一段时间的消息。
+
+	Args:
+		stream_id: 聊天流 ID
+		hours: 回溯小时数
+		limit: 限制数量
+		limit_mode: 排序模式
+		filter_bot: 是否过滤机器人消息
+
+	Returns:
+		消息字典列表
+	"""
 	_validate_stream_id(stream_id)
 	if not isinstance(hours, int | float) or hours < 0:
 		raise ValueError("hours 不能是负数")
@@ -466,7 +663,16 @@ async def count_new_messages(
 	start_time: float = 0.0,
 	end_time: float | None = None,
 ) -> int:
-	"""计算指定 stream 中从开始时间到结束时间的新消息数量。"""
+	"""计算指定 stream 中从开始时间到结束时间的新消息数量。
+
+	Args:
+		stream_id: 聊天流 ID
+		start_time: 起始时间戳
+		end_time: 结束时间戳，可选
+
+	Returns:
+		新消息数量
+	"""
 	_validate_stream_id(stream_id)
 	_validate_timestamp(start_time, "start_time")
 	if end_time is not None:
@@ -487,7 +693,17 @@ async def count_new_messages_for_users(
 	end_time: float,
 	person_ids: list[str],
 ) -> int:
-	"""计算指定 stream 中指定用户在时间范围内的新消息数量。"""
+	"""计算指定 stream 中指定用户在时间范围内的新消息数量。
+
+	Args:
+		stream_id: 聊天流 ID
+		start_time: 起始时间戳
+		end_time: 结束时间戳
+		person_ids: 用户 person_id 列表
+
+	Returns:
+		新消息数量
+	"""
 	_validate_stream_id(stream_id)
 	_validate_timestamp(start_time, "start_time")
 	_validate_timestamp(end_time, "end_time")
@@ -505,7 +721,16 @@ def _format_timestamp(
 	timestamp_mode: str,
 	now_ts: float,
 ) -> str:
-	"""格式化时间戳。"""
+	"""格式化时间戳。
+
+	Args:
+		ts: 时间戳
+		timestamp_mode: 时间显示模式
+		now_ts: 当前时间戳
+
+	Returns:
+		格式化后的时间文本
+	"""
 	if timestamp_mode == "absolute":
 		return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -528,7 +753,20 @@ async def build_readable_messages_to_str(
 	truncate: bool = False,
 	show_actions: bool = False,
 ) -> str:
-	"""将消息列表构建为可读字符串。"""
+	"""将消息列表构建为可读字符串。
+
+	Args:
+		messages: 消息字典列表
+		replace_bot_name: 是否替换机器人名称
+		merge_messages: 是否合并同一发送者的连续消息
+		timestamp_mode: 时间显示模式
+		read_mark: 已读时间戳
+		truncate: 是否截断过长文本
+		show_actions: 是否包含动作内容
+
+	Returns:
+		可读消息文本
+	"""
 	text, _ = await build_readable_messages_with_details(
 		messages=messages,
 		replace_bot_name=replace_bot_name,
@@ -568,7 +806,18 @@ async def build_readable_messages_with_details(
 	timestamp_mode: str = "relative",
 	truncate: bool = False,
 ) -> tuple[str, list[tuple[float, str, str]]]:
-	"""将消息列表构建为可读字符串并返回详细元组。"""
+	"""将消息列表构建为可读字符串并返回详细元组。
+
+	Args:
+		messages: 消息字典列表
+		replace_bot_name: 是否替换机器人名称
+		merge_messages: 是否合并同一发送者的连续消息
+		timestamp_mode: 时间显示模式
+		truncate: 是否截断过长文本
+
+	Returns:
+		可读消息文本与明细列表
+	"""
 	if timestamp_mode not in {"relative", "absolute"}:
 		raise ValueError("timestamp_mode 必须是 'relative' 或 'absolute'")
 
@@ -617,7 +866,14 @@ async def build_readable_messages_with_details(
 
 
 async def get_person_ids_from_messages(messages: list[dict[str, Any]]) -> list[str]:
-	"""从消息列表中提取去重后的 person_id 列表。"""
+	"""从消息列表中提取去重后的 person_id 列表。
+
+	Args:
+		messages: 消息字典列表
+
+	Returns:
+		person_id 列表
+	"""
 	person_ids = {
 		str(message.get("person_id") or "")
 		for message in messages
@@ -627,6 +883,13 @@ async def get_person_ids_from_messages(messages: list[dict[str, Any]]) -> list[s
 
 
 async def filter_bot_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-	"""从消息列表中过滤 Bot 自身消息。"""
+	"""从消息列表中过滤 Bot 自身消息。
+
+	Args:
+		messages: 消息字典列表
+
+	Returns:
+		过滤后的消息字典列表
+	"""
 	return await _apply_filter_bot(messages)
 

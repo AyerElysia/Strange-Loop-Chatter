@@ -50,7 +50,16 @@ def create_embedding_request(
     request_name: str = "",
     inputs: list[str] | None = None,
 ) -> EmbeddingRequest:
-    """创建 EmbeddingRequest 实例。"""
+    """创建 EmbeddingRequest 实例。
+
+    Args:
+        model_set: 模型集
+        request_name: 请求名称（可选）
+        inputs: 输入文本列表（可选）
+
+    Returns:
+        EmbeddingRequest 实例
+    """
     return EmbeddingRequest(
         model_set=model_set,
         request_name=request_name,
@@ -65,7 +74,18 @@ def create_rerank_request(
     documents: list[Any] | None = None,
     top_n: int | None = None,
 ) -> RerankRequest:
-    """创建 RerankRequest 实例。"""
+    """创建 RerankRequest 实例。
+
+    Args:
+        model_set: 模型集
+        request_name: 请求名称（可选）
+        query: 查询文本
+        documents: 文档列表（可选）
+        top_n: 返回结果数量（可选）
+
+    Returns:
+        RerankRequest 实例
+    """
     return RerankRequest(
         model_set=model_set,
         request_name=request_name,
@@ -124,7 +144,14 @@ def get_model_set_by_name(
 
 
 def create_tool_registry(tools: list[type[LLMUsable]] | None = None) -> ToolRegistry:
-    """创建工具注册表实例"""
+    """创建工具注册表实例。
+
+    Args:
+        tools: 工具类列表，可选
+
+    Returns:
+        工具注册表实例
+    """
     registry = ToolRegistry()
     if tools:
         for tool in tools:
