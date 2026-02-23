@@ -167,7 +167,7 @@ class PluginManager:
     async def unload_plugin(self, plugin_name: str) -> bool:
         """卸载插件。
 
-        卸载指定插件，调用生命周期钩子并清理资源。
+        卸载指定插件,调用生命周期钩子并清理资源。
 
         Args:
             plugin_name: 插件名称
@@ -210,6 +210,15 @@ class PluginManager:
             # 从全局注册表中移除该插件的组件
             await self._unregister_plugin_components(plugin_name)
 
+            # 从插件类注册表中移除插件类
+            from src.core.components.loader import unregister_plugin
+            unregister_plugin(plugin_name)
+
+            # 清理 sys.modules 中的插件模块
+            plugin_path = self._plugin_paths.get(plugin_name)
+            if plugin_path:
+                self._cleanup_sys_modules(plugin_name, plugin_path)
+
             # 清理压缩包插件的临时目录
             if plugin_name in self._archive_tmpdirs:
                 tmpdir = self._archive_tmpdirs.pop(plugin_name)
@@ -231,6 +240,37 @@ class PluginManager:
         except Exception as e:
             logger.error(f"❌ 插件卸载失败: {plugin_name} - {e}")
             return False
+
+    def _cleanup_sys_modules(self, plugin_name: str, plugin_path: str) -> None:
+        """从 sys.modules 中清理插件相关的所有模块。
+
+        Args:
+            plugin_name: 插件名称
+            plugin_path: 插件路径
+        """
+        try:
+            # 获取插件文件夹名（作为包名）
+            folder = Path(plugin_path)
+            if plugin_path.endswith((".zip", ".mfp")):
+                # 压缩包插件的包名就是插件名
+                package_prefix = plugin_name
+            else:
+                # 文件夹插件的包名是文件夹名
+                package_prefix = folder.name
+
+            # 清理所有以该包名开头的模块
+            modules_to_remove = [
+                mod_name
+                for mod_name in list(sys.modules.keys())
+                if mod_name == package_prefix or mod_name.startswith(f"{package_prefix}.")
+            ]
+
+            for mod_name in modules_to_remove:
+                del sys.modules[mod_name]
+                logger.debug(f"清理模块: {mod_name}")
+
+        except Exception as e:
+            logger.warning(f"清理 sys.modules 失败: {e}")
 
     async def _unregister_plugin_components(self, plugin_name: str) -> None:
         """从全局注册表中注销某插件的所有组件，并更新状态。"""
