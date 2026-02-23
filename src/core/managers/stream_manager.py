@@ -325,12 +325,11 @@ class StreamManager:
 
         lock = self._get_stream_lock(stream_id)
         async with lock:
-            person_id = self._resolve_person_id_from_message(message)
 
             message_data = {
                 "message_id": message.message_id,
                 "stream_id": stream_id,
-                "person_id": person_id,
+                "person_id": "bot",
                 "time": message.time,
                 "message_type": message.message_type.value,
                 "content": str(message.content),
@@ -697,7 +696,8 @@ class StreamManager:
                 sender_id = db_message.person_id
                 sender_name = "未知用户"
 
-        if db_message.platform:
+        # person_id == "bot" 表示 Bot 发送的消息
+        if db_message.person_id == "bot" and db_message.platform:
             try:
                 from src.core.managers.adapter_manager import get_adapter_manager
 
@@ -707,29 +707,15 @@ class StreamManager:
                 if bot_info:
                     bot_id = str(bot_info.get("bot_id", "") or "")
                     bot_nickname = str(bot_info.get("bot_nickname", "") or "")
-                    bot_person_id = (
-                        get_user_query_helper().generate_person_id(
-                            db_message.platform,
-                            bot_id,
-                        )
-                        if bot_id
-                        else ""
-                    )
-                    is_bot_message = bool(
-                        bot_id
-                        and (
-                            sender_id == bot_id
-                            or db_message.person_id == bot_person_id
-                        )
-                    )
-                    if is_bot_message:
-                        sender_name = bot_nickname or sender_name or bot_id
-                        if bot_nickname and not sender_cardname:
-                            sender_cardname = bot_nickname
+                    sender_id = bot_id or "bot"
+                    sender_name = bot_nickname or "Bot"
+                    sender_cardname = bot_nickname or ""
             except Exception as e:
                 logger.warning(
                     f"恢复 Bot 发送者信息失败: platform={db_message.platform}, error={e}"
                 )
+                sender_id = "bot"
+                sender_name = "Bot"
 
         normalized_plain_text = db_message.processed_plain_text
         if normalized_plain_text is None:
