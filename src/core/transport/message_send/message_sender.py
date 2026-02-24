@@ -111,18 +111,25 @@ class MessageSender:
             # 4. 转换为 MessageEnvelope
             envelope = await self._converter.message_to_envelope(message)
 
-            # 5. 发送
+            # 5. 触发发送事件，检查是否被拦截
+            should_send = await self._emit_send_event(message, envelope, adapter_signature)
+            
+            if not should_send:
+                logger.info(
+                    f"消息被事件处理器拦截，取消发送: {message.message_id}"
+                )
+                return True  # 返回成功，因为拦截是预期行为
+
+            # 6. 发送
             await adapter._send_platform_message(envelope)
 
-            # 6. 写入历史消息
+            # 7. 写入历史消息
             await self._persist_sent_message_to_history(message)
 
             logger.info(
                 f"消息发送成功: {message.message_id} → {adapter_signature}"
             )
 
-            # 7. 触发发送事件
-            await self._emit_send_event(message, envelope, adapter_signature)
 
             return True
 
@@ -224,21 +231,25 @@ class MessageSender:
         message: "Message",
         envelope: MessageEnvelope,
         adapter_signature: str,
-    ) -> None:
+    ) -> bool:
         """触发消息发送事件。
 
         Args:
             message: 消息对象
             envelope: 消息信封
             adapter_signature: 适配器签名
+            
+        Returns:
+            bool: 是否应该继续发送（False 表示被事件处理器拦截）
         """
         try:
             # 尝试从事件管理器获取
             from src.core.managers.event_manager import get_event_manager
             from src.core.components.types import EventType
+            from src.kernel.event import EventDecision
 
             event_mgr = get_event_manager()
-            await event_mgr.publish_event(
+            result = await event_mgr.publish_event(
                 EventType.ON_MESSAGE_SENT,
                 {
                     "message": message,
@@ -246,8 +257,17 @@ class MessageSender:
                     "adapter_signature": adapter_signature,
                 },
             )
+            
+            # 检查事件决策，如果被拦截则返回 False
+            decision = result.get("decision")
+            if decision == EventDecision.STOP:
+                return False
+                
+            return True
+            
         except Exception as e:
             logger.warning(f"触发发送事件失败: {e}")
+            return True  # 异常时默认继续发送
 
 
 # 全局单例
