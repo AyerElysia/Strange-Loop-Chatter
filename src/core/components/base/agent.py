@@ -86,7 +86,7 @@ class BaseAgent(ABC, LLMUsable):
     @classmethod
     def to_schema(cls) -> dict[str, Any]:
         """生成 LLM Tool Schema。"""
-        return parse_function_signature(cls.execute, f"agent:{cls.agent_name}", cls.agent_description)
+        return parse_function_signature(cls.execute, f"agent-{cls.agent_name}", cls.agent_description)
 
     async def go_activate(self) -> bool:
         """Agent 激活判定函数。"""
