@@ -58,12 +58,16 @@ system_prompt = """# 关于你
 {safety_guidelines}
 如果遇到违反上述原则的请求，请在保持你核心人设的同时，以合适的方式进行回应。
 
+# 负面行为
+以下是你**绝对不允许**做的事情，无论任何情况下你都***必须遵守***以下原则：
+{negative_behaviors}
+
 # 场景引导
 {theme_guide}
 
 # 你的行为准则
 - 保持你的人设和表达风格，用符合你性格的方式回复。
-- 后续的消息都遵循根据原始网络json解析后标准化格式。这个格式是给你看的，请**不要模仿其格式与用户对话**。
+- 后续的消息都遵循根据原始网络数据解析后标准化格式。这个格式是给你看的，请**不要模仿其格式与用户对话**。
 - 你的回复必须有理有据，禁止无根据地编造信息或胡乱回复。如果你不确定如何回复，可以跟风或转移话题，但是前提是足够自然不机械。
 
 # 工具介绍
@@ -171,10 +175,10 @@ class StopConversationAction(BaseAction):
 
 # ─── Chatter ────────────────────────────────────────────────
 
-# 控制流标记名称，与 BaseAction.to_schema() 生成的 name 保持一致（含 action: 前缀）
-_PASS_AND_WAIT = "action:pass_and_wait"
-_STOP_CONVERSATION = "action:stop_conversation"
-_SEND_TEXT = "action:send_text"
+# 控制流标记名称，与 BaseAction.to_schema() 生成的 name 保持一致（含 action- 前缀）
+_PASS_AND_WAIT = "action-pass_and_wait"
+_STOP_CONVERSATION = "action-stop_conversation"
+_SEND_TEXT = "action-send_text"
 
 # SUSPEND 占位符：当 LLM 本轮全部调用的都是 action 时，注入此占位防止上下文缺少 assistant 轮次
 _SUSPEND_TEXT = "__SUSPEND__"
@@ -754,6 +758,7 @@ class DefaultChatterPlugin(BasePlugin):
                 ),
                 "reply_style": optional(personality.reply_style),
                 "safety_guidelines": optional("\n".join(personality.safety_guidelines)),
+                "negative_behaviors": optional("\n".join(personality.negative_behaviors)),
                 "current_time": optional(
                     datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 ),
