@@ -29,6 +29,7 @@ from src.core.components.loader import register_plugin
 from src.core.config import get_core_config
 from src.core.prompt import get_prompt_manager
 from src.kernel.llm import LLMPayload, ROLE, Text
+
 from .config import DefaultChatterConfig
 from .decision_agent import decide_should_respond
 from .prompt_builder import DefaultChatterPromptBuilder

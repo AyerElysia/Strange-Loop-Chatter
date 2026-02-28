@@ -177,6 +177,9 @@ class ChromaDBImpl(VectorDBBase):
 
             return await asyncio.to_thread(collection.query, **query_params)
         except Exception as e:
+            if "Nothing found on disk" in str(e):
+                logger.debug(f"集合 '{collection_name}' 当前无可读段，返回空查询结果")
+                return {}
             logger.error(f"查询集合 '{collection_name}' 失败: {e}")
         return {}
 
