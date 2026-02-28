@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from src.kernel.llm import LLMPayload, ROLE, Text, ToolResult
-
+from src.kernel.concurrency import get_watchdog
 
 @dataclass
 class ToolCallOutcome:
@@ -22,6 +22,7 @@ class ToolCallOutcome:
 
 async def process_tool_calls(
     *,
+    stream_id: str,
     calls: list[Any],
     response: Any,
     run_tool_call: Callable[[Any, Any, Any, Any], Awaitable[tuple[bool, bool]]],
@@ -37,6 +38,7 @@ async def process_tool_calls(
     seen_call_signatures: set[str] = set()
 
     for call in calls:
+        get_watchdog().feed_dog(stream_id)  # 喂狗，防止工具调用过久导致 Watchdog 误判超时
         args = call.args if isinstance(call.args, dict) else {}
         dedupe_args = (
             {key: value for key, value in args.items() if key != "reason"}

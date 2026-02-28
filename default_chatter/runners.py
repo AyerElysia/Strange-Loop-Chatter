@@ -104,6 +104,7 @@ async def run_enhanced(
             logger.info(f"LLM 调用 {call.name}，原因: {reason}，参数: {args}")
 
         call_outcome = await process_tool_calls(
+            stream_id=chat_stream.stream_id,
             calls=response.call_list or [],
             response=response,
             run_tool_call=chatter.run_tool_call,
@@ -221,6 +222,7 @@ async def run_classical(
                 logger.info(f"LLM 调用 {call.name}，原因: {reason}，参数: {args}")
 
             call_outcome = await process_tool_calls(
+                stream_id=chat_stream.stream_id,
                 calls=response.call_list or [],
                 response=response,
                 run_tool_call=chatter.run_tool_call,
