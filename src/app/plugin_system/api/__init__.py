@@ -15,6 +15,7 @@ from src.app.plugin_system.api import plugin_api
 from src.app.plugin_system.api import router_api
 from src.app.plugin_system.api import send_api
 from src.app.plugin_system.api import service_api
+from src.app.plugin_system.api import storage_api
 from src.app.plugin_system.api import stream_api
 
 __all__ = [
@@ -33,5 +34,6 @@ __all__ = [
     "router_api",
     "send_api",
     "service_api",
+    "storage_api",
     "stream_api",
 ]

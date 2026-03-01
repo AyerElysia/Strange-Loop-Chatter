@@ -5,11 +5,13 @@
 """
 
 import operator
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import Any, Generic, TypeVar
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.kernel.logger import get_logger
 
@@ -18,6 +20,38 @@ from ..core.session import get_db_session
 logger = get_logger("database.crud", display="CRUD")
 
 T = TypeVar("T", bound=Any)
+
+
+@asynccontextmanager
+async def _get_session_ctx(
+    session_factory: async_sessionmaker | None = None,
+) -> AsyncGenerator[AsyncSession, None]:
+    """通用会话上下文管理器。
+
+    当 session_factory 为 None 时使用全局默认会话（主数据库），
+    否则使用传入的 session_factory（用于独立数据库）。
+
+    Args:
+        session_factory: 指定的异步会话工厂；为 None 时使用全局默认会话。
+
+    Yields:
+        AsyncSession 实例（自动处理提交/回滚）。
+    """
+    if session_factory is not None:
+        async with session_factory() as session:
+            try:
+                yield session
+                if session.is_active:
+                    await session.commit()
+            except Exception:
+                if session.is_active:
+                    await session.rollback()
+                raise
+            finally:
+                await session.close()
+    else:
+        async with get_db_session() as session:
+            yield session
 
 
 @lru_cache(maxsize=256)
@@ -111,14 +145,17 @@ class CRUDBase(Generic[T]):
     提供通用的创建、读取、更新、删除操作
     """
 
-    def __init__(self, model: type[T]):
+    def __init__(self, model: type[T], *, session_factory: async_sessionmaker | None = None):
         """初始化 CRUD 操作
 
         Args:
             model: SQLAlchemy 模型类
+            session_factory: 可选的自定义异步会话工厂。为 None 时使用全局主数据库会话；
+                传入自定义工厂时使用该工厂（适用于插件独立数据库等场景）。
         """
         self.model = model
         self.model_name = model.__tablename__
+        self._session_factory = session_factory
 
     async def get(self, id: int) -> T | None:
         """根据 ID 获取单条记录
@@ -129,7 +166,7 @@ class CRUDBase(Generic[T]):
         Returns:
             模型实例或 None
         """
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             stmt = select(self.model).where(self.model.id == id)
             result = await session.execute(stmt)
             instance = result.scalar_one_or_none()
@@ -150,7 +187,7 @@ class CRUDBase(Generic[T]):
         Returns:
             模型实例或 None
         """
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             stmt = select(self.model)
             for key, value in filters.items():
                 if hasattr(self.model, key):
@@ -182,7 +219,7 @@ class CRUDBase(Generic[T]):
         Returns:
             模型实例列表
         """
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             stmt = select(self.model)
 
             # 应用过滤条件
@@ -212,7 +249,7 @@ class CRUDBase(Generic[T]):
         Returns:
             已创建的模型实例
         """
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             instance = self.model(**obj_in)
             session.add(instance)
             await session.flush()
@@ -232,7 +269,7 @@ class CRUDBase(Generic[T]):
         Returns:
             更新后的模型实例或 None
         """
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             # 将实例重新加载到当前会话
             stmt = select(self.model).where(self.model.id == id)
             result = await session.execute(stmt)
@@ -260,7 +297,7 @@ class CRUDBase(Generic[T]):
         Returns:
             是否删除成功
         """
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             stmt = delete(self.model).where(self.model.id == id)
             result = await session.execute(stmt)
             return result.rowcount > 0  # type: ignore
@@ -274,7 +311,7 @@ class CRUDBase(Generic[T]):
         Returns:
             记录数量
         """
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             stmt = select(func.count(self.model.id))
 
             # 应用过滤条件
@@ -336,7 +373,7 @@ class CRUDBase(Generic[T]):
         Returns:
             已创建的模型实例列表
         """
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             instances = [self.model(**obj_data) for obj_data in objs_in]
             session.add_all(instances)
             await session.flush()
@@ -360,7 +397,7 @@ class CRUDBase(Generic[T]):
         Returns:
             更新的记录数量
         """
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             count = 0
             for id, obj_in in updates:
                 stmt = (

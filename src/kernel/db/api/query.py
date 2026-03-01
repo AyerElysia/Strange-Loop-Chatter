@@ -11,10 +11,10 @@ from collections.abc import AsyncIterator
 from typing import Any, Generic, TypeVar, Self
 
 from sqlalchemy import and_, asc, desc, func, or_, select
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 # 导入 CRUD 辅助函数以避免重复定义
-from src.kernel.db.api.crud import _dict_to_model, _model_to_dict
-from src.kernel.db.core.session import get_db_session
+from src.kernel.db.api.crud import _dict_to_model, _get_session_ctx, _model_to_dict
 from src.kernel.logger import get_logger
 
 logger = get_logger("database.query", display="DB Query")
@@ -28,15 +28,18 @@ class QueryBuilder(Generic[T]):
     支持链式调用，构建复杂查询
     """
 
-    def __init__(self, model: type[T]):
+    def __init__(self, model: type[T], *, session_factory: async_sessionmaker | None = None):
         """初始化查询构建器
 
         Args:
             model: SQLAlchemy 模型类
+            session_factory: 可选的自定义异步会话工厂。为 None 时使用全局主数据库会话；
+                传入自定义工厂时使用该工厂（适用于插件独立数据库等场景）。
         """
         self.model = model
         self.model_name = model.__tablename__
         self._stmt = select(model)
+        self._session_factory = session_factory
 
     def filter(self, **conditions: Any) -> Self:
         """添加过滤条件
@@ -194,7 +197,7 @@ class QueryBuilder(Generic[T]):
             # 构建带分页的查询
             paginated_stmt = self._stmt.offset(offset).limit(batch_size)
 
-            async with get_db_session() as session:
+            async with _get_session_ctx(self._session_factory) as session:
                 result = await session.execute(paginated_stmt)
                 instances = result.scalars().all()
 
@@ -251,7 +254,7 @@ class QueryBuilder(Generic[T]):
         Returns:
             模型实例列表或字典列表
         """
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             result = await session.execute(self._stmt)
             instances = list(result.scalars().all())
 
@@ -271,7 +274,7 @@ class QueryBuilder(Generic[T]):
         Returns:
             模型实例、字典或 None
         """
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             result = await session.execute(self._stmt)
             instance = result.scalars().first()
 
@@ -293,7 +296,7 @@ class QueryBuilder(Generic[T]):
         """
         count_stmt = select(func.count()).select_from(self._stmt.subquery())
 
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             result = await session.execute(count_stmt)
             return result.scalar() or 0
 
@@ -329,7 +332,7 @@ class QueryBuilder(Generic[T]):
         # 获取当前页数据
         paginated_stmt = self._stmt.offset(offset).limit(page_size)
 
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             result = await session.execute(paginated_stmt)
             instances = list(result.scalars().all())
 
@@ -346,15 +349,18 @@ class AggregateQuery:
     提供聚合操作如 sum、avg、max、min 等
     """
 
-    def __init__(self, model: type[T]):
+    def __init__(self, model: type[T], *, session_factory: async_sessionmaker | None = None):
         """初始化聚合查询
 
         Args:
             model: SQLAlchemy 模型类
+            session_factory: 可选的自定义异步会话工厂。为 None 时使用全局主数据库会话；
+                传入自定义工厂时使用该工厂（适用于插件独立数据库等场景）。
         """
         self.model = model
         self.model_name = model.__tablename__
         self._conditions = []
+        self._session_factory = session_factory
 
     def filter(self, **conditions: Any) -> Self:
         """添加过滤条件
@@ -383,7 +389,7 @@ class AggregateQuery:
         if not hasattr(self.model, field):
             raise ValueError(f"字段 {field} 不存在")
 
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             stmt = select(func.sum(getattr(self.model, field)))
 
             if self._conditions:
@@ -404,7 +410,7 @@ class AggregateQuery:
         if not hasattr(self.model, field):
             raise ValueError(f"字段 {field} 不存在")
 
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             stmt = select(func.avg(getattr(self.model, field)))
 
             if self._conditions:
@@ -425,7 +431,7 @@ class AggregateQuery:
         if not hasattr(self.model, field):
             raise ValueError(f"字段 {field} 不存在")
 
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             stmt = select(func.max(getattr(self.model, field)))
 
             if self._conditions:
@@ -446,7 +452,7 @@ class AggregateQuery:
         if not hasattr(self.model, field):
             raise ValueError(f"字段 {field} 不存在")
 
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             stmt = select(func.min(getattr(self.model, field)))
 
             if self._conditions:
@@ -479,7 +485,7 @@ class AggregateQuery:
         if not group_columns:
             return []
 
-        async with get_db_session() as session:
+        async with _get_session_ctx(self._session_factory) as session:
             stmt = select(*group_columns, func.count(self.model.id))
 
             if self._conditions:
