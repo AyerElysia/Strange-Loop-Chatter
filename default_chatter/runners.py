@@ -37,10 +37,14 @@ async def run_enhanced(
     response = request
     history_merged = False
     has_pending_tool_results = False
+    unreads: list[Any] = []
 
     while True:
         _, unread_msgs = await chatter.fetch_unreads()
-        unreads = unread_msgs
+        # 仅在有新消息时更新 unreads，保证 has_pending_tool_results 续轮时
+        # trigger_msg 仍指向上一轮触发消息，而非因列表清空变为 None。
+        if unread_msgs:
+            unreads = unread_msgs
 
         if unread_msgs:
             unread_lines = "\n".join(
