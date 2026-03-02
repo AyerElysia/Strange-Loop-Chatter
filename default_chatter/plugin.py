@@ -105,6 +105,9 @@ user_prompt = """你当前正在名为"{stream_name}"的对话中。
 sub_agent_system_prompt = """你是一个聊天意图识别助手。
 你的任务是分析新收到的聊天消息，结合历史上下文，判断主机器人是否有必要进行响应。
 
+# 关于主机器人
+主机器人的名字是 {nickname}。
+{personality_core_section}{personality_side_section}
 # 判定准则
 你应该在以下情况判定为 "需要回复" (should_respond = true)：
 1. 明确提及：消息中明确提到了机器人的名字({nickname})或代称。
@@ -431,6 +434,10 @@ class DefaultChatterPlugin(BasePlugin):
             template=sub_agent_system_prompt,
             policies={
                 "nickname": optional(personality.nickname),
+                "personality_core_section": optional(personality.personality_core)
+                .then(wrap("它的核心人格是：", "\n")),
+                "personality_side_section": optional(personality.personality_side)
+                .then(wrap("它的人格侧面是：", "\n")),
             },
         )
 
