@@ -188,6 +188,50 @@ async def test_process_tool_calls_action_call_does_not_mark_pending() -> None:
     assert outcome.has_pending_tool_results is False
 
 
+@pytest.mark.asyncio
+async def test_process_tool_calls_deduplicates_across_rounds_when_state_provided() -> None:
+    """当提供跨轮状态时，上一轮已执行的同签名调用应被跳过。"""
+    response = _FakeResponse()
+    calls = [
+        SimpleNamespace(name="tool-weather", args={"city": "上海"}, id="1"),
+    ]
+
+    called_ids: list[str] = []
+    cross_round_seen: set[str] = set()
+
+    async def _run_tool_call(call: Any, _resp: Any, _usable: Any, _trigger: Any) -> tuple[bool, bool]:
+        called_ids.append(call.id)
+        return True, True
+
+    await process_tool_calls(
+        calls=calls,
+        response=response,
+        run_tool_call=_run_tool_call,
+        usable_map={},
+        trigger_msg=SimpleNamespace(message_id="m1"),
+        pass_call_name="action-pass_and_wait",
+        stop_call_name="action-stop_conversation",
+        send_text_call_name=None,
+        break_on_send_text=False,
+        cross_round_seen_signatures=cross_round_seen,
+    )
+
+    await process_tool_calls(
+        calls=calls,
+        response=response,
+        run_tool_call=_run_tool_call,
+        usable_map={},
+        trigger_msg=SimpleNamespace(message_id="m1"),
+        pass_call_name="action-pass_and_wait",
+        stop_call_name="action-stop_conversation",
+        send_text_call_name=None,
+        break_on_send_text=False,
+        cross_round_seen_signatures=cross_round_seen,
+    )
+
+    assert called_ids == ["1"]
+
+
 def test_append_suspend_payload_only_for_action_calls() -> None:
     """仅当 call_list 全是 action-* 时才注入 SUSPEND。"""
     response = _FakeResponse()

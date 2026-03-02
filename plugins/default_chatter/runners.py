@@ -38,12 +38,14 @@ async def run_enhanced(
     history_merged = False
     has_pending_tool_results = False
     unreads: list[Any] = []
+    cross_round_seen_signatures: set[str] = set()
 
     while True:
         _, unread_msgs = await chatter.fetch_unreads()
         # 仅在有新消息时更新 unreads，保证 has_pending_tool_results 续轮时
         # trigger_msg 仍指向上一轮触发消息，而非因列表清空变为 None。
         if unread_msgs:
+            cross_round_seen_signatures.clear()
             unreads = unread_msgs
 
         if unread_msgs:
@@ -118,6 +120,7 @@ async def run_enhanced(
             stop_call_name=stop_call_name,
             send_text_call_name=send_text_call_name,
             break_on_send_text=False,
+            cross_round_seen_signatures=cross_round_seen_signatures,
         )
         has_pending_tool_results = call_outcome.has_pending_tool_results
 
@@ -200,6 +203,7 @@ async def run_classical(
             request.add_payload(LLMPayload(ROLE.TOOL, usable_map.get_all()))  # type: ignore[arg-type]
 
         response = request
+        cross_round_seen_signatures: set[str] = set()
 
         while True:
             try:
@@ -236,6 +240,7 @@ async def run_classical(
                 stop_call_name=stop_call_name,
                 send_text_call_name=send_text_call_name,
                 break_on_send_text=True,
+                cross_round_seen_signatures=cross_round_seen_signatures,
             )
             if not call_outcome.has_pending_tool_results:
                 append_suspend_payload_if_action_only(
