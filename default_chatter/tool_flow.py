@@ -32,6 +32,7 @@ async def process_tool_calls(
     stop_call_name: str,
     send_text_call_name: str | None,
     break_on_send_text: bool,
+    cross_round_seen_signatures: set[str] | None = None,
 ) -> ToolCallOutcome:
     """处理单轮 LLM 的 tool calls 并返回控制流结果。"""
     outcome = ToolCallOutcome()
@@ -58,7 +59,22 @@ async def process_tool_calls(
                 )
             )
             continue
+
+        if cross_round_seen_signatures is not None and dedupe_key in cross_round_seen_signatures:
+            response.add_payload(
+                LLMPayload(
+                    ROLE.TOOL_RESULT,
+                    ToolResult(  # type: ignore[arg-type]
+                        value="检测到跨轮重复工具调用，已自动跳过",
+                        call_id=call.id,
+                        name=call.name,
+                    ),
+                )
+            )
+            continue
         seen_call_signatures.add(dedupe_key)
+        if cross_round_seen_signatures is not None:
+            cross_round_seen_signatures.add(dedupe_key)
 
         if call.name == pass_call_name:
             response.add_payload(
