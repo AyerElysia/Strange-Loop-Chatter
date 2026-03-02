@@ -149,7 +149,7 @@ def test_context_manager_reminder_creates_first_user() -> None:
     assert payloads[1].content[0].text == "你必须先输出结论"
 
 
-def test_context_manager_fills_missing_tool_result_placeholder() -> None:
+def test_context_manager_defers_missing_tool_result_placeholder_at_tail() -> None:
     manager = LLMContextManager(max_payloads=20)
     payloads = [LLMPayload(ROLE.USER, Text("帮我调用工具"))]
 
@@ -164,11 +164,75 @@ def test_context_manager_fills_missing_tool_result_placeholder() -> None:
         ),
     )
 
-    assert len(payloads) == 4
+    assert len(payloads) == 2
     assert payloads[0].role == ROLE.USER
     assert payloads[1].role == ROLE.ASSISTANT
+
+
+def test_context_manager_keeps_multiple_tool_results_in_merged_payload() -> None:
+    manager = LLMContextManager(max_payloads=20)
+    payloads = [LLMPayload(ROLE.USER, Text("请执行两个工具"))]
+
+    payloads = manager.add_payload(
+        payloads,
+        LLMPayload(
+            ROLE.ASSISTANT,
+            [
+                Text("开始执行"),
+                ToolCall(id="call_1", name="write_memory", args={"content": "A"}),
+                ToolCall(id="call_2", name="finish_task", args={"content": "ok"}),
+            ],
+        ),
+    )
+
+    payloads = manager.add_payload(
+        payloads,
+        LLMPayload(
+            ROLE.TOOL_RESULT,
+            ToolResult(value="写入成功", call_id="call_1", name="write_memory"),
+        ),
+    )
+    payloads = manager.add_payload(
+        payloads,
+        LLMPayload(
+            ROLE.TOOL_RESULT,
+            ToolResult(value="任务完成", call_id="call_2", name="finish_task"),
+        ),
+    )
+
+    assert len(payloads) == 3
+    assert payloads[2].role == ROLE.TOOL_RESULT
+
+    results = [part for part in payloads[2].content if isinstance(part, ToolResult)]
+    assert len(results) == 2
+
+    result_by_id = {result.call_id: result for result in results}
+    assert result_by_id["call_1"].value == "写入成功"
+    assert result_by_id["call_1"].name == "write_memory"
+    assert result_by_id["call_2"].value == "任务完成"
+    assert result_by_id["call_2"].name == "finish_task"
+
+
+def test_context_manager_repairs_missing_tool_result_when_chain_continues() -> None:
+    manager = LLMContextManager(max_payloads=20)
+    payloads = [LLMPayload(ROLE.USER, Text("帮我调用工具"))]
+
+    payloads = manager.add_payload(
+        payloads,
+        LLMPayload(
+            ROLE.ASSISTANT,
+            [
+                Text("我将调用工具"),
+                ToolCall(id="call_1", name="get_weather", args={"city": "上海"}),
+            ],
+        ),
+    )
+    payloads = manager.add_payload(payloads, LLMPayload(ROLE.USER, Text("继续")))
+
+    assert len(payloads) == 5
     assert payloads[2].role == ROLE.TOOL_RESULT
     result = next(part for part in payloads[2].content if isinstance(part, ToolResult))
     assert result.call_id == "call_1"
     assert result.value == ""
     assert payloads[3].role == ROLE.ASSISTANT
+    assert payloads[4].role == ROLE.USER

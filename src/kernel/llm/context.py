@@ -148,23 +148,27 @@ class LLMContextManager:
 
                 seen_ids: set[str] = set()
                 while idx < len(convo) and convo[idx].role == ROLE.TOOL_RESULT:
-                    repaired_result, call_id = self._repair_tool_result_payload(convo[idx], expected_ids - seen_ids)
+                    repaired_result, call_ids = self._repair_tool_result_payload(convo[idx], expected_ids - seen_ids)
                     if repaired_result is not None:
                         normalized.append(repaired_result)
-                    if call_id:
-                        seen_ids.add(call_id)
+                    if call_ids:
+                        seen_ids.update(call_ids)
                     idx += 1
 
-                for missing_id in expected_ids - seen_ids:
-                    normalized.append(
-                        LLMPayload(
-                            ROLE.TOOL_RESULT,
-                            ToolResult(value="", call_id=missing_id),
-                        )
-                    )
+                pending_ids = expected_ids - seen_ids
+                should_defer_fill = idx >= len(convo)
 
-                if idx >= len(convo) or convo[idx].role != ROLE.ASSISTANT:
-                    normalized.append(LLMPayload(ROLE.ASSISTANT, Text("")))
+                if pending_ids and not should_defer_fill:
+                    for missing_id in pending_ids:
+                        normalized.append(
+                            LLMPayload(
+                                ROLE.TOOL_RESULT,
+                                ToolResult(value="", call_id=missing_id),
+                            )
+                        )
+
+                    if idx >= len(convo) or convo[idx].role != ROLE.ASSISTANT:
+                        normalized.append(LLMPayload(ROLE.ASSISTANT, Text("")))
 
                 continue
 
@@ -202,46 +206,47 @@ class LLMContextManager:
         self,
         payload: LLMPayload,
         candidate_ids: set[str],
-    ) -> tuple[LLMPayload | None, str | None]:
+    ) -> tuple[LLMPayload | None, set[str]]:
         """修复 TOOL_RESULT payload，必要时补齐 call_id。"""
 
-        first_result: ToolResult | None = None
-        for part in payload.content:
-            if isinstance(part, ToolResult):
-                first_result = part
-                break
-
-        if first_result is None:
+        tool_results = [part for part in payload.content if isinstance(part, ToolResult)]
+        if not tool_results:
             if len(candidate_ids) == 1:
                 only_id = next(iter(candidate_ids))
-                return LLMPayload(ROLE.TOOL_RESULT, ToolResult(value="", call_id=only_id)), only_id
-            return None, None
+                return LLMPayload(ROLE.TOOL_RESULT, ToolResult(value="", call_id=only_id)), {only_id}
+            return None, set()
 
-        call_id = first_result.call_id
-        if not call_id and len(candidate_ids) == 1:
-            call_id = next(iter(candidate_ids))
+        repaired_parts: list[ToolResult] = []
+        consumed_ids: set[str] = set()
 
-        if call_id is None:
-            return None, None
-        if call_id not in candidate_ids and candidate_ids:
-            return None, None
+        for part in tool_results:
+            call_id = part.call_id
+            if not call_id and len(candidate_ids - consumed_ids) == 1:
+                call_id = next(iter(candidate_ids - consumed_ids))
 
-        repaired_parts: list[Content | LLMUsable] = []
-        replaced = False
-        for part in payload.content:
-            if isinstance(part, ToolResult) and not replaced:
-                repaired_parts.append(
-                    ToolResult(
-                        value=part.value,
-                        call_id=call_id,
-                        name=part.name,
-                    )
+            if call_id is None:
+                continue
+            if candidate_ids and call_id not in candidate_ids:
+                continue
+            if call_id in consumed_ids:
+                continue
+
+            repaired_parts.append(
+                ToolResult(
+                    value=part.value,
+                    call_id=call_id,
+                    name=part.name,
                 )
-                replaced = True
-            else:
-                repaired_parts.append(part)
+            )
+            consumed_ids.add(call_id)
 
-        return LLMPayload(ROLE.TOOL_RESULT, repaired_parts), call_id
+        if not repaired_parts:
+            if len(candidate_ids) == 1:
+                only_id = next(iter(candidate_ids))
+                return LLMPayload(ROLE.TOOL_RESULT, ToolResult(value="", call_id=only_id)), {only_id}
+            return None, set()
+
+        return LLMPayload(ROLE.TOOL_RESULT, repaired_parts), consumed_ids
 
     def _apply_reminders(self, payloads: list[LLMPayload]) -> list[LLMPayload]:
         """将 reminder 固定注入首个 USER 消息首段。"""
