@@ -216,39 +216,46 @@ def _payloads_to_openai_messages(
             continue
 
         if payload.role == ROLE.TOOL_RESULT:
-            tool_call_id: str | None = None
-            content_text: str | None = None
+            tool_payloads: list[tuple[str | None, str]] = []
+            fallback_text: str | None = None
+
             for part in payload.content:
                 if isinstance(part, ToolResult):
-                    if tool_call_id is None and part.call_id:
-                        tool_call_id = part.call_id
-                    if content_text is None:
-                        content_text = part.to_text()
+                    tool_payloads.append((part.call_id, part.to_text()))
                     continue
 
-                if isinstance(part, Text) and content_text is None:
-                    content_text = part.text
+                if isinstance(part, Text) and fallback_text is None:
+                    fallback_text = part.text
                     continue
 
                 call_id_value = getattr(part, "call_id", None)
-                if tool_call_id is None and isinstance(call_id_value, str) and call_id_value:
-                    tool_call_id = call_id_value
+                call_id = call_id_value if isinstance(call_id_value, str) and call_id_value else None
 
                 to_text = getattr(part, "to_text", None)
-                if content_text is None and callable(to_text):
+                if callable(to_text):
                     try:
                         text_value = to_text()
-                        content_text = text_value if isinstance(text_value, str) else str(text_value)
+                        text = text_value if isinstance(text_value, str) else str(text_value)
                     except Exception:
-                        content_text = ""
+                        text = ""
+                    tool_payloads.append((call_id, text))
 
-            messages.append(
-                {
-                    "role": "tool",
-                    "content": content_text or "",
-                    **({"tool_call_id": tool_call_id} if tool_call_id else {}),
-                }
-            )
+            if tool_payloads:
+                for tool_call_id, content_text in tool_payloads:
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "content": content_text,
+                            **({"tool_call_id": tool_call_id} if tool_call_id else {}),
+                        }
+                    )
+            else:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "content": fallback_text or "",
+                    }
+                )
             continue
 
         role = payload.role.value

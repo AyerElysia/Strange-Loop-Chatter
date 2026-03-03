@@ -189,6 +189,31 @@ class TestPayloadsToOpenAIMessages:
         # 应该使用ToolResult的内容
         assert messages[0]["content"] == "result"
 
+    def test_multiple_tool_results_in_one_payload(self):
+        """同一个 TOOL_RESULT payload 内包含多个 ToolResult 时应拆分为多条 tool message。"""
+        from src.kernel.llm.model_client.openai_client import _payloads_to_openai_messages
+
+        payloads = [
+            LLMPayload(
+                ROLE.TOOL_RESULT,
+                [
+                    ToolResult(value="a", call_id="call_a"),
+                    ToolResult(value="b", call_id="call_b"),
+                ],
+            )
+        ]
+
+        messages, tools = _payloads_to_openai_messages(payloads)
+
+        assert tools == []
+        assert len(messages) == 2
+        assert messages[0]["role"] == "tool"
+        assert messages[0]["tool_call_id"] == "call_a"
+        assert messages[0]["content"] == "a"
+        assert messages[1]["role"] == "tool"
+        assert messages[1]["tool_call_id"] == "call_b"
+        assert messages[1]["content"] == "b"
+
     def test_custom_object_with_to_text(self):
         """测试自定义对象带to_text方法。"""
         from src.kernel.llm.model_client.openai_client import _payloads_to_openai_messages
