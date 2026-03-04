@@ -84,7 +84,7 @@ class MediaManager:
             # 注册图片识别提示词
             image_prompt = PromptTemplate(
                 name="media.image_recognition",
-                template="请简要描述这张图片的内容，用一句话概括。"
+                template="请描述这张图片，字数控制在100字以内。简要说明图片主题、核心元素及背景环境。如果图片中包含任何文字或代码，请完整转述，这部分不计入字数限制，力求客观、生动地还原图片内容。"
             )
             manager.register_template(image_prompt)
             
