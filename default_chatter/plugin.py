@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import datetime
-from typing import Any, AsyncGenerator
+from typing import AsyncGenerator
 
 from src.core.components.types import ChatType
 from src.app.plugin_system.api.log_api import get_logger
@@ -29,12 +29,14 @@ from src.core.components.base.action import BaseAction
 from src.core.components.loader import register_plugin
 from src.core.config import get_core_config
 from src.core.prompt import get_prompt_manager
+from src.core.models.message import Message
 from src.kernel.llm import LLMPayload, ROLE, Text
 
 from .config import DefaultChatterConfig
 from .decision_agent import decide_should_respond
 from .prompt_builder import DefaultChatterPromptBuilder
 from .runners import run_classical, run_enhanced
+from .type_defs import LLMConversationState, LLMResponseLike, SubAgentDecision
 
 logger = get_logger("default_chatter")
 
@@ -190,7 +192,7 @@ class SendTextAction(BaseAction):
                     target_user_id = last_msg.sender_id
                     target_user_name = last_msg.sender_name
             
-            extra: dict[str, Any] = {}
+            extra: dict[str, str] = {}
             if target_user_id:
                 extra["target_user_id"] = target_user_id
             if target_user_name:
@@ -211,8 +213,8 @@ class SendTextAction(BaseAction):
                 chat_type=chat_type,
                 stream_id=target_stream_id,
                 reply_to=reply_to,
-                **extra,
             )
+            message.extra.update(extra)
             
             from src.core.transport.message_send import get_message_sender
             sender = get_message_sender()
@@ -298,13 +300,16 @@ class DefaultChatter(BaseChatter):
 
     async def _build_system_prompt(self, chat_stream: ChatStream) -> str:
         """构建系统提示词"""
+        plugin_config = self.plugin.config
         return await DefaultChatterPromptBuilder.build_system_prompt(
-            self.plugin.config,
+            plugin_config if isinstance(plugin_config, DefaultChatterConfig) else None,
             chat_stream,
         )
 
     async def _build_classical_user_text(
-        self, chat_stream: ChatStream, unread_msgs: list[Any]
+        self,
+        chat_stream: ChatStream,
+        unread_msgs: list[Message],
     ) -> str:
         """构建 classical 模式 user 提示词。"""
         return await DefaultChatterPromptBuilder.build_classical_user_text(
@@ -348,7 +353,7 @@ class DefaultChatter(BaseChatter):
 
     @staticmethod
     def _upsert_pending_unread_payload(
-        response: Any,
+        response: LLMConversationState,
         formatted_text: str,
     ) -> None:
         """在未发送前合并未读消息到最后一个 USER payload。"""
@@ -370,9 +375,9 @@ class DefaultChatter(BaseChatter):
     async def sub_agent(
         self,
         unreads_text: str,
-        unread_msgs: list[Any],
+        unread_msgs: list[Message],
         chat_stream: ChatStream,
-    ) -> dict:
+    ) -> SubAgentDecision:
         """子代理决策：判断是否需要响应未读消息。
 
         独立构建上下文，只包含历史消息摘要与未读消息，
@@ -452,6 +457,16 @@ class DefaultChatter(BaseChatter):
             suspend_text=_SUSPEND_TEXT,
         ):
             yield result
+
+    async def run_tool_call(
+        self,
+        call,
+        response: LLMResponseLike,
+        usable_map,
+        trigger_msg: Message | None,
+    ) -> tuple[bool, bool]:
+        """执行工具调用并将结果写回响应上下文。"""
+        return await super().run_tool_call(call, response, usable_map, trigger_msg)
 
 
 # ─── Plugin ─────────────────────────────────────────────────

@@ -12,8 +12,8 @@ from .agent.tools import (
     BookuMemoryRetrieveTool,
 )
 from .config import BookuMemoryConfig
-from .event_handler import MemoryFlashbackInjector, MemoryPromptInjector
-from .service import BookuMemoryService
+from .event_handler import MemoryFlashbackInjector
+from .service import BookuMemoryService, sync_booku_memory_actor_reminder
 
 logger = get_logger("booku_memory_plugin")
 
@@ -29,6 +29,18 @@ class BookuMemoryAgentPlugin(BasePlugin):
     configs: list[type] = [BookuMemoryConfig]
     dependent_components: list[str] = []
 
+    async def on_plugin_loaded(self) -> None:
+        """插件加载后同步 actor reminder。"""
+
+        await sync_booku_memory_actor_reminder(self)
+
+    async def on_plugin_unloaded(self) -> None:
+        """插件卸载时清理 actor reminder。"""
+
+        from src.core.prompt import get_system_reminder_store
+
+        get_system_reminder_store().delete("actor", "booku_memory")
+
     def get_components(self) -> list[type]:
         """返回插件组件列表。"""
         if isinstance(self.config, BookuMemoryConfig):
@@ -41,7 +53,6 @@ class BookuMemoryAgentPlugin(BasePlugin):
                     BookuMemoryWriteAgent,
                     BookuMemoryReadAgent,
                     BookuMemoryService,
-                    MemoryPromptInjector,
                     MemoryFlashbackInjector,
                 ]
 
@@ -50,7 +61,6 @@ class BookuMemoryAgentPlugin(BasePlugin):
                 BookuMemoryCreateTool,
                 BookuMemoryEditInherentTool,
                 BookuMemoryService,
-                MemoryPromptInjector,
                 MemoryFlashbackInjector,
             ]
 
@@ -59,6 +69,5 @@ class BookuMemoryAgentPlugin(BasePlugin):
             BookuMemoryWriteAgent,
             BookuMemoryReadAgent,
             BookuMemoryService,
-            MemoryPromptInjector,
             MemoryFlashbackInjector,
         ]
