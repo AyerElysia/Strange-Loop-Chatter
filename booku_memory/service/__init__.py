@@ -2,11 +2,17 @@
 
 from .metadata_repository import BookuMemoryMetadataRepository, BookuMemoryRecord
 from .result_deduplicator import ResultDeduplicator
-from .booku_memory_service import BookuMemoryService
+from .booku_memory_service import (
+    BookuMemoryService,
+    build_booku_memory_actor_reminder,
+    sync_booku_memory_actor_reminder,
+)
 
 __all__ = [
     "BookuMemoryMetadataRepository",
     "BookuMemoryRecord",
     "ResultDeduplicator",
     "BookuMemoryService",
+    "build_booku_memory_actor_reminder",
+    "sync_booku_memory_actor_reminder",
 ]

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, AsyncGenerator
+from typing import AsyncGenerator, TypeGuard
 
 from src.core.components.base import Wait, Success, Failure, Stop
+from src.core.models.message import Message
 from src.core.models.stream import ChatStream
+from src.kernel.logger import Logger
 from src.kernel.llm import LLMPayload, ROLE, Text
 
+from .type_defs import DefaultChatterRuntime, LLMConversationState, LLMResponseLike
 from .tool_flow import append_suspend_payload_if_action_only, process_tool_calls
 
 
@@ -34,12 +37,12 @@ class _ToolCallWorkflowPhase(str, Enum):
 class _EnhancedWorkflowRuntime:
     """enhanced 模式运行时状态。"""
 
-    response: Any
+    response: LLMConversationState
     phase: _ToolCallWorkflowPhase
     history_merged: bool
-    unreads: list[Any]
+    unreads: list[Message]
     cross_round_seen_signatures: set[str]
-    unread_msgs_to_flush: list[Any]
+    unread_msgs_to_flush: list[Message]
 
     def has_tool_result_tail(self) -> bool:
         """当前上下文尾部是否为 TOOL_RESULT。"""
@@ -47,11 +50,23 @@ class _EnhancedWorkflowRuntime:
         return bool(payloads and payloads[-1].role == ROLE.TOOL_RESULT)
 
 
+def _is_response_like(response: LLMConversationState) -> TypeGuard[LLMResponseLike]:
+    """判断当前会话状态是否已经进入响应阶段。"""
+    return hasattr(response, "call_list") and hasattr(response, "message")
+
+
+def _require_response(response: LLMConversationState) -> LLMResponseLike:
+    """将会话状态收窄为已完成的 LLM 响应。"""
+    if _is_response_like(response):
+        return response
+    raise TypeError("当前会话状态尚未进入响应阶段")
+
+
 def _transition(
     *,
     rt: _EnhancedWorkflowRuntime,
     to_phase: _ToolCallWorkflowPhase,
-    logger: Any,
+    logger: Logger,
     reason: str,
 ) -> None:
     """执行状态机相位切换，并记录调试日志。"""
@@ -64,9 +79,9 @@ def _transition(
 
 
 async def run_enhanced(
-    chatter: Any,
+    chatter: DefaultChatterRuntime,
     chat_stream: ChatStream,
-    logger: Any,
+    logger: Logger,
     pass_call_name: str,
     stop_call_name: str,
     send_text_call_name: str,
@@ -74,7 +89,7 @@ async def run_enhanced(
 ) -> AsyncGenerator[Wait | Success | Failure | Stop, None]:
     """enhanced 模式执行流程。"""
     try:
-        request = chatter.create_request("actor")
+        request = chatter.create_request("actor", with_reminder="actor")
     except (ValueError, KeyError) as error:
         logger.error(f"获取模型配置失败: {error}")
         yield Failure(f"模型配置错误: {error}")
@@ -171,11 +186,13 @@ async def run_enhanced(
             continue
 
         if rt.phase == _ToolCallWorkflowPhase.TOOL_EXEC:
-            if not rt.response.call_list:
-                if rt.response.message and rt.response.message.strip():
+            llm_response = _require_response(rt.response)
+
+            if not llm_response.call_list:
+                if llm_response.message and llm_response.message.strip():
                     logger.warning(
                         "LLM 返回了纯文本而非 tool call: "
-                        f"{rt.response.message[:100]}"
+                        f"{llm_response.message[:100]}"
                     )
                     yield Stop(0)
                     return
@@ -183,16 +200,16 @@ async def run_enhanced(
                 _transition(rt=rt, to_phase=_ToolCallWorkflowPhase.WAIT_USER, logger=logger, reason="no call_list")
                 continue
 
-            logger.info(f"本轮调用列表：{[call.name for call in rt.response.call_list or []]}")
-            for call in rt.response.call_list or []:
+            logger.info(f"本轮调用列表：{[call.name for call in llm_response.call_list or []]}")
+            for call in llm_response.call_list or []:
                 args = call.args if isinstance(call.args, dict) else {}
                 reason = args.pop("reason", "未提供原因")
                 logger.info(f"LLM 调用 {call.name}，原因: {reason}，参数: {args}")
 
             call_outcome = await process_tool_calls(
                 stream_id=chat_stream.stream_id,
-                calls=rt.response.call_list or [],
-                response=rt.response,
+                calls=llm_response.call_list or [],
+                response=llm_response,
                 run_tool_call=chatter.run_tool_call,
                 usable_map=usable_map,
                 trigger_msg=rt.unreads[-1] if rt.unreads else None,
@@ -213,8 +230,8 @@ async def run_enhanced(
                 continue
 
             append_suspend_payload_if_action_only(
-                calls=rt.response.call_list or [],
-                response=rt.response,
+                calls=llm_response.call_list or [],
+                response=llm_response,
                 suspend_text=suspend_text,
                 logger=logger,
             )
@@ -227,9 +244,9 @@ async def run_enhanced(
 
 
 async def run_classical(
-    chatter: Any,
+    chatter: DefaultChatterRuntime,
     chat_stream: ChatStream,
-    logger: Any,
+    logger: Logger,
     pass_call_name: str,
     stop_call_name: str,
     send_text_call_name: str,
@@ -237,7 +254,7 @@ async def run_classical(
 ) -> AsyncGenerator[Wait | Success | Failure | Stop, None]:
     """classical 模式执行流程。"""
     try:
-        base_request = chatter.create_request("actor")
+        base_request = chatter.create_request("actor", with_reminder="actor")
     except (ValueError, KeyError) as error:
         logger.error(f"获取模型配置失败: {error}")
         yield Failure(f"模型配置错误: {error}")
@@ -274,7 +291,7 @@ async def run_classical(
             yield Wait()
             continue
 
-        request = chatter.create_request("actor")
+        request = chatter.create_request("actor", with_reminder="actor")
         request.add_payload(
             LLMPayload(
                 ROLE.SYSTEM,

@@ -40,7 +40,7 @@ class BookuMemoryConfig(BaseConfig):
         )
         inject_system_prompt: bool = Field(
             default=True,
-            description="是否在 default_chatter 系统提示 extra_info 板块注入记忆引导语",
+            description="是否将记忆引导语同步到 default_chatter 的 actor system reminder",
         )
 
     @config_section("storage")

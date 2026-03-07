@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import json_repair
 
 from src.core.config import get_core_config
 from src.core.models.stream import ChatStream
 from src.core.prompt import get_prompt_manager
+from src.kernel.logger import Logger
 from src.kernel.llm import LLMPayload, ROLE, Text
+from src.kernel.llm import LLMRequest
 from src.kernel.llm.token_counter import count_text_tokens
+
+from .type_defs import SubAgentDecision, SupportsRequestCreation
 
 
 def _safe_count_tokens(text: str, model_identifier: str) -> int:
@@ -65,7 +67,7 @@ def _trim_text_suffix_by_budget(
 
 
 def _fit_unreads_to_sub_agent_budget(
-    request: Any,
+    request: LLMRequest,
     unreads_text: str,
 ) -> str:
     """将未读消息压缩到 sub-agent 可控 token 预算内。"""
@@ -91,15 +93,20 @@ def _fit_unreads_to_sub_agent_budget(
 
 
 async def decide_should_respond(
-    chatter: Any,
-    logger: Any,
+    chatter: SupportsRequestCreation,
+    logger: Logger,
     unreads_text: str,
     chat_stream: ChatStream,
     fallback_prompt: str,
-) -> dict[str, Any]:
+) -> SubAgentDecision:
     """执行子代理决策并返回 should_respond 结果。"""
     try:
-        request = chatter.create_request("sub_actor", "sub_agent", max_context=5)
+        request = chatter.create_request(
+            "sub_actor",
+            "sub_agent",
+            max_context=5,
+            with_reminder="sub_actor",
+        )
     except (ValueError, KeyError):
         return {"should_respond": True, "reason": "未找到 sub_actor 配置，默认响应"}
 
