@@ -611,16 +611,7 @@ class MessageConverter:
                     )
                     descriptions.append((idx, description))
                     
-                    # 保存媒体信息到数据库，供后续流重放查询
-                    if description:
-                        # 计算哈希值作为标识
-                        media_hash = manager._compute_hash(media["data"])
-                        await manager.save_media_info(
-                            media_hash=media_hash,
-                            media_type=media["type"],
-                            description=description,
-                            vlm_processed=True
-                        )
+                    # recognize_media 内部已经调用了 save_media_info，无需重复保存
                 except Exception as e:
                     logger.warning(f"识别{media['type']}失败: {e}")
                     descriptions.append((idx, None))
