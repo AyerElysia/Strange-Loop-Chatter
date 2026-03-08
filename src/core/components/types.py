@@ -39,10 +39,12 @@ class ComponentType(Enum):
     PLUGIN = "plugin"
 
 
-class EventType(Enum):
+class EventType(str, Enum):
     """事件类型枚举。
 
     定义事件处理器可以订阅的系统事件。
+
+    该枚举继承自 ``str``，以便可直接作为内核事件总线的事件名使用。
     """
 
     ON_START = "on_start"

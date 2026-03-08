@@ -59,6 +59,11 @@ class TestEventType:
         assert EventType.ON_COMPONENT_UNLOADED.value == "on_component_unloaded"
         assert EventType.CUSTOM.value == "custom"
 
+    def test_event_type_is_usable_as_event_name_string(self):
+        """测试 EventType 可直接作为事件名称字符串使用。"""
+        assert isinstance(EventType.ON_ALL_PLUGIN_LOADED, str)
+        assert EventType.ON_ALL_PLUGIN_LOADED == "on_all_plugin_loaded"
+
 
 class TestComponentState:
     """测试 ComponentState 枚举。"""

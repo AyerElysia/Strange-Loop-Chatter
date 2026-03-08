@@ -12,6 +12,7 @@ import asyncio
 
 import pytest
 
+from src.core.components.types import EventType
 from src.kernel.event import EventBus, EventDecision
 
 
@@ -193,6 +194,23 @@ class TestEventBusPublish:
 
         with pytest.raises(ValueError, match="key 必须全部为 str"):
             await bus.publish("e", {1: "x"})  # type: ignore[dict-item]
+
+    @pytest.mark.asyncio
+    async def test_publish_accepts_event_type_str_enum(self) -> None:
+        bus = EventBus()
+
+        async def handler(event_name: str, params: dict):
+            params["handled"] = event_name
+            return (EventDecision.SUCCESS, params)
+
+        bus.subscribe(EventType.ON_ALL_PLUGIN_LOADED, handler)
+
+        decision, out = await bus.publish(
+            EventType.ON_ALL_PLUGIN_LOADED,
+            {"handled": ""},
+        )
+        assert decision == EventDecision.SUCCESS
+        assert out == {"handled": EventType.ON_ALL_PLUGIN_LOADED.value}
 
     @pytest.mark.asyncio
     async def test_publish_sync_returns_task(self) -> None:
