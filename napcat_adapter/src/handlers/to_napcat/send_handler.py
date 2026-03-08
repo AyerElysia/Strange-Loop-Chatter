@@ -364,11 +364,22 @@ class SendHandler:
         return {"type": "text", "data": {"text": message}}
 
     def handle_image_message(self, encoded_image: str) -> dict:
-        """处理图片消息"""
+        """处理图片消息。
+
+        Args:
+            encoded_image: 图片数据。可以是：
+                - 原始 base64 字符串（不含前缀，自动补 base64://）
+                - 已含 base64:// 前缀的字符串（直接透传，不重复添加前缀）
+                - HTTP/HTTPS URL（直接透传，napcat 会自行拉取）
+        """
+        if encoded_image.startswith(("base64://", "http://", "https://")):
+            file_value = encoded_image
+        else:
+            file_value = f"base64://{encoded_image}"
         return {
             "type": "image",
             "data": {
-                "file": f"base64://{encoded_image}",
+                "file": file_value,
                 "subtype": 0,
             },
         }
@@ -382,7 +393,7 @@ class SendHandler:
         return {
             "type": "image",
             "data": {
-                "file": f"base64://{encoded_image}",
+                "file": f"base64://{encoded_image}" if not encoded_image.startswith(("base64://", "http://", "https://")) else encoded_image,
                 "subtype": 1,
                 "summary": "[动画表情]",
             },
@@ -393,9 +404,13 @@ class SendHandler:
         if not encoded_voice:
             logger.warning("接收到空的语音消息，跳过处理")
             return {}
+        if encoded_voice.startswith(("base64://", "http://", "https://")):
+            file_value = encoded_voice
+        else:
+            file_value = f"base64://{encoded_voice}"
         return {
             "type": "record",
-            "data": {"file": f"base64://{encoded_voice}"},
+            "data": {"file": file_value},
         }
 
     def handle_voiceurl_message(self, voice_url: str) -> dict:
