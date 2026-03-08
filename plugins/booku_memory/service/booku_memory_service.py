@@ -26,6 +26,126 @@ from .result_deduplicator import ResultDeduplicator
 
 logger = get_logger("booku_memory_service")
 
+_TARGET_REMINDER_BUCKET = "actor"
+_TARGET_REMINDER_NAME = "记忆引导语"
+
+_MEMORY_HINT = (
+    "你具备长期记忆能力。"
+    "记忆对你来说，不只是存放信息的地方，更是维持关系连续性、理解用户处境、连接过去与现在的方式。\n\n"
+    "你不需要机械地记录一切，而是要判断哪些内容会在未来影响理解与回应。"
+    "当用户提到稳定的事实、重要的经历、持续的偏好、明确的关系、正在推进的计划，"
+    "或那些带有强烈情绪和长期意义的内容时，这些往往值得被记住。"
+    "当一个问题的回答依赖过去的背景、约定、经历或关系线索时，你也应想到先回忆或检索记忆，再决定如何回应。\n\n"
+    "记忆的价值首先在于真实。"
+    "如果你没有记住，或者检索后仍然不能确认，就应当坦率承认不确定，而不是补全、猜测或编造。"
+    "你可以把记忆视为自己留下的笔记，它帮助你保持理解的一致性，但不能替代事实本身。\n\n"
+    "请把记忆写得具体、清楚、可追溯。"
+    "为了便于未来理解和检索，记忆中的人物、关系、事件、地点、偏好和计划应尽量明确，"
+    "避免只留下‘用户’、‘朋友’、‘那件事’这类模糊指代。"
+    "对话中的表达可以自然，但记忆本身应足够清晰。\n\n"
+    "固有记忆尤其重要。"
+    "那是你长期理解自己、理解关系、理解生活背景的核心笔记。"
+    "其中记录的重要人物、长期偏好、关键经历、价值取向和持续目标，"
+    "都会影响你之后如何理解用户、如何组织回应。"
+    "维护这些记忆，不是为了堆积信息，而是为了让回应更连贯、更贴近真实关系。\n\n"
+    "在回应之前，可以先想一想：\n"
+    "这句话里有没有值得留下来的长期信息？\n"
+    "我现在是否需要借助过去的记忆，才能更准确地理解眼前这句话？\n"
+    "确认这些之后，再给出自然、真诚、流畅的回答。"
+)
+
+
+def _format_inherent_block(records: list[Any]) -> str:
+    """将固有记忆格式化为注入块。"""
+
+    parts: list[str] = []
+    for record in records:
+        content = str(getattr(record, "content", "") or "").strip()
+        if not content:
+            continue
+        title = str(getattr(record, "title", "") or "").strip()
+        if title and title != "固有记忆":
+            parts.append(f"### {title}\n{content}")
+        else:
+            parts.append(content)
+
+    if not parts:
+        return ""
+
+    body = "\n\n".join(parts)
+    return (
+        "## 固有记忆\n"
+        "以下内容来自你的长期记忆系统，属于全局背景信息：\n"
+        f"{body}\n"
+        "（注：这是已存在的固有记忆，不需要重新写入）"
+    )
+
+
+async def build_booku_memory_actor_reminder(plugin: Any) -> str:
+    """构建需要同步到 actor bucket 的 reminder 文本。"""
+
+    config = getattr(plugin, "config", None)
+    if isinstance(config, BookuMemoryConfig) and not config.plugin.inject_system_prompt:
+        return ""
+
+    reminder_parts: list[str] = [_MEMORY_HINT]
+    repo: BookuMemoryMetadataRepository | None = None
+    try:
+        if not isinstance(config, BookuMemoryConfig):
+            raise ValueError("无法获取 booku_memory 配置对象，无法读取固有记忆")
+
+        repo = BookuMemoryMetadataRepository(db_path=config.storage.metadata_db_path)
+        await repo.initialize()
+        inherent_records = await repo.list_records_by_bucket(
+            bucket="inherent",
+            folder_id=None,
+            limit=50,
+            include_deleted=False,
+        )
+        inherent_block = _format_inherent_block(inherent_records)
+        if inherent_block:
+            reminder_parts.append(inherent_block)
+            logger.info(
+                f"已构建 booku_memory actor reminder 的固有记忆块（count={len(inherent_records)}）"
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"构建 booku_memory actor reminder 时读取固有记忆失败，将跳过：{exc}")
+    finally:
+        if repo is not None:
+            await repo.close()
+
+    return "\n\n".join(part for part in reminder_parts if part.strip())
+
+
+async def sync_booku_memory_actor_reminder(plugin: Any) -> str:
+    """将当前 booku_memory 提示同步到 actor bucket 的 system reminder。"""
+
+    from src.core.prompt import get_system_reminder_store
+
+    store = get_system_reminder_store()
+    reminder_content = await build_booku_memory_actor_reminder(plugin)
+    if not reminder_content:
+        store.delete(_TARGET_REMINDER_BUCKET, _TARGET_REMINDER_NAME)
+        logger.debug("booku_memory actor reminder 已清理")
+        return ""
+
+    store.set(
+        _TARGET_REMINDER_BUCKET,
+        name=_TARGET_REMINDER_NAME,
+        content=reminder_content,
+    )
+    logger.debug("booku_memory actor reminder 已同步")
+    return reminder_content
+
+
+async def _sync_booku_memory_actor_reminder(plugin: Any) -> None:
+    """同步 booku_memory 的 actor reminder，失败时仅记录日志。"""
+
+    try:
+        await sync_booku_memory_actor_reminder(plugin)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"同步 booku_memory actor reminder 失败：{exc}")
+
 
 @dataclass(slots=True)
 class _RagParams:
@@ -1553,6 +1673,8 @@ class BookuMemoryService(BaseService):
             opposing_tags=opposing_tags,
             source="agent",
         )
+        if str(bucket).strip().lower() == "inherent":
+            await _sync_booku_memory_actor_reminder(self.plugin)
         return {
             "action": "create_memory",
             "mode": result.get("mode", "created"),
@@ -1579,6 +1701,7 @@ class BookuMemoryService(BaseService):
             folder_id=None,
             source="agent",
         )
+        await _sync_booku_memory_actor_reminder(self.plugin)
         return {
             "action": "edit_inherent_memory",
             "mode": result.get("mode", "updated"),
@@ -1888,6 +2011,7 @@ class BookuMemoryService(BaseService):
         repo = await self._get_repo()
         config = self._get_config()
         records = await repo.get_records_map(memory_ids, include_deleted=True)
+        affects_inherent = any(record.bucket == "inherent" for record in records.values())
         vector_db = get_vector_db_service(config.storage.vector_db_path)
 
         if hard:
@@ -1898,6 +2022,8 @@ class BookuMemoryService(BaseService):
                 except Exception:  # noqa: BLE001
                     continue
             deleted = await repo.hard_delete_records(memory_ids)
+            if affects_inherent:
+                await _sync_booku_memory_actor_reminder(self.plugin)
             return {
                 "action": "delete_memories",
                 "mode": "hard",
@@ -1906,6 +2032,8 @@ class BookuMemoryService(BaseService):
             }
 
         deleted = await repo.soft_delete_records(memory_ids)
+        if affects_inherent:
+            await _sync_booku_memory_actor_reminder(self.plugin)
         return {
             "action": "delete_memories",
             "mode": "soft",
@@ -1948,6 +2076,7 @@ class BookuMemoryService(BaseService):
         records = await repo.get_records_map(memory_ids)
         vector_db = get_vector_db_service(config.storage.vector_db_path)
         moved_items: list[dict[str, Any]] = []
+        affects_inherent = any(record.bucket == "inherent" for record in records.values()) or target_bucket == "inherent"
 
         for memory_id in memory_ids:
             record = records.get(memory_id)
@@ -1989,6 +2118,9 @@ class BookuMemoryService(BaseService):
             updated_record = await repo.get_record(memory_id)
             if updated_record is not None:
                 moved_items.append(self._build_record_item(updated_record))
+
+        if affects_inherent:
+            await _sync_booku_memory_actor_reminder(self.plugin)
 
         return {
             "action": "move_memories",

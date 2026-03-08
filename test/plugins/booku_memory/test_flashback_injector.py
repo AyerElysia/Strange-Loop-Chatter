@@ -19,7 +19,9 @@ from plugins.booku_memory.flashback import (
     should_trigger,
     weighted_choice,
 )
+from plugins.booku_memory.plugin import BookuMemoryAgentPlugin
 from plugins.booku_memory.service.metadata_repository import BookuMemoryMetadataRepository
+from src.core.prompt import get_system_reminder_store, reset_system_reminder_store
 
 
 def test_clamp_probability() -> None:
@@ -272,14 +274,14 @@ async def test_flashback_injector_dedup_in_cooldown_window(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_memory_prompt_injector_injects_inherent_into_system_prompt(tmp_path: Path) -> None:
+async def test_sync_booku_memory_actor_reminder_writes_actor_reminder(tmp_path: Path) -> None:
     from plugins.booku_memory.config import BookuMemoryConfig
-    from plugins.booku_memory.event_handler import MemoryPromptInjector
-    from src.kernel.event import EventDecision
+    from plugins.booku_memory.service import sync_booku_memory_actor_reminder
 
     db_path = str(tmp_path / "system_inherent.db")
     repo = BookuMemoryMetadataRepository(db_path)
     await repo.initialize()
+    reset_system_reminder_store()
 
     await repo.upsert_record(
         memory_id="inherent_1",
@@ -302,55 +304,75 @@ async def test_memory_prompt_injector_injects_inherent_into_system_prompt(tmp_pa
     class _DummyPlugin:
         config = cfg
 
-    handler = MemoryPromptInjector(plugin=_DummyPlugin())
-
-    params: dict[str, Any] = {
-        "name": "default_chatter_system_prompt",
-        "template": "{extra_info}",
-        "values": {"extra_info": ""},
-        "policies": {},
-        "strict": False,
-    }
-
     try:
-        decision, out = await handler.execute("on_prompt_build", params)
+        reminder = await sync_booku_memory_actor_reminder(_DummyPlugin())
     finally:
         await repo.close()
-        repo_from_handler = cast(
-            BookuMemoryMetadataRepository | None,
-            getattr(handler, "_repo", None),
-        )
-        if repo_from_handler is not None:
-            await repo_from_handler.close()
 
-    assert decision is EventDecision.SUCCESS
-    extra_info = out["values"]["extra_info"]
-    assert "## 记忆引导语" in extra_info
-    assert "## 固有记忆" in extra_info
-    assert "这是固有记忆内容" in extra_info
+    stored = get_system_reminder_store().get("actor", names=["booku_memory"])
+    assert "## 记忆引导语" in reminder
+    assert "## 固有记忆" in reminder
+    assert "这是固有记忆内容" in reminder
+    assert stored == "[booku_memory]\n" + reminder
 
 
 @pytest.mark.asyncio
-async def test_memory_prompt_injector_skips_other_templates() -> None:
+async def test_sync_booku_memory_actor_reminder_clears_when_disabled(tmp_path: Path) -> None:
     from plugins.booku_memory.config import BookuMemoryConfig
-    from plugins.booku_memory.event_handler import MemoryPromptInjector
-    from src.kernel.event import EventDecision
+    from plugins.booku_memory.service import sync_booku_memory_actor_reminder
+
+    reset_system_reminder_store()
+    get_system_reminder_store().set("actor", name="booku_memory", content="old")
 
     cfg = BookuMemoryConfig()
-    cfg.plugin.inject_system_prompt = True
+    cfg.storage.metadata_db_path = str(tmp_path / "disabled.db")
+    cfg.plugin.inject_system_prompt = False
 
     class _DummyPlugin:
         config = cfg
 
-    handler = MemoryPromptInjector(plugin=_DummyPlugin())
-    params: dict[str, Any] = {
-        "name": "other_system_prompt",
-        "template": "{extra_info}",
-        "values": {"extra_info": "keep"},
-        "policies": {},
-        "strict": False,
-    }
+    reminder = await sync_booku_memory_actor_reminder(_DummyPlugin())
 
-    decision, out = await handler.execute("on_prompt_build", params)
-    assert decision is EventDecision.SUCCESS
-    assert out["values"]["extra_info"] == "keep"
+    assert reminder == ""
+    assert get_system_reminder_store().get("actor", names=["booku_memory"]) == ""
+
+
+@pytest.mark.asyncio
+async def test_booku_memory_plugin_load_and_unload_manage_actor_reminder(tmp_path: Path) -> None:
+    from plugins.booku_memory.config import BookuMemoryConfig
+
+    db_path = str(tmp_path / "plugin_lifecycle.db")
+    repo = BookuMemoryMetadataRepository(db_path)
+    await repo.initialize()
+    reset_system_reminder_store()
+
+    await repo.upsert_record(
+        memory_id="inherent_2",
+        title="固有记忆",
+        folder_id="global",
+        bucket="inherent",
+        content="插件生命周期固有记忆",
+        source="unit_test",
+        novelty_energy=0.1,
+        tags=[],
+        core_tags=[],
+        diffusion_tags=[],
+        opposing_tags=[],
+    )
+
+    cfg = BookuMemoryConfig()
+    cfg.storage.metadata_db_path = db_path
+    cfg.plugin.inject_system_prompt = True
+
+    plugin = BookuMemoryAgentPlugin(config=cfg)
+
+    try:
+        await plugin.on_plugin_loaded()
+        stored = get_system_reminder_store().get("actor", names=["booku_memory"])
+        assert "## 记忆引导语" in stored
+        assert "插件生命周期固有记忆" in stored
+
+        await plugin.on_plugin_unloaded()
+        assert get_system_reminder_store().get("actor", names=["booku_memory"]) == ""
+    finally:
+        await repo.close()

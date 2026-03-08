@@ -1,5 +1,6 @@
 """测试 src.core.components.base.agent 模块。"""
 
+from typing import cast
 from typing import Annotated
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,6 +9,8 @@ import pytest
 from src.core.components.base.agent import BaseAgent
 from src.core.components.base.tool import BaseTool
 from src.core.components.types import ChatType
+from src.core.prompt.system_reminder import get_system_reminder_store, reset_system_reminder_store
+from src.kernel.llm import LLMPayload, Text
 from src.kernel.llm import ROLE
 
 
@@ -133,6 +136,28 @@ class TestBaseAgent:
         )
 
         assert request.payloads == []
+
+    def test_create_llm_request_with_reminder(self, mock_plugin):
+        """测试创建 LLMRequest 时可自动登记 system reminder。"""
+        agent = ConcreteAgent(stream_id="stream_123", plugin=mock_plugin)
+        reset_system_reminder_store()
+        store = get_system_reminder_store()
+        store.set("actor", "goal", "先给结论")
+
+        request = agent.create_llm_request(
+            model_set=[],
+            request_name="agent_test",
+            with_reminder="actor",
+        )
+        request.add_payload(LLMPayload(ROLE.SYSTEM, Text("sys")))
+        request.add_payload(LLMPayload(ROLE.USER, Text("hello")))
+
+        assert request.payloads[0].role == ROLE.SYSTEM
+        assert request.payloads[1].role == ROLE.USER
+        assert cast(Text, request.payloads[1].content[0]).text == "<system_reminder>\n[goal]\n先给结论\n</system_reminder>"
+        assert cast(Text, request.payloads[1].content[1]).text == "hello"
+
+        reset_system_reminder_store()
 
     @pytest.mark.asyncio
     async def test_execute_local_usable_success(self, mock_plugin):

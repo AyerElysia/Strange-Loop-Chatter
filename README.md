@@ -58,34 +58,8 @@ Neo-MoFox 是一个全新重构的 AI 聊天机器人框架，它的目标不仅
 - **内存**: 建议 4GB 以上
 
 ### 安装步骤
+请参考**Neo-MoFox 文档**中的 [安装指南](https://docs.mofox-sama.com/docs/guides/) 获取详细的安装和配置说明。
 
-1. **克隆项目**
-```bash
-git clone https://github.com/MoFox-Studio/Neo-MoFox.git
-cd Neo-MoFox
-```
-
-2. **安装依赖**
-```bash
-# 推荐使用 uv (更快的包管理器)
-pip install uv
-uv sync
-```
-
-3. **配置机器人**
-```bash
-# 首次运行会自动生成配置文件
-uv run main.py
-```
-
-4. **编辑配置**
-   - 修改 `config/model.toml` 配置你的 AI 模型
-   - 修改 `config/core.toml`配置平台连接信息/自定义角色设定
-
-5. **启动运行**
-```bash
-uv run main.py
-```
 
 ---
 
@@ -140,7 +114,7 @@ A: 可以！配置相应的平台适配器即可同时在 QQ、Discord、Telegra
 
 ## 🙏 致谢
 
-Neo-MoFox 是 [MoFox-Core](https://github.com/MoFox-Studio/MoFox_Core) 的全新重构版本，感谢所有为这个项目做出贡献的开发者和用户。
+Neo-MoFox 是 [MoFox-Core](https://github.com/MoFox-Studio/MoFox-Core) 的全新重构版本，感谢所有为这个项目做出贡献的开发者和用户。
 
 ---
 

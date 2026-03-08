@@ -105,7 +105,9 @@ class MessageConverter:
         Raises:
             ValueError: envelope 缺少必要字段（message_info / message_segment）
         """
+        # 从信封中提取 message_info，这是所有消息的元数据核心
         message_info: MessageInfoPayload = envelope.get("message_info")  # type: ignore[assignment]
+        # 如果没有提供，说明数据格式不规范，抛出异常提醒上层调用
         if message_info is None:
             raise ValueError("MessageEnvelope 缺少 message_info 字段")
 
@@ -117,7 +119,8 @@ class MessageConverter:
         if raw_segments is None:
             raise ValueError("MessageEnvelope 缺少 message_segment/message_chain 字段")
 
-        # 规范化：单个 SegPayload → 列表
+        # 规范化输入，适配单个段或段列表两种情况
+        # mofox-wire 有时会直接用 dict 表示一个段，这里统一转为 list
         segments: list[SegPayload]
         if isinstance(raw_segments, dict):
             segments = [raw_segments]  # type: ignore[list-item]
@@ -127,7 +130,7 @@ class MessageConverter:
         # 递归解析段列表
         result = self._parse_segments(segments, depth=0)
         
-        # 如果有媒体，检查该聊天流是否需要 VLM 识别
+        # 如果解析过程中发现有媒体资源，则后续需要考虑是否运行视觉语言模型识别
         if result.media:
             # 提前提取 stream_id 用于判断是否跳过 VLM
             stream_id = extract_stream_id(message_info)
@@ -137,12 +140,14 @@ class MessageConverter:
                 result = await self._recognize_media_with_manager(result)
 
         # 确定消息类型
+        # 根据最终解析结果决定消息类型，比如 TEXT/IMAGE 等
         message_type = self._infer_message_type(result)
 
         # 构建内容
         content = self._build_content(result, message_type)
 
         # 提取用户/群信息
+        # 提取发送者及群组信息，注意 user_info 可能为空，因此使用空 dict 作为 fallback
         user_info = message_info.get("user_info") or {}
         group_info = message_info.get("group_info")
         group_id = group_info.get("group_id") if group_info else None
@@ -155,6 +160,7 @@ class MessageConverter:
             sender_role = raw_role.value
 
         # 提取 extra 元数据
+        # any 附加字段允许上层扩展，直接透传到 Message 对象
         extra_data = message_info.get("extra") or {}
         
         return Message(
@@ -232,13 +238,16 @@ class MessageConverter:
         for m in media_list:
             seg_list.append({"type": m.get("type", "unknown"), "data": m.get("data", "")})
 
+        # 万一消息内容完全为空，至少构造一个空文本段，以避免适配器解析异常
         if not seg_list:
             seg_list.append({"type": "text", "data": ""})
 
         # 构建 message_info
+        # 构建要发送给适配器的 message_info 字段基础结构
         msg_info: MessageInfoPayload = {
             "platform": message.platform,
             "message_id": message.message_id,
+            # 时间戳尽量使用已存在值，否则用当前时间
             "time": message.time if isinstance(message.time, float) else time.time(),
         }
 
@@ -255,6 +264,7 @@ class MessageConverter:
 
             stream_info = await get_stream_manager().get_stream_info(message.stream_id)
 
+        # 若目标用户未指定并且不是群聊，则尝试从流信息中回推 person_id -> user_id
         if not target_user_id and message.chat_type != "group" and stream_info:
             person_id = stream_info.get("person_id")
             if isinstance(person_id, str) and person_id:
@@ -313,14 +323,10 @@ class MessageConverter:
         segments: list[SegPayload],
         depth: int = 0,
     ) -> _ParseResult:
-        """递归解析 SegPayload 列表。
+        """递归地展开并解析段列表。
 
-        Args:
-            segments: 待解析的段列表
-            depth: 当前递归深度
-
-        Returns:
-            _ParseResult: 解析聚合结果
+        depth 参数用于防止恶意或错误数据造成无限递归。
+        返回值为 _ParseResult 对象，包含文本、媒体、@、reply 等信息。
         """
         result = _ParseResult()
 
@@ -331,10 +337,12 @@ class MessageConverter:
 
         for seg in segments:
             try:
+                # 每个段交给单段处理器；异常不会中断整个列表解析
                 self._parse_single_segment(seg, result, depth)
             except Exception as e:
                 seg_type = seg.get("type", "unknown") if isinstance(seg, dict) else "invalid"
                 logger.warning(f"解析消息段失败 (type={seg_type}): {e}")
+                # 记录错误位置，避免丢失整体文本结构
                 result.text_parts.append(f"[解析失败:{seg_type}]")
 
         return result
@@ -352,6 +360,7 @@ class MessageConverter:
             result: 聚合结果（原地修改）
             depth: 当前递归深度
         """
+        # 非 dict 类型的数据说明适配器异常，跳过处理同时记录警告
         if not isinstance(seg, dict):
             logger.warning(f"非法消息段类型: {type(seg)}")
             return
@@ -359,6 +368,7 @@ class MessageConverter:
         seg_type: str = seg.get("type", "")
         data = seg.get("data", "")
 
+        # 分发到专用 handler，便于各类型段独立演进
         match seg_type:
             case "text":
                 self._handle_text(data, result)
@@ -377,6 +387,7 @@ class MessageConverter:
             case "seglist":
                 self._handle_seglist(data, result, depth)
             case _:
+                # 未知类型统一记录，后续可能用于统计或插件扩展
                 self._handle_unknown(seg_type, data, result)
 
     # ─── 段处理器 ─────────────────────────────
@@ -425,7 +436,7 @@ class MessageConverter:
                 "data": normalized_data,
             })
             
-            # 添加表情包描述占位符，等待异步识别
+            # 表情包同样支持 VLM 识别，文本先占位
             result.text_parts.append("[表情包]")
         elif isinstance(data, list):
             result.media.append({"type": "emoji", "data": str(data)})
@@ -548,11 +559,13 @@ class MessageConverter:
 
         优先级：如果有媒体，按第一个媒体类型决定；否则为 TEXT。
         """
+        # 无媒体时直接判定为文本消息
         if not result.media:
             return MessageType.TEXT
 
         first_media_type = result.media[0].get("type", "")
 
+        # 媒体类型到枚举的映射表，可根据需要扩展
         type_mapping: dict[str, MessageType] = {
             "image": MessageType.IMAGE,
             "emoji": MessageType.EMOJI,
@@ -572,20 +585,22 @@ class MessageConverter:
             更新后的解析结果
         """
         try:
+            # 延迟导入避免循环依赖
             from src.core.managers.media_manager import get_media_manager
             
             manager = get_media_manager()
             
-            # 收集需要识别的媒体
+            # 收集需要识别的媒体（仅图片和表情包）
             media_to_recognize = []
             for i, media in enumerate(result.media):
                 if media["type"] in ("image", "emoji"):
                     media_to_recognize.append((i, media))
             
+            # 早退策略：没有待识别媒体就直接返回原结果
             if not media_to_recognize:
                 return result
             
-            # 批量识别
+            # 批量识别并缓存描述
             descriptions = []
             for idx, media in media_to_recognize:
                 try:
@@ -596,21 +611,12 @@ class MessageConverter:
                     )
                     descriptions.append((idx, description))
                     
-                    # 保存媒体信息到数据库
-                    if description:
-                        # 计算哈希值作为标识
-                        media_hash = manager._compute_hash(media["data"])
-                        await manager.save_media_info(
-                            media_hash=media_hash,
-                            media_type=media["type"],
-                            description=description,
-                            vlm_processed=True
-                        )
+                    # recognize_media 内部已经调用了 save_media_info，无需重复保存
                 except Exception as e:
                     logger.warning(f"识别{media['type']}失败: {e}")
                     descriptions.append((idx, None))
             
-            # 重建 text_parts，替换占位符
+            # 将识别结果应用回 text_parts，替换占位符
             new_text_parts = []
             media_idx = 0
             for part in result.text_parts:
@@ -632,6 +638,7 @@ class MessageConverter:
             result.text_parts = new_text_parts
             
         except Exception as e:
+            # 如果整个识别流程失败，不应阻止消息继续处理，仅记录错误
             logger.error(f"MediaManager 识别失败: {e}", exc_info=True)
         
         return result
@@ -646,6 +653,7 @@ class MessageConverter:
         Returns:
             True 表示应跳过 VLM 识别
         """
+        # 如果查询发生异常则安全起见返回 False
         try:
             from src.core.managers.media_manager import get_media_manager
             return get_media_manager().should_skip_vlm(stream_id)
@@ -659,8 +667,15 @@ class MessageConverter:
         - TEXT 类型: 返回纯文本
         - 含媒体: 返回结构化字典
         """
+        # 文本消息直接提供纯字符串
         if message_type == MessageType.TEXT:
             return result.plain_text
+        
+        # 含媒体时返回一个包含文本和媒体列表的字典，保持兼容性
+        return {
+            "text": result.plain_text,
+            "media": result.media,
+        }
 
         # 含媒体时返回结构化内容
         return {

@@ -25,6 +25,7 @@ from src.kernel.concurrency import get_task_manager
 from src.kernel.logger import get_logger, COLOR
 
 if TYPE_CHECKING:
+    from src.core.prompt import SystemReminderBucket
     from src.core.components.base.action import BaseAction
     from src.core.components.base.agent import BaseAgent
     from src.core.components.base.tool import BaseTool
@@ -435,6 +436,7 @@ class BaseChatter(ABC):
         task: str = "actor",
         request_name: str = "",
         max_context: int | None = None,
+        with_reminder: str | SystemReminderBucket | None = None,
     ) -> "LLMRequest":
         """快速创建 LLM 请求，自动加载任务模型集与上下文管理器。
 
@@ -445,6 +447,7 @@ class BaseChatter(ABC):
             task: 模型任务名称（对应 config/model.toml 中的 task key），默认 "actor"
             request_name: LLM 请求名称，默认使用 chatter_name
             max_context: 上下文最大 payload 数，None 时从 core config 读取
+            with_reminder: 可选的 system reminder bucket；传入后会自动登记到上下文管理器
 
         Returns:
             LLMRequest: 配置好上下文管理器的 LLM 请求对象
@@ -470,11 +473,23 @@ class BaseChatter(ABC):
                 f"timeout={first.get('timeout')}"
             )
 
-        return LLMRequest(
+        request = LLMRequest(
             model_set=model_set,
             request_name=request_name or self.chatter_name,
             context_manager=context_manager,
         )
+
+        if with_reminder is not None:
+            from src.core.prompt import get_system_reminder_store
+
+            reminder_text = get_system_reminder_store().get(with_reminder)
+            if reminder_text:
+                context_manager.reminder(
+                    reminder_text,
+                    wrap_with_system_tag=True,
+                )
+
+        return request
 
     async def inject_usables(self, request: Any) -> "ToolRegistry":
         """将可用工具过滤后注入 LLM 请求，返回工具注册表。

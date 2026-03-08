@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.kernel.llm import (
     EmbeddingRequest,
@@ -11,6 +13,9 @@ from src.kernel.llm import (
     ToolRegistry,
 )
 from src.core.config import get_model_config
+
+if TYPE_CHECKING:
+    from src.core.prompt import SystemReminderBucket
 
 class TaskType(Enum):
     UTILS = "utils"
@@ -27,6 +32,7 @@ def create_llm_request(
     model_set: ModelSet,
     request_name: str = "",
     context_manager: LLMContextManager | None = None,
+    with_reminder: str | SystemReminderBucket | None = None,
 ) -> LLMRequest:
     """创建 LLMRequest 实例
 
@@ -34,15 +40,28 @@ def create_llm_request(
         model_set: 模型集
         request_name: 请求名称（可选）
         context_manager: 上下文管理器（可选）
+        with_reminder: 可选的 system reminder bucket；传入后会自动登记到上下文管理器
 
     Returns:
         LLMRequest 实例
     """
-    return LLMRequest(
+    request = LLMRequest(
         model_set=model_set,
         request_name=request_name,
         context_manager=context_manager,
     )
+
+    if with_reminder is not None and request.context_manager is not None:
+        from src.core.prompt import get_system_reminder_store
+
+        reminder_text = get_system_reminder_store().get(with_reminder)
+        if reminder_text:
+            request.context_manager.reminder(
+                reminder_text,
+                wrap_with_system_tag=True,
+            )
+
+    return request
 
 
 def create_embedding_request(

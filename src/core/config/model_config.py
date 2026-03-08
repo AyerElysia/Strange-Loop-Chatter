@@ -143,7 +143,7 @@ class ModelInfoSection(SectionBase):
         description="是否强制使用流式输出模式",
     )
     max_context: int = Field(
-        default=131072,
+        default=32768,
         description="模型最大输入上下文 token 数",
     )
     tool_call_compat: bool = Field(

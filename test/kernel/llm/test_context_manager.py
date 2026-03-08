@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -140,16 +140,72 @@ def test_context_manager_system_tool_equivalent_add_payload() -> None:
     assert payloads[1].role == ROLE.TOOL
 
 
-def test_context_manager_reminder_creates_first_user() -> None:
+def test_context_manager_reminder_only_registers_until_next_payload() -> None:
     manager = LLMContextManager(max_payloads=20)
     payloads = [LLMPayload(ROLE.SYSTEM, Text("sys"))]
 
-    payloads = manager.reminder(payloads, "你必须先输出结论")
+    manager.reminder("你必须先输出结论")
+
+    assert len(payloads) == 1
+    assert payloads[0].role == ROLE.SYSTEM
+
+    payloads = manager.add_payload(payloads, LLMPayload(ROLE.USER, Text("你好")))
+    assert len(payloads) == 2
+    assert payloads[1].role == ROLE.USER
+    assert cast(Text, payloads[1].content[0]).text == "你必须先输出结论"
+    assert cast(Text, payloads[1].content[1]).text == "你好"
+
+
+def test_context_manager_register_reminder_defers_until_first_user() -> None:
+    manager = LLMContextManager(max_payloads=20)
+    payloads: list[LLMPayload] = []
+
+    manager.reminder("先给结论")
+
+    payloads = manager.add_payload(payloads, LLMPayload(ROLE.SYSTEM, Text("sys")))
+    assert len(payloads) == 1
+    assert payloads[0].role == ROLE.SYSTEM
+
+    payloads = manager.add_payload(payloads, LLMPayload(ROLE.USER, Text("你好")))
+    assert len(payloads) == 2
+    assert payloads[0].role == ROLE.SYSTEM
+    assert payloads[1].role == ROLE.USER
+    assert cast(Text, payloads[1].content[0]).text == "先给结论"
+    assert cast(Text, payloads[1].content[1]).text == "你好"
+
+
+def test_context_manager_reminder_wraps_system_text() -> None:
+    manager = LLMContextManager(max_payloads=20)
+    payloads: list[LLMPayload] = []
+
+    manager.reminder("[goal]\n先给结论", wrap_with_system_tag=True)
+
+    payloads = manager.add_payload(payloads, LLMPayload(ROLE.SYSTEM, Text("sys")))
+    payloads = manager.add_payload(payloads, LLMPayload(ROLE.USER, Text("你好")))
 
     assert len(payloads) == 2
     assert payloads[0].role == ROLE.SYSTEM
     assert payloads[1].role == ROLE.USER
-    assert payloads[1].content[0].text == "你必须先输出结论"
+    assert cast(Text, payloads[1].content[0]).text == "<system_reminder>\n[goal]\n先给结论\n</system_reminder>"
+    assert cast(Text, payloads[1].content[1]).text == "你好"
+
+
+def test_context_manager_reminder_waits_through_tool_until_first_user() -> None:
+    manager = LLMContextManager(max_payloads=20)
+    payloads = [LLMPayload(ROLE.SYSTEM, Text("sys"))]
+
+    manager.reminder("先给结论", wrap_with_system_tag=True)
+
+    payloads = manager.add_payload(payloads, LLMPayload(ROLE.TOOL, DummyTool))
+    assert len(payloads) == 2
+    assert payloads[0].role == ROLE.SYSTEM
+    assert payloads[1].role == ROLE.TOOL
+
+    payloads = manager.add_payload(payloads, LLMPayload(ROLE.USER, Text("你好")))
+    assert len(payloads) == 3
+    assert payloads[2].role == ROLE.USER
+    assert cast(Text, payloads[2].content[0]).text == "<system_reminder>\n先给结论\n</system_reminder>"
+    assert cast(Text, payloads[2].content[1]).text == "你好"
 
 
 def test_context_manager_defers_missing_tool_result_placeholder_at_tail() -> None:

@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
+from src.core.models.message import Message
+from src.kernel.logger import Logger
 from src.kernel.llm import LLMPayload, ROLE, Text, ToolResult
+from src.kernel.llm import ToolCall, ToolRegistry
 from src.kernel.concurrency import get_watchdog
+
+from .type_defs import LLMResponseLike
 
 @dataclass
 class ToolCallOutcome:
@@ -23,11 +28,14 @@ class ToolCallOutcome:
 async def process_tool_calls(
     *,
     stream_id: str,
-    calls: list[Any],
-    response: Any,
-    run_tool_call: Callable[[Any, Any, Any, Any], Awaitable[tuple[bool, bool]]],
-    usable_map: Any,
-    trigger_msg: Any,
+    calls: list[ToolCall],
+    response: LLMResponseLike,
+    run_tool_call: Callable[
+        [ToolCall, LLMResponseLike, ToolRegistry, Message | None],
+        Awaitable[tuple[bool, bool]],
+    ],
+    usable_map: ToolRegistry,
+    trigger_msg: Message | None,
     pass_call_name: str,
     stop_call_name: str,
     send_text_call_name: str | None,
@@ -142,7 +150,7 @@ async def process_tool_calls(
     return outcome
 
 
-def _build_call_dedupe_key(call_name: str, args: Any) -> str:
+def _build_call_dedupe_key(call_name: str, args: object) -> str:
     """构建 tool call 去重键。"""
     try:
         serialized_args = json.dumps(
@@ -159,10 +167,10 @@ def _build_call_dedupe_key(call_name: str, args: Any) -> str:
 
 def append_suspend_payload_if_action_only(
     *,
-    calls: list[Any],
-    response: Any,
+    calls: list[ToolCall],
+    response: LLMResponseLike,
     suspend_text: str,
-    logger: Any,
+    logger: Logger,
 ) -> None:
     """当本轮全是 action 调用时，补充 SUSPEND 占位 assistant 消息。"""
     if calls and all(call.name.startswith("action-") for call in calls):

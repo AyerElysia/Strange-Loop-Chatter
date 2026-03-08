@@ -347,9 +347,9 @@ class MediaManager:
             from src.core.models.sql_alchemy import Images
 
             async with get_db_session() as session:
-                # 查找现有记录
+                # 查找现有记录（使用 image_id 作为唯一标识）
                 from sqlalchemy import select
-                stmt = select(Images).where(Images.path == media_hash)
+                stmt = select(Images).where(Images.image_id == media_hash)
                 result = await session.execute(stmt)
                 existing = result.scalar_one_or_none()
 
@@ -395,7 +395,7 @@ class MediaManager:
             from sqlalchemy import select
 
             async with get_db_session() as session:
-                stmt = select(Images).where(Images.path == media_hash)
+                stmt = select(Images).where(Images.image_id == media_hash)
                 result = await session.execute(stmt)
                 media = result.scalar_one_or_none()
 

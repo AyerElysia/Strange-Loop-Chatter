@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from src.app.plugin_system.api.llm_api import (
@@ -9,7 +11,13 @@ from src.app.plugin_system.api.llm_api import (
     create_llm_request,
     create_rerank_request,
 )
+from src.core.prompt.system_reminder import (
+    get_system_reminder_store,
+    reset_system_reminder_store,
+)
 from src.kernel.llm import EmbeddingRequest, LLMRequest, ModelSet, RequestType, RerankRequest
+from src.kernel.llm.payload import LLMPayload, Text
+from src.kernel.llm.roles import ROLE
 from src.kernel.llm.embedding_response import EmbeddingResponse
 from src.kernel.llm.model_client import ModelClientRegistry
 from src.kernel.llm.rerank_response import RerankResponse
@@ -59,6 +67,28 @@ def test_create_llm_request_default_completions(model_set: ModelSet) -> None:
     request = create_llm_request(model_set=model_set, request_name="chat_test")
     assert isinstance(request, LLMRequest)
     assert request.request_type == RequestType.COMPLETIONS
+
+
+def test_create_llm_request_registers_system_reminder(model_set: ModelSet) -> None:
+    reset_system_reminder_store()
+    store = get_system_reminder_store()
+    store.set("actor", "goal", "先给结论")
+
+    request = create_llm_request(
+        model_set=model_set,
+        request_name="chat_test",
+        with_reminder="actor",
+    )
+    request.add_payload(LLMPayload(ROLE.SYSTEM, Text("sys")))
+    request.add_payload(LLMPayload(ROLE.USER, Text("你好")))
+
+    assert len(request.payloads) == 2
+    assert request.payloads[0].role == ROLE.SYSTEM
+    assert request.payloads[1].role == ROLE.USER
+    assert cast(Text, request.payloads[1].content[0]).text == "<system_reminder>\n[goal]\n先给结论\n</system_reminder>"
+    assert cast(Text, request.payloads[1].content[1]).text == "你好"
+
+    reset_system_reminder_store()
 
 
 def test_create_embedding_request(model_set: ModelSet) -> None:

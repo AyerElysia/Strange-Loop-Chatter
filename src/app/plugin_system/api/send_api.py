@@ -297,10 +297,27 @@ async def _send_message(
     logger = get_logger("send_api")
 
     try:
+        # 从 stream_manager 获取流的真实信息（包含 platform/chat_type/目标信息等）
+        from src.core.managers.stream_manager import get_stream_manager
+
+        stream_manager = get_stream_manager()
+        stream_info = await stream_manager.get_stream_info(stream_id)
+
         # 推断平台
         if not platform:
-            # TODO: 临时方案，待 send_api 重构后由上层统一传入 (platform, chat_type, target_id) 三元组
-            platform = stream_id.split("_")[0] if "_" in stream_id else "qq"
+            platform_from_stream = (
+                stream_info.get("platform") if isinstance(stream_info, dict) else None
+            )
+            if isinstance(platform_from_stream, str) and platform_from_stream:
+                platform = platform_from_stream
+            else:
+                logger.error(
+                    "未显式传入 platform，且无法从 stream_manager 解析 platform："
+                    f"stream_id={stream_id}"
+                )
+                return False
+
+        assert platform is not None
 
         # 获取 bot 信息
         adapter_manager = get_adapter_manager()
@@ -309,12 +326,6 @@ async def _send_message(
         if not bot_info:
             logger.error(f"无法获取平台 {platform} 的 bot 信息")
             return False
-
-        # 从 stream_manager 获取流的真实信息
-        from src.core.managers.stream_manager import get_stream_manager
-
-        stream_manager = get_stream_manager()
-        stream_info = await stream_manager.get_stream_info(stream_id)
 
         chat_type = "private"
         extra: dict[str, Any] = {}
@@ -498,6 +509,28 @@ async def broadcast_text(
             ["qq_group_123", "qq_group_456"]
         )
     """
+    from src.core.managers.stream_manager import get_stream_manager
+    from src.kernel.logger import get_logger
+
+    logger = get_logger("send_api")
+    stream_manager = get_stream_manager()
+
+    # stream_id 已哈希化，无法再从其内容推断平台
+    resolved_platforms: dict[str, str] = {}
+    if platform:
+        resolved_platforms = {stream_id: platform for stream_id in stream_ids}
+    else:
+        for stream_id in stream_ids:
+            info = await stream_manager.get_stream_info(stream_id)
+            platform_from_stream = info.get("platform") if isinstance(info, dict) else None
+            if isinstance(platform_from_stream, str) and platform_from_stream:
+                resolved_platforms[stream_id] = platform_from_stream
+            else:
+                logger.error(
+                    "broadcast_text 无法解析 platform："
+                    f"stream_id={stream_id}（请显式传入 platform）"
+                )
+
     messages = [
         Message(
             message_id=f"broadcast_{id(content)}_{i}",
@@ -506,12 +539,19 @@ async def broadcast_text(
             message_type=MessageType.TEXT,
             sender_id="system",
             sender_name="System",
-            platform=platform or stream_id.split("_")[0],
+            platform=resolved_platforms.get(stream_id, ""),
             stream_id=stream_id,
             chat_type="group" if "group" in stream_id else "private",
         )
         for i, stream_id in enumerate(stream_ids)
+        if stream_id in resolved_platforms
     ]
 
+    if not messages:
+        return {stream_id: False for stream_id in stream_ids}
+
     results = await send_batch_parallel(messages)
-    return dict(zip(stream_ids, results))
+    ok_by_stream = dict(zip([m.stream_id for m in messages], results))
+
+    # 维持返回值覆盖所有输入 stream_id
+    return {stream_id: ok_by_stream.get(stream_id, False) for stream_id in stream_ids}

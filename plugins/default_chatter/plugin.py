@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import datetime
-from typing import Any, AsyncGenerator
+from typing import AsyncGenerator
 
 from src.core.components.types import ChatType
 from src.app.plugin_system.api.log_api import get_logger
@@ -29,12 +29,14 @@ from src.core.components.base.action import BaseAction
 from src.core.components.loader import register_plugin
 from src.core.config import get_core_config
 from src.core.prompt import get_prompt_manager
+from src.core.models.message import Message
 from src.kernel.llm import LLMPayload, ROLE, Text
 
 from .config import DefaultChatterConfig
 from .decision_agent import decide_should_respond
 from .prompt_builder import DefaultChatterPromptBuilder
 from .runners import run_classical, run_enhanced
+from .type_defs import LLMConversationState, LLMResponseLike, SubAgentDecision
 
 logger = get_logger("default_chatter")
 
@@ -80,6 +82,8 @@ system_prompt = """# 关于你
 - Tool：tool通常是你在对话中需要查询信息或执行特定功能时调用的工具，例如查询天气、计算器等。你可以调用 tool 来获取这些信息或功能，调用时请务必按照规定的格式提供必要的信息。这类工具通常会返回一些结果信息，因此当你调用tool并收到返回结果后，你应该根据结果信息继续进行合理的回复或进一步执行其他工具。
 - Agent：agent通常是你在对话中需要调用的智能体，例如执行复杂任务、处理多轮对话等。你可以调用 agent 来完成这些任务，调用时请务必按照规定的格式提供必要的信息。这类工具通常会返回一些结果信息，因此当你调用agent并收到返回结果后，你应该根据结果信息继续进行合理的回复或进一步执行其他工具。
 
+你可以一次调用多个工具组合使用，善用工具组合往往可以让你的行为更丰富，达到事半功倍的效果。
+
 # 其他信息
 你目前正在聊天的平台是：{platform}，聊天类型是 {chat_type}。
 在该平台你的信息：
@@ -101,10 +105,6 @@ user_prompt = """你当前正在名为"{stream_name}"的对话中。
 请基于上述信息决定接下来的动作。
 请务必保持你的回复符合你的人设和表达风格，
 同时请确保你的回复有理有据，禁止无根据地编造信息或胡乱回复。
-
-关于引用回复：
-如果你想对某条特定的消息进行引用回复，在调用 send_text action 时，使用 reply_to 参数指定该消息的 ID（从方括号中获取）。
-例如，如果消息显示为"【12:34】<member> [123456] Alice [msg_123456_abc]： 你好呀"，则可以使用 reply_to="msg_123456_abc" 来引用这条消息。
 """
 
 sub_agent_system_prompt = """你是一个聊天意图识别助手。
@@ -143,7 +143,7 @@ class SendTextAction(BaseAction):
     """发送文本消息"""
 
     action_name = "send_text"
-    action_description = "发送一段文本消息给用户，这是你回复用户的主要方式。你可以调用多次 send_text 来分多段回复，但每次调用必须提供你想说的话的文本内容，不要添加任何标记或格式，只写纯文本即可。你也可以选择引用之前某条消息作为背景，使用 reply_to 参数指定。注意：本工具无法发送表情包等非文本内容。"
+    action_description = "发送一段文本消息给用户。你可以一次调用多个 send_text 来分多段回复，但每次调用必须提供你想说的话的文本内容，不要添加任何标记或格式，只写纯文本即可。你也可以选择引用之前某条消息作为背景，使用 reply_to 参数指定。注意：本工具无法发送表情包等非文本内容。"
 
     chatter_allow: list[str] = ["default_chatter"]
 
@@ -192,7 +192,7 @@ class SendTextAction(BaseAction):
                     target_user_id = last_msg.sender_id
                     target_user_name = last_msg.sender_name
             
-            extra: dict[str, Any] = {}
+            extra: dict[str, str] = {}
             if target_user_id:
                 extra["target_user_id"] = target_user_id
             if target_user_name:
@@ -213,8 +213,8 @@ class SendTextAction(BaseAction):
                 chat_type=chat_type,
                 stream_id=target_stream_id,
                 reply_to=reply_to,
-                **extra,
             )
+            message.extra.update(extra)
             
             from src.core.transport.message_send import get_message_sender
             sender = get_message_sender()
@@ -300,13 +300,16 @@ class DefaultChatter(BaseChatter):
 
     async def _build_system_prompt(self, chat_stream: ChatStream) -> str:
         """构建系统提示词"""
+        plugin_config = self.plugin.config
         return await DefaultChatterPromptBuilder.build_system_prompt(
-            self.plugin.config,
+            plugin_config if isinstance(plugin_config, DefaultChatterConfig) else None,
             chat_stream,
         )
 
     async def _build_classical_user_text(
-        self, chat_stream: ChatStream, unread_msgs: list[Any]
+        self,
+        chat_stream: ChatStream,
+        unread_msgs: list[Message],
     ) -> str:
         """构建 classical 模式 user 提示词。"""
         return await DefaultChatterPromptBuilder.build_classical_user_text(
@@ -350,7 +353,7 @@ class DefaultChatter(BaseChatter):
 
     @staticmethod
     def _upsert_pending_unread_payload(
-        response: Any,
+        response: LLMConversationState,
         formatted_text: str,
     ) -> None:
         """在未发送前合并未读消息到最后一个 USER payload。"""
@@ -372,9 +375,9 @@ class DefaultChatter(BaseChatter):
     async def sub_agent(
         self,
         unreads_text: str,
-        unread_msgs: list[Any],
+        unread_msgs: list[Message],
         chat_stream: ChatStream,
-    ) -> dict:
+    ) -> SubAgentDecision:
         """子代理决策：判断是否需要响应未读消息。
 
         独立构建上下文，只包含历史消息摘要与未读消息，
@@ -454,6 +457,16 @@ class DefaultChatter(BaseChatter):
             suspend_text=_SUSPEND_TEXT,
         ):
             yield result
+
+    async def run_tool_call(
+        self,
+        call,
+        response: LLMResponseLike,
+        usable_map,
+        trigger_msg: Message | None,
+    ) -> tuple[bool, bool]:
+        """执行工具调用并将结果写回响应上下文。"""
+        return await super().run_tool_call(call, response, usable_map, trigger_msg)
 
 
 # ─── Plugin ─────────────────────────────────────────────────

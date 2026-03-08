@@ -2,7 +2,7 @@
 
 import json
 from datetime import datetime
-from typing import AsyncGenerator, Generator
+from typing import AsyncGenerator, Generator, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,6 +12,8 @@ from src.core.components.base.agent import BaseAgent
 from src.core.components.base.tool import BaseTool
 from src.core.components.types import ChatType
 from src.core.models.message import Message
+from src.core.prompt.system_reminder import get_system_reminder_store, reset_system_reminder_store
+from src.kernel.llm import LLMPayload, ROLE, Text
 
 
 class ConcreteChatter(BaseChatter):
@@ -90,6 +92,32 @@ class TestBaseChatter:
         ConcreteChatter._plugin_ = "my_plugin"
         chatter2 = ConcreteChatter("stream_456", mock_plugin)
         assert chatter2.get_signature() == "my_plugin:chatter:test_chatter"
+
+    def test_create_request_registers_system_reminder(self, mock_plugin):
+        """测试 create_request 可登记 system reminder，且不会把 SYSTEM 挤到 USER 后面。"""
+        chatter = ConcreteChatter("stream_123", mock_plugin)
+
+        reset_system_reminder_store()
+        store = get_system_reminder_store()
+        store.set("actor", "goal", "先给结论")
+
+        with patch("src.core.config.get_model_config") as mock_model_config, patch(
+            "src.core.config.get_core_config"
+        ) as mock_core_config:
+            mock_model_config.return_value.get_task.return_value = []
+            mock_core_config.return_value.chat.max_context_size = 10
+
+            request = chatter.create_request("actor", with_reminder="actor")
+
+        request.add_payload(LLMPayload(ROLE.SYSTEM, Text("sys")))
+        request.add_payload(LLMPayload(ROLE.USER, Text("hello")))
+
+        assert request.payloads[0].role == ROLE.SYSTEM
+        assert request.payloads[1].role == ROLE.USER
+        assert cast(Text, request.payloads[1].content[0]).text == "<system_reminder>\n[goal]\n先给结论\n</system_reminder>"
+        assert cast(Text, request.payloads[1].content[1]).text == "hello"
+
+        reset_system_reminder_store()
 
     @pytest.mark.asyncio
     async def test_execute_with_messages(self, mock_plugin):

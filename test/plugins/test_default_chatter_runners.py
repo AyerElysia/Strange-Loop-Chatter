@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -70,8 +70,17 @@ class _FakeChatter:
 
     def __init__(self, response: _FakeResponse) -> None:
         self._response = response
+        self.create_request_calls: list[tuple[str, str | None]] = []
 
-    def create_request(self, _task: str) -> _FakeResponse:
+    def create_request(
+        self,
+        task: str = "actor",
+        request_name: str = "",
+        max_context: int | None = None,
+        with_reminder: str | None = None,
+    ) -> _FakeResponse:
+        _ = (request_name, max_context)
+        self.create_request_calls.append((task, with_reminder))
         return self._response
 
     async def _build_system_prompt(self, _chat_stream: Any) -> str:
@@ -101,6 +110,13 @@ class _FakeChatter:
 
     def _build_negative_behaviors_extra(self) -> str:
         return ""
+
+    async def _build_classical_user_text(
+        self,
+        _chat_stream: Any,
+        _unread_msgs: list[Any],
+    ) -> str:
+        return "user"
 
     async def sub_agent(self, *_args: Any, **_kwargs: Any) -> dict:
         return {"reason": "", "should_respond": True}
@@ -135,12 +151,20 @@ async def test_run_enhanced_prioritizes_tool_followup_when_tool_result_tail() ->
     )
     chatter = _FakeChatter(fake_response)
 
-    chat_stream = SimpleNamespace(stream_id="s1")
+    chat_stream = cast(Any, SimpleNamespace(stream_id="s1"))
+    fake_logger = cast(
+        Any,
+        SimpleNamespace(
+            info=lambda *_a, **_k: None,
+            warning=lambda *_a, **_k: None,
+            error=lambda *_a, **_k: None,
+        ),
+    )
 
     gen = run_enhanced(
-        chatter=chatter,
+        chatter=cast(Any, chatter),
         chat_stream=chat_stream,
-        logger=SimpleNamespace(info=lambda *_a, **_k: None, warning=lambda *_a, **_k: None, error=lambda *_a, **_k: None),
+        logger=fake_logger,
         pass_call_name="action-pass_and_wait",
         stop_call_name="action-stop_conversation",
         send_text_call_name="action-send_text",
@@ -149,6 +173,7 @@ async def test_run_enhanced_prioritizes_tool_followup_when_tool_result_tail() ->
 
     result = await anext(gen)
     assert isinstance(result, Stop)
+    assert chatter.create_request_calls == [("actor", "actor")]
 
 
 @pytest.mark.asyncio
@@ -191,12 +216,20 @@ async def test_run_enhanced_does_not_yield_wait_when_pending_tool_results(monkey
 
     # 3) chatter 依然需要提供接口，但不应注入 USER/flush。
     chatter = _FakeChatter(resp)
-    chat_stream = SimpleNamespace(stream_id="s1")
+    chat_stream = cast(Any, SimpleNamespace(stream_id="s1"))
+    fake_logger = cast(
+        Any,
+        SimpleNamespace(
+            info=lambda *_a, **_k: None,
+            warning=lambda *_a, **_k: None,
+            error=lambda *_a, **_k: None,
+        ),
+    )
 
     gen = run_enhanced(
-        chatter=chatter,
+        chatter=cast(Any, chatter),
         chat_stream=chat_stream,
-        logger=SimpleNamespace(info=lambda *_a, **_k: None, warning=lambda *_a, **_k: None, error=lambda *_a, **_k: None),
+        logger=fake_logger,
         pass_call_name="action-pass_and_wait",
         stop_call_name="action-stop_conversation",
         send_text_call_name="action-send_text",
@@ -206,3 +239,4 @@ async def test_run_enhanced_does_not_yield_wait_when_pending_tool_results(monkey
     first = await anext(gen)
     assert isinstance(first, Stop)
     assert resp.send_count == 2
+    assert chatter.create_request_calls == [("actor", "actor")]

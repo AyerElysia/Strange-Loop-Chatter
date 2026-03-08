@@ -20,11 +20,12 @@ class LLMContextManager:
     """上下文管理器。
 
     默认职责：
-    1. 接管 payload 列表写入（add_payload/system/tool/reminder）；
-    2. 在写入后执行结构校验（strict，不做自动修复）；
-    3. 最后按 max_payloads/token_budget 执行裁剪。
+    1. 接管 payload 列表写入（add_payload/system/tool）；
+    2. 接管 reminder 的延迟登记；
+    3. 在写入后执行结构校验（strict，不做自动修复）；
+    4. 最后按 max_payloads/token_budget 执行裁剪。
 
-    对于 reminder：固定注入到“首个 USER 消息的首段”；若尚无 USER，则立即创建空 USER 并写入 reminder。
+    对于 reminder：固定注入到“首个真实 USER 消息的首段”；若尚无 USER，则继续等待后续 USER。
     """
 
     max_payloads: int | None = None
@@ -198,12 +199,14 @@ class LLMContextManager:
 
     def reminder(
         self,
-        payloads: list[LLMPayload],
         content: str | Text | list[str | Text],
-    ) -> list[LLMPayload]:
-        """登记 reminder 并注入到首个 USER 消息首段。
+        *,
+        wrap_with_system_tag: bool = False,
+    ) -> None:
+        """仅登记 reminder，不立即注入到 payload 列表。
 
         reminder 作为仅次于 system 的固有提示词，不单独作为 role 出现。
+        真正的注入会在后续 add_payload/system/tool 时由 _apply_reminders 完成。
         """
 
         items = content if isinstance(content, list) else [content]
@@ -211,13 +214,15 @@ class LLMContextManager:
             self._reminders = []
 
         for item in items:
-            text_part = item if isinstance(item, Text) else Text(str(item))
+            text = item.text if isinstance(item, Text) else str(item)
+            if wrap_with_system_tag:
+                text = (
+                    "<system_reminder>\n"
+                    f"{text}\n"
+                    "</system_reminder>"
+                )
+            text_part = Text(text)
             self._reminders.append(text_part)
-
-        updated = self._apply_reminders(list(payloads))
-        trimmed = self.maybe_trim(updated)
-        self._validate_payloads(trimmed, allow_incomplete_tail=True)
-        return trimmed
 
     def _apply_reminders(self, payloads: list[LLMPayload]) -> list[LLMPayload]:
         """将 reminder 固定注入首个 USER 消息首段。"""
@@ -230,10 +235,6 @@ class LLMContextManager:
 
         user_index = next((idx for idx, p in enumerate(updated) if p.role == ROLE.USER), None)
         if user_index is None:
-            insert_index = 0
-            while insert_index < len(updated) and updated[insert_index].role in {ROLE.SYSTEM, ROLE.TOOL}:
-                insert_index += 1
-            updated.insert(insert_index, LLMPayload(ROLE.USER, reminder_parts))
             return updated
 
         first_user = updated[user_index]
