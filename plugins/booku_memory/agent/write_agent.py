@@ -143,6 +143,8 @@ class BookuMemoryWriteAgent(BaseAgent):
 注意：不要记录闲聊废话。如果记忆中存在旧信息，请调用更新或追加新信息，保持记忆鲜活。
 
 重要：不要使用“用户”、“朋友”等模糊词，记忆中必须具体明确的实体或描述。
+
+记得维护固有记忆（inherent memory），它们是你理解用户和世界的根本背景，必须时刻保持严肃态度对待。
 """
 
     chatter_allow: list[str] = []
