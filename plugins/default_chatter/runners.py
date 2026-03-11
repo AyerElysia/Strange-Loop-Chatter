@@ -15,6 +15,15 @@ from src.kernel.llm import LLMPayload, ROLE, Text
 from .type_defs import DefaultChatterRuntime, LLMConversationState, LLMResponseLike
 from .tool_flow import append_suspend_payload_if_action_only, process_tool_calls
 
+# LLM 返回纯文本（非 tool call）时的最大重试次数
+_MAX_PLAIN_TEXT_RETRIES = 2
+
+# 重试时注入的提醒文本
+_PLAIN_TEXT_RETRY_REMINDER = (
+    "（系统提示：你刚才返回了纯文本而非工具调用。"
+    "请务必通过工具调用来完成任务，不要直接输出文字回复。）"
+)
+
 
 class _ToolCallWorkflowPhase(str, Enum):
     """default_chatter 的 toolcall 工作流相位（简化 FSM）。
@@ -43,6 +52,7 @@ class _EnhancedWorkflowRuntime:
     unreads: list[Message]
     cross_round_seen_signatures: set[str]
     unread_msgs_to_flush: list[Message]
+    plain_text_retry_count: int = 0
 
     def has_tool_result_tail(self) -> bool:
         """当前上下文尾部是否为 TOOL_RESULT。"""
@@ -130,6 +140,7 @@ async def run_enhanced(
 
             # 仅在采纳新未读消息时清空跨轮去重状态；FOLLOW_UP 阶段不应清空。
             rt.cross_round_seen_signatures.clear()
+            rt.plain_text_retry_count = 0
             rt.unreads = unread_msgs
 
             unread_lines = "\n".join(
@@ -190,8 +201,25 @@ async def run_enhanced(
 
             if not llm_response.call_list:
                 if llm_response.message and llm_response.message.strip():
+                    if rt.plain_text_retry_count < _MAX_PLAIN_TEXT_RETRIES:
+                        rt.plain_text_retry_count += 1
+                        logger.warning(
+                            f"LLM 返回了纯文本而非 tool call"
+                            f"（第 {rt.plain_text_retry_count}/{_MAX_PLAIN_TEXT_RETRIES} 次重试）: "
+                            f"{llm_response.message[:100]}"
+                        )
+                        llm_response.add_payload(
+                            LLMPayload(ROLE.USER, Text(_PLAIN_TEXT_RETRY_REMINDER))
+                        )
+                        _transition(
+                            rt=rt,
+                            to_phase=_ToolCallWorkflowPhase.MODEL_TURN,
+                            logger=logger,
+                            reason="plain text retry",
+                        )
+                        continue
                     logger.warning(
-                        "LLM 返回了纯文本而非 tool call: "
+                        f"LLM 返回了纯文本而非 tool call（已达最大重试次数 {_MAX_PLAIN_TEXT_RETRIES}）: "
                         f"{llm_response.message[:100]}"
                     )
                     yield Stop(0)
@@ -305,6 +333,7 @@ async def run_classical(
         response = request
         cross_round_seen_signatures: set[str] = set()
         has_pending_tool_results = False
+        plain_text_retry_count = 0
 
         while True:
             try:
@@ -317,8 +346,19 @@ async def run_classical(
 
             if not response.call_list:
                 if response.message and response.message.strip():
+                    if plain_text_retry_count < _MAX_PLAIN_TEXT_RETRIES:
+                        plain_text_retry_count += 1
+                        logger.warning(
+                            f"LLM 返回了纯文本而非 tool call"
+                            f"（第 {plain_text_retry_count}/{_MAX_PLAIN_TEXT_RETRIES} 次重试）: "
+                            f"{response.message[:100]}"
+                        )
+                        response.add_payload(
+                            LLMPayload(ROLE.USER, Text(_PLAIN_TEXT_RETRY_REMINDER))
+                        )
+                        continue
                     logger.warning(
-                        "LLM 返回了纯文本而非 tool call: "
+                        f"LLM 返回了纯文本而非 tool call（已达最大重试次数 {_MAX_PLAIN_TEXT_RETRIES}）: "
                         f"{response.message[:100]}"
                     )
                 await chatter.flush_unreads(unread_msgs)
