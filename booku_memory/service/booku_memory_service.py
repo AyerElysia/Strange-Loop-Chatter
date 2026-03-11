@@ -122,7 +122,10 @@ async def build_booku_memory_actor_reminder(plugin: Any) -> str:
         if repo is not None:
             await repo.close()
 
-    return "\n\n".join(part for part in reminder_parts if part.strip())
+    content = "\n\n".join(part for part in reminder_parts if part.strip())
+    if not content:
+        return ""
+    return f"## 记忆引导语\n{content}"
 
 
 async def sync_booku_memory_actor_reminder(plugin: Any) -> str:
@@ -132,14 +135,15 @@ async def sync_booku_memory_actor_reminder(plugin: Any) -> str:
 
     store = get_system_reminder_store()
     reminder_content = await build_booku_memory_actor_reminder(plugin)
+
     if not reminder_content:
-        store.delete(_KNOWLEDGE_REMINDER_BUCKET, _KNOWLEDGE_REMINDER_NAME)
+        store.delete(_TARGET_REMINDER_BUCKET, _TARGET_REMINDER_NAME)
         logger.debug("booku_memory actor reminder 已清理")
         return ""
 
     store.set(
-        _KNOWLEDGE_REMINDER_BUCKET,
-        name=_KNOWLEDGE_REMINDER_NAME,
+        _TARGET_REMINDER_BUCKET,
+        name=_TARGET_REMINDER_NAME,
         content=reminder_content,
     )
     logger.debug("booku_memory actor reminder 已同步")

@@ -11,9 +11,8 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 
-from plugins.booku_memory.service.metadata_repository import (
-    BookuMemoryMetadataRepository,
-)
+from .booku_memory_service import BookuMemoryService
+from .metadata_repository import BookuMemoryMetadataRepository
 from src.core.components.base.service import BaseService
 from src.core.prompt import get_system_reminder_store
 from src.kernel.logger import get_logger
@@ -21,15 +20,13 @@ from src.kernel.vector_db import get_vector_db_service
 
 from ..config import BookuMemoryConfig
 
-from ..service import BookuMemoryService
-
 logger = get_logger("booku_knowledge_service")
 
 _KNOWLEDGE_REMINDER_BUCKET = "actor"
 _KNOWLEDGE_REMINDER_NAME = "专业知识引导语"
 
 
-def _service(plugin: Any) -> BookuMemoryService:
+def _create_memory_service(plugin: Any) -> BookuMemoryService:
     """构建并返回绑定到指定插件实例的记忆服务对象。
 
     Args:
@@ -41,6 +38,24 @@ def _service(plugin: Any) -> BookuMemoryService:
         BookuMemoryService: 与该插件绑定的记忆服务实例。
     """
     return BookuMemoryService(plugin=plugin)
+
+
+def _normalize_document_title(title: str) -> str:
+    """将片段标题规整为文档标题。"""
+    cleaned = title.strip()
+    if "》-片段" in cleaned:
+        cleaned = cleaned.split("》-片段", 1)[0] + "》"
+    return cleaned
+
+
+def _collect_unique_titles(records: list[Any]) -> list[str]:
+    """从知识记录中提取去重后的文档标题。"""
+    titles: list[str] = []
+    for record in records:
+        title = _normalize_document_title(str(getattr(record, "title", "") or ""))
+        if title and title not in titles:
+            titles.append(title)
+    return titles
 
 
 def _sanitize_title(title: str) -> str:
@@ -239,25 +254,17 @@ async def build_booku_knowledge_actor_reminder(plugin: Any) -> str:
     finally:
         await repo.close()
 
-    titles: list[str] = []
-    for record in records:
-        title = ""
-        if isinstance(record.title, str):
-            title = record.title.strip()
-        if "》-片段" in title:
-            title = title.split("》-片段", 1)[0] + "》"
-        if title and title not in titles:
-            titles.append(title)
+    titles = _collect_unique_titles(records)
 
     if not titles:
-        return None
+        return ""
 
     lines = "\n".join(f"- {item}" for item in titles)
     return (
         "## 知识检索引导\n"
         "以下是当前记忆内已学习的专业知识标题集合：\n"
         f"{lines}\n"
-        "当你的回答需要涉及专业知识时，请优先调用 booku_memory_read 检索相关知识。\n"
+        "当你的回答需要涉及专业知识时，请优先调用 booku_memory_read，并指定 include_knowledge=True 检索相关知识。\n"
         "不要把这些知识直接用于回答问题，不要暴露这些知识的标题，而应该根据问题的具体内容，从这些知识中提取相关信息。\n\n"
     )
 
@@ -299,15 +306,7 @@ class BookuKnowledgeService(BaseService):
     service_description: str = "知识库服务，支持文档分块入库与语义检索"
     version: str = "1.0.0"
     dependencies: list[str] = []
-
-    def __getattr__(self, name: str) -> Any:
-        memory_service = self._get_memory_service()
-        try:
-            return getattr(memory_service, name)
-        except AttributeError as exc:
-            raise AttributeError(
-                f"{self.__class__.__name__} 与 booku_memory service 中均不存在属性: {name}"
-            ) from exc
+    _memory_service: BookuMemoryService | None = None
 
     def _get_config(self) -> BookuMemoryConfig:
         """获取插件配置对象。
@@ -321,6 +320,30 @@ class BookuKnowledgeService(BaseService):
         if isinstance(self.plugin.config, BookuMemoryConfig):
             return self.plugin.config
         return BookuMemoryConfig()
+
+    def _get_memory_service(self) -> BookuMemoryService:
+        """获取与当前插件绑定的记忆服务实例。"""
+        if self._memory_service is None:
+            self._memory_service = _create_memory_service(plugin=self.plugin)
+        return self._memory_service
+
+    def _create_repo(self) -> BookuMemoryMetadataRepository:
+        """创建知识库使用的元数据仓储实例。"""
+        config = self._get_config()
+        return BookuMemoryMetadataRepository(db_path=config.storage.metadata_db_path)
+
+    async def _list_knowledge_records(self, *, limit: int) -> list[Any]:
+        """列出知识库记录。"""
+        repo = self._create_repo()
+        await repo.initialize()
+        try:
+            return await repo.list_records_by_bucket(
+                bucket="knowledge",
+                folder_id="default",
+                limit=max(1, int(limit)),
+            )
+        finally:
+            await repo.close()
 
     async def ingest_document(
         self,
@@ -380,13 +403,13 @@ class BookuKnowledgeService(BaseService):
         doc_id = f"doc-{uuid.uuid4().hex}"
         bucket = "knowledge"
         folder_id = "default"
-        service = _service(plugin=self.plugin)
-        collection = service._collection_name(bucket, folder_id)
+        memory_service = self._get_memory_service()
+        collection = memory_service._collection_name(bucket, folder_id)
         vector_db = get_vector_db_service(config.storage.vector_db_path)
-        repo = BookuMemoryMetadataRepository(db_path=config.storage.metadata_db_path)
+        repo = self._create_repo()
         await repo.initialize()
         try:
-            embeddings = [await service._embed_text(chunk) for chunk in chunks]
+            embeddings = [await memory_service._embed_text(chunk) for chunk in chunks]
             now = time.time()
             ids: list[str] = []
             docs: list[str] = []
@@ -412,7 +435,7 @@ class BookuKnowledgeService(BaseService):
                     "chunk_index": index + 1,
                     "chunk_total": len(chunks),
                 }
-                metadatas.append(service._sanitize_vector_metadata(metadata))
+                metadatas.append(memory_service._sanitize_vector_metadata(metadata))
                 await repo.upsert_record(
                     memory_id=chunk_id,
                     title=chunk_title,
@@ -449,25 +472,8 @@ class BookuKnowledgeService(BaseService):
         }
 
     async def export_document_titles(self) -> list[str]:
-        config = self._get_config()
-        repo = BookuMemoryMetadataRepository(db_path=config.storage.metadata_db_path)
-        await repo.initialize()
-        try:
-            records = await repo.list_records_by_bucket(
-                bucket="knowledge",
-                folder_id="default",
-                limit=1000,
-            )
-        finally:
-            await repo.close()
-        titles: list[str] = []
-        for item in records:
-            title = item.title
-            if "》-片段" in title:
-                title = title.split("》-片段", 1)[0] + "》"
-            if title not in titles:
-                titles.append(title)
-        return titles
+        records = await self._list_knowledge_records(limit=1000)
+        return _collect_unique_titles(records)
 
     async def dump_documents(self, *, limit: int = 100) -> dict[str, Any]:
         """导出知识库文档内容(该方法导出所有文档数据，未封装进tool)
@@ -478,17 +484,7 @@ class BookuKnowledgeService(BaseService):
         Returns:
             包含文档 ID、标题、内容、更新时间和标签的列表
         """
-        config = self._get_config()
-        repo = BookuMemoryMetadataRepository(db_path=config.storage.metadata_db_path)
-        await repo.initialize()
-        try:
-            records = await repo.list_records_by_bucket(
-                bucket="knowledge",
-                folder_id="default",
-                limit=max(1, int(limit)),
-            )
-        finally:
-            await repo.close()
+        records = await self._list_knowledge_records(limit=limit)
         items = [
             {
                 "id": item.memory_id,

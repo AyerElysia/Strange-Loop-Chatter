@@ -13,6 +13,13 @@ from src.kernel.llm import LLMPayload, ROLE, Text, ToolResult
 from src.kernel.logger import get_logger
 
 from ..config import PREDEFINED_FOLDERS, BookuMemoryConfig
+from .shared import (
+    build_step_reminder,
+    get_internal_task_name,
+    get_max_reasoning_steps,
+    normalize_tool_name,
+    with_single_system_payload,
+)
 from .tools import (
     BookuMemoryFinishTaskTool,
     BookuMemoryGetInherentTool,
@@ -23,90 +30,6 @@ from .tools import (
 )
 
 logger = get_logger("booku_memory_read_agent")
-
-
-def _with_single_system_payload(
-    payloads: list[LLMPayload],
-    *,
-    base_system_prompt: str,
-    step_reminder: str,
-) -> list[LLMPayload]:
-    """确保 payloads 中只存在一个 SYSTEM payload，并注入最新轮次提醒。
-
-    约束：
-    - 禁止出现多个 role=SYSTEM 的 payload。
-    - 轮次提醒只保留最新一条（覆盖旧提醒），并作为 SYSTEM 的首段文本。
-    - 保留 TOOL payload（工具定义）及对话 payload 的相对顺序。
-
-    Args:
-        payloads: 现有 payload 列表。
-        base_system_prompt: 固定系统提示（长 prompt）。
-        step_reminder: 当前轮次提醒文本。
-
-    Returns:
-        新的 payload 列表：SYSTEM（提醒+基础提示） + TOOL* + 其余对话消息。
-    """
-
-    tool_payloads: list[LLMPayload] = []
-    convo_payloads: list[LLMPayload] = []
-    for payload in payloads:
-        if payload.role == ROLE.SYSTEM:
-            continue
-        if payload.role == ROLE.TOOL:
-            tool_payloads.append(payload)
-            continue
-        convo_payloads.append(payload)
-
-    system_payload = LLMPayload(
-        ROLE.SYSTEM,
-        [Text(step_reminder), Text(base_system_prompt)],
-    )
-    return [system_payload, *tool_payloads, *convo_payloads]
-
-
-def _normalize_tool_name(name: str) -> str:
-    """将工具名称应用平台可能添加的 ``tool-`` 前缀进行定洎化。
-
-    部分 LLM 或工具调用框架会自动为工具名称加上 ``tool-`` 前缀，
-    本函数统一展开为原下划线名，使后续逐工具匹配逻辑不必处理两种形式。
-
-    Args:
-        name: 原始工具名称，可能带有或不带 ``tool-`` 前缀。
-
-    Returns:
-        去除 ``tool-`` 前缀后的工具名称。若无前缀则原样返回。
-    """
-    return name[5:] if name.startswith("tool-") else name
-
-
-def _build_step_reminder(*, step_index: int, max_steps: int) -> str:
-    """构建内部推理轮次提醒文本。
-
-    Args:
-        step_index: 当前轮次索引（从 0 开始）。
-        max_steps: 最大轮次数。
-
-    Returns:
-        注入到 SYSTEM 的提醒文本。
-    """
-    # 这里的轮次指“工具执行后、进入下一次模型决策(response.send)前”的 follow-up 轮次。
-    current = step_index + 1
-    remaining_after = max(0, max_steps - current)
-
-    if current >= max_steps:
-        return (
-            "【推理轮次提醒】"
-            f"你已到达最后一轮 follow-up（{current}/{max_steps}）。"
-            "请立刻调用 memory_finish_task(content=...) 结束并返回总结，"
-            "不要再调用 memory_retrieve/memory_grep/memory_read_full_content/memory_status/memory_inherent_read 等其他工具。"
-        )
-
-    return (
-        "【推理轮次提醒】"
-        f"当前 follow-up 轮次：{current}/{max_steps}。"
-        f"本轮结束后剩余可用轮数：{remaining_after}。"
-        "请控制工具调用数量，必要时在最后一轮调用 memory_finish_task(content=...) 返回当前结论与依据。"
-    )
 
 class BookuMemoryReadAgent(BaseAgent):
     """Booku 记忆读取 Agent。
@@ -158,9 +81,7 @@ class BookuMemoryReadAgent(BaseAgent):
         Returns:
             整数形式的推理轮次上限（≥ 1）。
         """
-        if isinstance(self.plugin.config, BookuMemoryConfig):
-            return max(1, int(self.plugin.config.internal_llm.max_reasoning_steps))
-        return 6
+        return get_max_reasoning_steps(self.plugin.config)
 
     def _internal_task_name(self) -> str:
         """从插件配置读取内部 LLM 决策使用的模型任务名（task_name）。
@@ -171,11 +92,7 @@ class BookuMemoryReadAgent(BaseAgent):
         Returns:
             模型任务名字符串，用于 ``get_model_set_by_task()`` 查找对应模型。
         """
-        if isinstance(self.plugin.config, BookuMemoryConfig):
-            task_name = self.plugin.config.internal_llm.task_name.strip()
-            if task_name:
-                return task_name
-        return "tool_use"
+        return get_internal_task_name(self.plugin.config)
 
     @staticmethod
     def _build_system_prompt() -> str:
@@ -358,7 +275,7 @@ class BookuMemoryReadAgent(BaseAgent):
                     logger.info(f"调用工具：{call.name}")
                     logger.debug(f"工具调用请求：{call.name}，参数：{call.args}")
 
-                    normalized_name = _normalize_tool_name(call.name)
+                    normalized_name = normalize_tool_name(call.name)
                     args = call.args if isinstance(call.args, dict) else {}
                     if normalized_name == "memory_finish_task":
                         finish_content = str(args.get("content", "")).strip()
@@ -382,10 +299,22 @@ class BookuMemoryReadAgent(BaseAgent):
                         )
                     )
 
-                response.payloads = _with_single_system_payload(
+                response.payloads = with_single_system_payload(
                     response.payloads,
                     base_system_prompt=base_system_prompt,
-                    step_reminder=_build_step_reminder(step_index=step_index, max_steps=max_steps),
+                    step_reminder=build_step_reminder(
+                        step_index=step_index,
+                        max_steps=max_steps,
+                        final_round_instruction=(
+                            "请立刻调用 memory_finish_task(content=...) 结束并返回总结，"
+                            "不要再调用 memory_retrieve/memory_grep/memory_read_full_content/"
+                            "memory_status/memory_inherent_read 等其他工具。"
+                        ),
+                        ongoing_instruction=(
+                            "请控制工具调用数量，必要时在最后一轮调用 "
+                            "memory_finish_task(content=...) 返回当前结论与依据。"
+                        ),
+                    ),
                 )
                 response = await response.send(stream=False)
                 await response

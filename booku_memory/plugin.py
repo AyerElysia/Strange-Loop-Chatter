@@ -29,6 +29,31 @@ class BookuMemoryAgentPlugin(BasePlugin):
     configs: list[type] = [BookuMemoryConfig]
     dependent_components: list[str] = []
 
+    @staticmethod
+    def _agent_mode_components() -> list[type]:
+        """返回 agent 代理模式下暴露的组件。"""
+        return [
+            BookuMemoryWriteAgent,
+            BookuMemoryReadAgent,
+            BookuMemoryService,
+            BookuKnowledgeService,
+            BookuMemoryStartupIngestHandler,
+            MemoryFlashbackInjector,
+        ]
+
+    @staticmethod
+    def _tool_mode_components() -> list[type]:
+        """返回直接工具模式下暴露的组件。"""
+        return [
+            BookuMemoryRetrieveTool,
+            BookuMemoryCreateTool,
+            BookuMemoryEditInherentTool,
+            BookuMemoryService,
+            BookuKnowledgeService,
+            MemoryFlashbackInjector,
+            BookuMemoryStartupIngestHandler,
+        ]
+
     async def on_plugin_loaded(self) -> None:
         """插件加载后同步 actor reminder。"""
 
@@ -39,8 +64,9 @@ class BookuMemoryAgentPlugin(BasePlugin):
 
         from src.core.prompt import get_system_reminder_store
 
-        get_system_reminder_store().delete("actor", "记忆引导语")
-        get_system_reminder_store().delete("actor", "专业知识引导语")
+        store = get_system_reminder_store()
+        store.delete("actor", "记忆引导语")
+        store.delete("actor", "专业知识引导语")
 
     def get_components(self) -> list[type]:
         """返回插件组件列表。"""
@@ -50,31 +76,9 @@ class BookuMemoryAgentPlugin(BasePlugin):
                 return []
 
             if self.config.plugin.enable_agent_proxy_mode:
-                return [
-                    BookuMemoryWriteAgent,
-                    BookuMemoryReadAgent,
-                    BookuMemoryService,
-                    BookuKnowledgeService,
-                    BookuMemoryStartupIngestHandler,
-                    MemoryFlashbackInjector,
-                ]
+                return self._agent_mode_components()
 
-            return [
-                BookuMemoryRetrieveTool,
-                BookuMemoryCreateTool,
-                BookuMemoryEditInherentTool,
-                BookuMemoryService,
-                BookuKnowledgeService,
-                MemoryFlashbackInjector,
-                BookuMemoryStartupIngestHandler,
-            ]
+            return self._tool_mode_components()
 
         # 配置对象不可用时保持历史行为：默认启用 agent 代理模式。
-        return [
-            BookuMemoryWriteAgent,
-            BookuMemoryReadAgent,
-            BookuMemoryService,
-            BookuKnowledgeService,
-            BookuMemoryStartupIngestHandler,
-            MemoryFlashbackInjector,
-        ]
+        return self._agent_mode_components()
