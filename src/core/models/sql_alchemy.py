@@ -18,7 +18,7 @@ import datetime
 from datetime import timezone
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, Text
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, Text, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -360,7 +360,10 @@ class ImageDescriptions(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     timestamp: Mapped[float] = mapped_column(Float, nullable=False)
 
-    __table_args__ = (Index("idx_imagedesc_hash", "image_description_hash"),)
+    __table_args__ = (
+        Index("idx_imagedesc_hash", "image_description_hash"),
+        UniqueConstraint("image_description_hash", "type", name="uq_imagedesc_hash_type"),
+    )
 
 
 class OnlineTime(Base):

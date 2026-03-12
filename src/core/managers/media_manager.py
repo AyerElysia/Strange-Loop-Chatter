@@ -516,7 +516,8 @@ class MediaManager:
                     ImageDescriptions.type == media_type
                 )
                 result = await session.execute(stmt)
-                desc = result.scalar_one_or_none()
+                # 使用 scalars().first() 避免 MultipleResultsFound 错误
+                desc = result.scalars().first()
 
                 return desc.description if desc else None
 
@@ -549,7 +550,8 @@ class MediaManager:
                     ImageDescriptions.type == media_type
                 )
                 result = await session.execute(stmt)
-                existing = result.scalar_one_or_none()
+                # 使用 scalars().first() 避免 MultipleResultsFound 错误
+                existing = result.scalars().first()
 
                 if not existing:
                     # 创建新缓存记录
