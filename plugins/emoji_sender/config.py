@@ -39,9 +39,14 @@ class EmojiSenderConfig(BaseConfig):
     class IngestSection(SectionBase):
         """入库相关配置。"""
 
+        manual_memes_dir: str = Field(
+            default="data/emoji_sender/manual_memes",
+            description="手动放置表情包的目录（用法：关闭随机抽取，手动放表情包到此目录）",
+        )
+
         sample_from_media_cache: bool = Field(
-            default=True,
-            description="是否从 data/media_cache/emojis 随机抽取候选表情包",
+            default=False,
+            description="是否从 data/media_cache/emojis 随机抽取候选表情包（关闭则使用手动目录，需要手动放置表情包）",
         )
 
     @config_section("vector")

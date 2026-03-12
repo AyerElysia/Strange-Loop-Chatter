@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import io
 import json
 import math
 import random
@@ -36,6 +37,11 @@ from src.kernel.logger import get_logger
 from src.kernel.vector_db import get_vector_db_service
 
 from .config import EmojiSenderConfig
+
+try:
+    from PIL import Image as PILImage
+except ImportError:
+    PILImage = None
 
 
 logger = get_logger("emoji_sender")
@@ -127,6 +133,51 @@ class EmojiSenderService(BaseService):
         """media cache 的表情包目录。"""
         return Path("data") / "media_cache" / "emojis"
 
+    def _manual_memes_dir(self) -> Path:
+        """手动表情包目录。"""
+        path = Path(self._cfg().ingest.manual_memes_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    async def _pick_next_manual_meme_file(self) -> Path | None:
+        """从手动目录获取下一个未入库的表情包文件。"""
+        manual_dir = self._manual_memes_dir()
+        
+        candidates: list[Path] = [
+            p
+            for p in sorted(manual_dir.iterdir())
+            if p.is_file() and p.suffix.lower() in _ALLOWED_SUFFIXES
+        ]
+        if not candidates:
+            return None
+
+        # 逐个检查，找到第一个未入库的
+        for candidate in candidates:
+            try:
+                payload = candidate.read_bytes()
+            except Exception:
+                continue
+            
+            meme_id = self._sha256_bytes(payload)
+            if not await self._already_ingested(meme_id):
+                return candidate
+        
+        return None
+
+    async def _already_ingested(self, source_hash: str) -> bool:
+        """检查某个表情包（按 hash）是否已入库。"""
+        vdb = self._vector_db()
+        collection = self._collection_name()
+        await vdb.get_or_create_collection(collection)
+        data = await vdb.get(
+            collection_name=collection,
+            where={"source_hash": source_hash},
+            limit=1,
+            include=["metadatas"],
+        )
+        ids: list[str] = list(data.get("ids") or [])
+        return bool(ids)
+
     def _data_dir(self) -> Path:
         """插件表情包复制目录。"""
         return Path(self._cfg().storage.data_dir)
@@ -184,7 +235,128 @@ class EmojiSenderService(BaseService):
             ".webp": "image/webp",
         }.get(suffix, "image/png")
 
-    def _build_persona_prompt(self) -> str:
+    @staticmethod
+    def _compress_image_for_vlm(image_bytes: bytes, mime: str, max_size_mb: float = 5.0) -> tuple[bytes, str, bool]:
+        """将图片压缩至指定大小用于 VLM 识别。
+
+        - 静态图（JPG/PNG/WebP）：逐步降低质量和分辨率
+        - GIF：均匀采样最多 6 帧拼成网格图，以 JPEG 发给 VLM（仅用于识别，不影响入库的原文件）
+
+        Returns:
+            (用于 VLM 的 bytes, mime 类型, is_gif_frames_collage)
+        """
+        if PILImage is None:
+            raise RuntimeError("PIL 未安装。请运行: uv add pillow")
+
+        max_bytes = int(max_size_mb * 1024 * 1024)
+
+        # GIF：提取多个关键帧拼成网格图
+        if mime == "image/gif":
+            try:
+                img = PILImage.open(io.BytesIO(image_bytes))
+                total_frames: int = getattr(img, "n_frames", 1)
+
+                # 均匀采样，最多取 6 帧
+                max_frames = 6
+                if total_frames <= max_frames:
+                    frame_indices = list(range(total_frames))
+                else:
+                    step = total_frames / max_frames
+                    frame_indices = [int(i * step) for i in range(max_frames)]
+
+                frames: list[Any] = []
+                for idx in frame_indices:
+                    try:
+                        img.seek(idx)
+                        frames.append(img.convert("RGB").copy())
+                    except EOFError:
+                        break
+
+                if not frames:
+                    raise RuntimeError("无法提取 GIF 帧")
+
+                # 拼成网格（最多 3 列）
+                cols = min(3, len(frames))
+                rows = (len(frames) + cols - 1) // cols
+                fw, fh = frames[0].size
+                grid_img = PILImage.new("RGB", (fw * cols, fh * rows), (255, 255, 255))
+                for i, frame in enumerate(frames):
+                    x = (i % cols) * fw
+                    y = (i // cols) * fh
+                    grid_img.paste(frame.resize((fw, fh)), (x, y))
+
+                output = io.BytesIO()
+                grid_img.save(output, format="JPEG", quality=80)
+                result_bytes = output.getvalue()
+
+                # 如果网格图还是超限，缩小分辨率
+                if len(result_bytes) > max_bytes:
+                    scale = (max_bytes / len(result_bytes)) ** 0.5
+                    new_w = max(1, int(grid_img.width * scale))
+                    new_h = max(1, int(grid_img.height * scale))
+                    grid_img = grid_img.resize((new_w, new_h), PILImage.Resampling.LANCZOS)
+                    output = io.BytesIO()
+                    grid_img.save(output, format="JPEG", quality=75)
+                    result_bytes = output.getvalue()
+
+                logger.debug(
+                    f"GIF 提取 {len(frames)} 帧拼成网格用于 VLM: "
+                    f"{len(image_bytes)} → {len(result_bytes)} 字节 "
+                    f"(总帧数 {total_frames})"
+                )
+                return result_bytes, "image/jpeg", True
+
+            except Exception as e:
+                raise RuntimeError(f"GIF 处理失败: {e}") from e
+
+        # 静态图：不超限则直接返回
+        if len(image_bytes) <= max_bytes:
+            return image_bytes, mime, False
+
+        # 静态图：超限则逐步压缩
+        try:
+            img = PILImage.open(io.BytesIO(image_bytes))
+        except Exception as e:
+            raise RuntimeError(f"无法打开图片: {e}") from e
+
+        output_format = {
+            "image/png": "JPEG",   # PNG 超大时转 JPEG 压缩效果更好
+            "image/jpeg": "JPEG",
+            "image/jpg": "JPEG",
+            "image/webp": "WEBP",
+        }.get(mime, "JPEG")
+        output_mime = "image/jpeg" if output_format == "JPEG" else mime
+
+        quality = 85
+        scale = 1.0
+        compressed = b""
+
+        while quality >= 30 or scale > 0.4:
+            output = io.BytesIO()
+            try:
+                target = img.convert("RGB") if output_format == "JPEG" else img
+                if scale < 1.0:
+                    new_w = max(1, int(target.width * scale))
+                    new_h = max(1, int(target.height * scale))
+                    target = target.resize((new_w, new_h), PILImage.Resampling.LANCZOS)
+                target.save(output, format=output_format, quality=quality)
+                compressed = output.getvalue()
+                if len(compressed) <= max_bytes:
+                    logger.info(
+                        f"图片已压缩: {len(image_bytes)} → {len(compressed)} 字节 "
+                        f"(质量 {quality}, 缩放 {scale:.2f})"
+                    )
+                    return compressed, output_mime, False
+            except Exception as e:
+                raise RuntimeError(f"压缩图片失败: {e}") from e
+
+            if quality > 30:
+                quality = max(30, quality - 10)
+            else:
+                scale = round(scale - 0.1, 1)
+
+        logger.warning(f"图片压缩后仍超限，使用最后结果: {len(compressed)} 字节")
+        return compressed, output_mime, False
         """从主配置人格字段组装 persona 指令片段。"""
         p = get_core_config().personality
 
@@ -327,6 +499,7 @@ class EmojiSenderService(BaseService):
         *,
         image_base64: str,
         mime: str,
+        is_gif_collage: bool = False,
     ) -> dict[str, Any] | None:
         """调用 VLM 对表情包做收藏决策与标注。"""
         try:
@@ -338,17 +511,32 @@ class EmojiSenderService(BaseService):
         persona = self._build_persona_prompt()
         tag_list = "、".join(EMOTION_TAG_PRESET)
 
+        gif_hint = (
+            "注意：这是一个 GIF 动图表情包的关键帧截图（网格排列），请综合所有帧的内容进行描述。\n"
+            if is_gif_collage else ""
+        )
+
         prompt = (
             "你将看到一张表情包图片。你的任务：根据人设，决定你是否愿意把它收藏起来以后自己使用。\n"
-            "你必须输出严格 JSON（不要输出任何额外文字），格式如下：\n"
-            '{"keep": true/false, "description": "一句话描述表情包内容与含义", "emotion_tags": ["标签1", "标签2"]}\n\n'
-            "要求：\n"
-            "- keep=false 时 emotion_tags 可以为空数组\n"
-            "- keep=true 时 description 必须非空，emotion_tags 必须从预设标签中选择（可多选）\n"
+            + gif_hint
+            + "你必须输出严格 JSON（不要输出任何额外文字），格式如下：\n"
+            '{"keep": true/false, "description": "描述内容，文字：\'图中文字\'", "emotion_tags": ["标签1", "标签2"]}\n\n'
+            "description 要求（文字部分不计入字数限制）：\n"
+            "- 概括表情包传达的核心情绪、氛围和画面主要特征\n"
+            "- 准确复述图中所有文字，格式为：文字：'逐字抄录'，放在末尾\n"
+            "- 如果确保认出表情包的具体来源（作品名、角色名等），请补充说明\n"
+            "- 无法确定出处则省略，只做客观描述\n"
+            "- 总体 40 字以内（不计图中文字）\n"
+            "- 无文字则省略文字部分\n\n"
+            "JSON 字段说明：\n"
+            "- keep：根据人设决定是否收藏\n"
+            "- emotion_tags：必须从预设标签中选择（可多选，keep=false 时可为空）\n"
             "- 预设标签："
             + tag_list
-            + "\n"
-            "- 避免收藏低质、冒犯、违规、难以复用或与你人设不符的表情包\n\n"
+            + "\n\n"
+            "收藏标准：\n"
+            "- 质量高且表达生动的表情包\n"
+            "- 避免收藏低质、冒犯、违规或与人设不符的\n\n"
             "人设（来自主配置）：\n"
             + persona
         )
@@ -403,7 +591,7 @@ class EmojiSenderService(BaseService):
     async def ingest_once(self) -> None:
         """执行一次入库任务。
 
-        流程：对齐 → 随机抽取 → 去重检查 → VLM 决策+标注 → 复制 → embedding → 写入向量库。
+        流程：对齐 → 【优先手动目录 或 随机抽取】 → 去重检查 → 图片压缩 → VLM 决策+标注 → 复制 → embedding → 写入向量库。
         """
         if _INGEST_LOCK.locked():
             logger.debug("上一轮入库尚未结束，跳过本轮")
@@ -430,10 +618,13 @@ class EmojiSenderService(BaseService):
                     )
                     return
 
-            if not self._cfg().ingest.sample_from_media_cache:
-                return
-
-            source = self._pick_random_media_cache_file()
+            # 优先从手动目录获取表情包，否则才从随机缓存
+            source = await self._pick_next_manual_meme_file()
+            if source is None:
+                if not self._cfg().ingest.sample_from_media_cache:
+                    return
+                source = self._pick_random_media_cache_file()
+            
             if source is None:
                 return
 
@@ -447,10 +638,21 @@ class EmojiSenderService(BaseService):
             if await self._already_ingested(meme_id):
                 return
 
-            image_base64 = base64.b64encode(payload).decode("utf-8")
-            mime = self._guess_mime(source.suffix)
+            # 压缩图片用于 VLM
+            try:
+                mime = self._guess_mime(source.suffix)
+                vlm_bytes, vlm_mime, is_gif_collage = self._compress_image_for_vlm(payload, mime)
+            except Exception as e:
+                logger.warning(f"压缩图片失败: {source} - {e}")
+                return
 
-            labeled = await self._vlm_decide_and_label(image_base64=image_base64, mime=mime)
+            image_base64 = base64.b64encode(vlm_bytes).decode("utf-8")
+
+            labeled = await self._vlm_decide_and_label(
+                image_base64=image_base64, 
+                mime=vlm_mime,
+                is_gif_collage=is_gif_collage
+            )
             if not labeled or not labeled.get("keep"):
                 return
 
