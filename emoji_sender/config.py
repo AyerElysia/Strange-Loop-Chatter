@@ -45,7 +45,7 @@ class EmojiSenderConfig(BaseConfig):
         )
 
         sample_from_media_cache: bool = Field(
-            default=False,
+            default=True,
             description="是否从 data/media_cache/emojis 随机抽取候选表情包（关闭则使用手动目录，需要手动放置表情包）",
         )
 
