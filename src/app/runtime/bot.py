@@ -611,6 +611,17 @@ class Bot:
         await self.scheduler.start()
         self._stats["scheduler_running"] = True
         
+        # 触发 ON_START 事件（所有初始化完成，系统即将进入运行状态）
+        try:
+            from src.core.components.types import EventType
+            assert self.event_bus is not None
+            await self.event_bus.publish(EventType.ON_START, {})
+            if self.logger:
+                self.logger.info("已触发 ON_START 事件")
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(f"触发 ON_START 事件失败: {e}")
+        
         # 启动实时仪表盘（如果 UI 级别为 VERBOSE）
         if self.ui.level == UILevel.VERBOSE:
             self.ui.start_live_dashboard()
