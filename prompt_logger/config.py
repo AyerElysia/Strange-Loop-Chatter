@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from src.kernel.config import ConfigBase, SectionBase, config_section, Field
 
@@ -54,13 +54,55 @@ class PromptLoggerConfig(ConfigBase):
             description="是否在日志中显示时间戳"
         )
         truncate_content_length: int = Field(
-            default=5000,
+            default=0,
             description="单个 payload 内容的最大截断长度（0 表示不限制）"
         )
 
     @config_section("filter")
     class FilterSection(SectionBase):
         """日志过滤配置。"""
+
+        scope: Literal["dfc_main", "custom", "all"] = Field(
+            default="dfc_main",
+            description=(
+                "记录范围。dfc_main 仅记录 DFC 主回复模型，"
+                "custom 按 include/exclude 列表筛选，all 记录所有来源。"
+            ),
+        )
+
+        include_plugins: list[str] = Field(
+            default_factory=list,
+            description="仅记录这些插件来源（需要堆栈或上下文能识别 plugin_name）",
+        )
+        include_chatters: list[str] = Field(
+            default_factory=list,
+            description="仅记录这些 chatter 名称",
+        )
+        include_request_names: list[str] = Field(
+            default_factory=list,
+            description="仅记录这些 request_name",
+        )
+        include_models: list[str] = Field(
+            default_factory=list,
+            description="仅记录这些模型标识",
+        )
+
+        exclude_plugins: list[str] = Field(
+            default_factory=list,
+            description="排除这些插件来源",
+        )
+        exclude_chatters: list[str] = Field(
+            default_factory=list,
+            description="排除这些 chatter 名称",
+        )
+        exclude_request_names: list[str] = Field(
+            default_factory=list,
+            description="排除这些 request_name",
+        )
+        exclude_models: list[str] = Field(
+            default_factory=list,
+            description="排除这些模型标识",
+        )
 
         log_private_chat: bool = Field(
             default=True,
@@ -70,7 +112,10 @@ class PromptLoggerConfig(ConfigBase):
             default=True,
             description="是否记录群聊聊天流的提示词"
         )
-        excluded_chatters: list[str] = Field(
-            default_factory=list,
-            description="不记录提示词的 Chatter 名称列表"
+        allow_unknown_source: bool = Field(
+            default=True,
+            description=(
+                "当无法识别 plugin_name / chatter_name 时，"
+                "是否仍允许仅凭 request_name 命中记录。"
+            ),
         )

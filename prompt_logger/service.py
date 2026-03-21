@@ -44,6 +44,9 @@ class PromptLoggerService(BaseService):
         stream_id: str = "",
         chatter_name: str = "",
         request_name: str = "",
+        plugin_name: str = "",
+        model_name: str = "",
+        chat_type: str = "",
     ) -> None:
         """记录 LLM 请求提示词。
 
@@ -61,9 +64,13 @@ class PromptLoggerService(BaseService):
             payloads=payloads,
             stream_id=stream_id,
             chatter_name=chatter_name,
+            request_name=request_name,
+            plugin_name=plugin_name,
+            model_name=model_name,
+            chat_type=chat_type,
             is_response=False,
         )
-        logger.info(
+        logger.debug(
             f"已记录请求：stream={stream_id[:8] if stream_id else 'N/A'}, "
             f"chatter={chatter_name}, request={request_name}"
         )
@@ -75,6 +82,9 @@ class PromptLoggerService(BaseService):
         stream_id: str = "",
         chatter_name: str = "",
         request_name: str = "",
+        plugin_name: str = "",
+        model_name: str = "",
+        chat_type: str = "",
     ) -> None:
         """记录 LLM 响应。
 
@@ -93,11 +103,15 @@ class PromptLoggerService(BaseService):
             payloads=[],
             stream_id=stream_id,
             chatter_name=chatter_name,
+            request_name=request_name,
+            plugin_name=plugin_name,
+            model_name=model_name,
+            chat_type=chat_type,
             is_response=True,
             message=message,
             call_list=call_list,
         )
-        logger.info(
+        logger.debug(
             f"已记录响应：stream={stream_id[:8] if stream_id else 'N/A'}, "
             f"chatter={chatter_name}, request={request_name}"
         )
@@ -110,6 +124,9 @@ class PromptLoggerService(BaseService):
         stream_id: str = "",
         chatter_name: str = "",
         request_name: str = "",
+        plugin_name: str = "",
+        model_name: str = "",
+        chat_type: str = "",
     ) -> None:
         """记录完整的 LLM 交互（请求 + 响应）。
 
@@ -121,8 +138,26 @@ class PromptLoggerService(BaseService):
             chatter_name: Chatter 名称
             request_name: 请求名称
         """
-        self.log_request(payloads, stream_id, chatter_name, request_name)
-        self.log_response(message, call_list, stream_id, chatter_name, request_name)
+        # 请求与响应都带上同一组来源标签，方便在日志里成对查看
+        self.log_request(
+            payloads,
+            stream_id,
+            chatter_name,
+            request_name,
+            plugin_name,
+            model_name,
+            chat_type,
+        )
+        self.log_response(
+            message,
+            call_list,
+            stream_id,
+            chatter_name,
+            request_name,
+            plugin_name,
+            model_name,
+            chat_type,
+        )
 
     @staticmethod
     def get_instance() -> "PromptLoggerService | None":
@@ -148,7 +183,14 @@ class PromptLoggerService(BaseService):
 from .interceptor import set_current_context, get_current_context
 
 
-def set_llm_context(stream_id: str = "", chatter_name: str = "") -> None:
+def set_llm_context(
+    stream_id: str = "",
+    chatter_name: str = "",
+    plugin_name: str = "",
+    request_name: str = "",
+    model_name: str = "",
+    chat_type: str = "",
+) -> None:
     """设置当前 LLM 请求的上下文信息。
 
     在调用 LLMRequest.send() 之前调用此函数，可以让日志记录包含 stream_id。
@@ -157,7 +199,14 @@ def set_llm_context(stream_id: str = "", chatter_name: str = "") -> None:
         stream_id: 聊天流 ID
         chatter_name: Chatter 名称
     """
-    set_current_context(stream_id, chatter_name)
+    set_current_context(
+        stream_id=stream_id,
+        chatter_name=chatter_name,
+        plugin_name=plugin_name,
+        request_name=request_name,
+        model_name=model_name,
+        chat_type=chat_type,
+    )
 
 
 def log_prompt_request(
@@ -165,6 +214,9 @@ def log_prompt_request(
     stream_id: str = "",
     chatter_name: str = "",
     request_name: str = "",
+    plugin_name: str = "",
+    model_name: str = "",
+    chat_type: str = "",
 ) -> None:
     """便捷函数：记录 LLM 请求提示词。
 
@@ -176,7 +228,15 @@ def log_prompt_request(
     """
     service = PromptLoggerService.get_instance()
     if service:
-        service.log_request(payloads, stream_id, chatter_name, request_name)
+        service.log_request(
+            payloads,
+            stream_id,
+            chatter_name,
+            request_name,
+            plugin_name,
+            model_name,
+            chat_type,
+        )
 
 
 def log_prompt_response(
@@ -185,6 +245,9 @@ def log_prompt_response(
     stream_id: str = "",
     chatter_name: str = "",
     request_name: str = "",
+    plugin_name: str = "",
+    model_name: str = "",
+    chat_type: str = "",
 ) -> None:
     """便捷函数：记录 LLM 响应。
 
@@ -197,7 +260,16 @@ def log_prompt_response(
     """
     service = PromptLoggerService.get_instance()
     if service:
-        service.log_response(message, call_list, stream_id, chatter_name, request_name)
+        service.log_response(
+            message,
+            call_list,
+            stream_id,
+            chatter_name,
+            request_name,
+            plugin_name,
+            model_name,
+            chat_type,
+        )
 
 
 def log_llm_interaction(
@@ -207,6 +279,9 @@ def log_llm_interaction(
     stream_id: str = "",
     chatter_name: str = "",
     request_name: str = "",
+    plugin_name: str = "",
+    model_name: str = "",
+    chat_type: str = "",
 ) -> None:
     """便捷函数：记录完整的 LLM 交互（请求 + 响应）。
 
@@ -221,5 +296,13 @@ def log_llm_interaction(
     service = PromptLoggerService.get_instance()
     if service:
         service.log_llm_interaction(
-            payloads, message, call_list, stream_id, chatter_name, request_name
+            payloads,
+            message,
+            call_list,
+            stream_id,
+            chatter_name,
+            request_name,
+            plugin_name,
+            model_name,
+            chat_type,
         )

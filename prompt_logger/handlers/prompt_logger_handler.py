@@ -66,14 +66,14 @@ class PromptLoggerEventHandler(BaseEventHandler):
         # 从事件参数中提取信息
         stream_id = params.get("stream_id", "")
         chatter_gene = params.get("chatter_gene")
-        result = params.get("result")
+        request_name = params.get("request_name", "")
         context = params.get("context")
 
         # 检查是否需要过滤
         chatter_name = self._get_chatter_name(chatter_gene)
         chat_type = getattr(context, "chat_type", "unknown") if context else "unknown"
 
-        if not self._should_log(config, chatter_name, chat_type):
+        if not self._should_log(config, chatter_name, chat_type, request_name):
             return EventDecision.SUCCESS, params
 
         # 尝试从 chatter 中获取 LLM 响应
@@ -109,6 +109,7 @@ class PromptLoggerEventHandler(BaseEventHandler):
         config: PromptLoggerConfig,
         chatter_name: str,
         chat_type: str,
+        request_name: str = "",
     ) -> bool:
         """检查是否应该记录此聊天流的提示词。
 
@@ -120,8 +121,12 @@ class PromptLoggerEventHandler(BaseEventHandler):
         Returns:
             bool: 是否应该记录
         """
+        # 与拦截器保持一致：默认只跟踪 DFC 主回复 actor
+        if config.filter.scope == "dfc_main" and request_name != "actor":
+            return False
+
         # 检查 chatter 过滤
-        if chatter_name and chatter_name in config.filter.excluded_chatters:
+        if chatter_name and chatter_name in config.filter.exclude_chatters:
             logger.debug(f"Chatter '{chatter_name}' 在排除列表中，跳过记录")
             return False
 
