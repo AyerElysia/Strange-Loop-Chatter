@@ -1,0 +1,26 @@
+{
+  "name": "time_awareness_plugin",
+  "version": "1.0.0",
+  "description": "时间感知插件 - 为爱莉希雅注入中式时间描述，让她具有时间感知能力",
+  "author": "Neo-MoFox Team",
+  "dependencies": {
+    "plugins": [],
+    "components": []
+  },
+  "include": [
+    {
+      "component_type": "tool",
+      "component_name": "query_time",
+      "dependencies": [],
+      "enabled": true
+    }
+  ],
+  "entry_point": "plugin.py",
+  "min_core_version": "1.0.0",
+  "python_dependencies": [],
+  "dependencies_required": true,
+  "config": {
+    "path": "config/plugins/time_awareness_plugin/config.toml",
+    "reloadable": true
+  }
+}
