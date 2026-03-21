@@ -15,7 +15,10 @@ from src.app.plugin_system.base import BaseService
 from src.kernel.logger import get_logger
 
 from .config import DiaryConfig
-from .prompts import build_continuous_memory_compression_prompt
+from .prompts import (
+    build_continuous_memory_compression_prompt,
+    build_shared_persona_prompt,
+)
 
 
 logger = get_logger("diary_plugin")
@@ -628,6 +631,11 @@ class DiaryService(BaseService):
         *,
         source_texts: list[str],
         target_level: int,
+        chat_type: str = "private",
+        platform: str = "",
+        stream_name: str = "",
+        bot_id: str = "",
+        bot_nickname: str = "",
     ) -> str:
         """调用 LLM 压缩连续记忆。"""
 
@@ -651,10 +659,24 @@ class DiaryService(BaseService):
 
         batch_text = "\n".join(f"- {item}" for item in source_texts if item.strip())
         request = LLMRequest(model_set, "continuous_memory_compression")
+        shared_persona_prompt = ""
+        if cfg.plugin.inherit_default_chatter_persona_prompt:
+            shared_persona_prompt = await build_shared_persona_prompt(
+                platform=platform,
+                chat_type=chat_type,
+                bot_nickname=bot_nickname,
+                bot_id=bot_id,
+            )
         request.add_payload(
             LLMPayload(
                 ROLE.SYSTEM,
-                Text(build_continuous_memory_compression_prompt(target_level)),
+                Text(
+                    build_continuous_memory_compression_prompt(
+                        target_level,
+                        shared_persona_prompt=shared_persona_prompt,
+                        strict_identity_name_lock=cfg.plugin.strict_identity_name_lock,
+                    )
+                ),
             )
         )
         request.add_payload(
@@ -691,6 +713,8 @@ class DiaryService(BaseService):
         *,
         source_level: int,
         target_level: int,
+        bot_id: str = "",
+        bot_nickname: str = "",
     ) -> bool:
         """压缩一批连续记忆。"""
 
@@ -709,9 +733,29 @@ class DiaryService(BaseService):
             source_texts = [summary.content for summary in batch_summaries]
             source_ids = [summary.summary_id for summary in batch_summaries]
 
+        call_kwargs: dict[str, Any] = {
+            "source_texts": source_texts,
+            "target_level": target_level,
+        }
+        if (
+            memory.chat_type != "private"
+            or memory.platform
+            or memory.stream_name
+            or bot_id
+            or bot_nickname
+        ):
+            call_kwargs.update(
+                {
+                    "chat_type": memory.chat_type,
+                    "platform": memory.platform,
+                    "stream_name": memory.stream_name,
+                    "bot_id": bot_id,
+                    "bot_nickname": bot_nickname,
+                }
+            )
+
         compressed = await self._call_llm_for_continuous_memory_compression(
-            source_texts=source_texts,
-            target_level=target_level,
+            **call_kwargs,
         )
         if not compressed:
             return False
@@ -738,6 +782,9 @@ class DiaryService(BaseService):
     async def _cascade_compress_continuous_memory(
         self,
         memory: ContinuousMemory,
+        *,
+        bot_id: str = "",
+        bot_nickname: str = "",
     ) -> bool:
         """执行级联压缩。"""
 
@@ -755,6 +802,8 @@ class DiaryService(BaseService):
                     memory,
                     source_level=source_level,
                     target_level=target_level,
+                    bot_id=bot_id,
+                    bot_nickname=bot_nickname,
                 )
                 if compressed:
                     changed = True
@@ -772,6 +821,8 @@ class DiaryService(BaseService):
         section: str = "其他",
         platform: str = "",
         stream_name: str = "",
+        bot_id: str = "",
+        bot_nickname: str = "",
         diary_date: str | None = None,
     ) -> tuple[bool, str]:
         """向连续记忆空间追加一条新原始记忆。
@@ -809,7 +860,11 @@ class DiaryService(BaseService):
                 content=normalized_content,
             )
             memory.raw_entries.append(entry)
-            await self._cascade_compress_continuous_memory(memory)
+            await self._cascade_compress_continuous_memory(
+                memory,
+                bot_id=bot_id,
+                bot_nickname=bot_nickname,
+            )
             self._save_continuous_memory(memory)
 
         logger.info(f"[{stream_id[:8]}] 连续记忆原始条目已同步")

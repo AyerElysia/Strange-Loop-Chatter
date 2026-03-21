@@ -11,7 +11,7 @@ from src.kernel.event import EventDecision
 from src.kernel.logger import get_logger
 
 from .config import DiaryConfig
-from .prompts import build_auto_diary_system_prompt
+from .prompts import build_auto_diary_system_prompt, build_shared_persona_prompt
 from .service import DiaryService
 
 
@@ -99,8 +99,13 @@ class AutoDiaryEventHandler(BaseEventHandler):
                 return
 
             history_lines = []
+            bot_id = str(getattr(chat_stream, "bot_id", "") or "")
+            bot_nickname = str(getattr(chat_stream, "bot_nickname", "") or "")
             for msg in recent_messages:
                 sender = getattr(msg, "sender_name", "未知")
+                sender_id = str(getattr(msg, "sender_id", "") or "")
+                if bot_id and sender_id == bot_id:
+                    sender = f"{bot_nickname or sender}（自己）"
                 content = getattr(
                     msg,
                     "processed_plain_text",
@@ -115,7 +120,7 @@ class AutoDiaryEventHandler(BaseEventHandler):
 
             today_content = service.read_today()
             today_events = [event.content for event in today_content.events]
-            summary = await self._llm_summarize(history_lines, today_events)
+            summary = await self._llm_summarize(chat_stream, history_lines, today_events)
             if not summary:
                 logger.warning("LLM 总结失败")
                 return
@@ -138,6 +143,8 @@ class AutoDiaryEventHandler(BaseEventHandler):
                 stream_name=chat_stream.stream_name,
                 content=summary,
                 section=self._get_current_section(),
+                bot_id=bot_id,
+                bot_nickname=bot_nickname,
                 diary_date=datetime.now().strftime("%Y-%m-%d"),
             )
             if not continuous_ok:
@@ -150,6 +157,7 @@ class AutoDiaryEventHandler(BaseEventHandler):
 
     async def _llm_summarize(
         self,
+        chat_stream: Any,
         chat_history: list[str],
         today_events: list[str] | None = None,
     ) -> str | None:
@@ -176,17 +184,26 @@ class AutoDiaryEventHandler(BaseEventHandler):
             return None
 
         request = LLMRequest(model_set, "auto_diary_summary")
+        shared_persona_prompt = ""
+        if config.plugin.inherit_default_chatter_persona_prompt:
+            shared_persona_prompt = await build_shared_persona_prompt(chat_stream)
         request.add_payload(
             LLMPayload(
                 ROLE.SYSTEM,
-                Text(build_auto_diary_system_prompt(today_events)),
+                Text(
+                    build_auto_diary_system_prompt(
+                        today_events,
+                        shared_persona_prompt=shared_persona_prompt,
+                        strict_identity_name_lock=config.plugin.strict_identity_name_lock,
+                    )
+                ),
             )
         )
         request.add_payload(
             LLMPayload(
                 ROLE.USER,
                 Text(
-                    f"请把以下对话内容写成一篇简短的日记（用'我'的口吻）：\n\n{history_text}"
+                    f"请把以下对话内容写成一篇简短的日记（以“{getattr(chat_stream, 'bot_nickname', '') or '你本人'}”的口吻，避免混成用户视角）：\n\n{history_text}"
                 ),
             )
         )

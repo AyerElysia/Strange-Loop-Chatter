@@ -12,6 +12,14 @@ class PluginSection(SectionBase):
         default=True,
         description="是否向 actor bucket 注入系统提示语",
     )
+    inherit_default_chatter_persona_prompt: bool = Field(
+        default=True,
+        description="自动写日记和连续记忆压缩是否复用 default_chatter 的完整系统人设提示词",
+    )
+    strict_identity_name_lock: bool = Field(
+        default=True,
+        description="是否启用严格名字锁定，只有完全匹配核心昵称才视为本体，避免相似名字混淆",
+    )
 
 
 @config_section("storage")
