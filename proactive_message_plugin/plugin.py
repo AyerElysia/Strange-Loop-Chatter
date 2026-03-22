@@ -354,9 +354,15 @@ class ProactiveMessagePlugin(BasePlugin):
         )
         await get_stream_manager().add_sent_message_to_history(message)
         try:
-            from default_chatter.plugin import push_runtime_assistant_injection
+            from default_chatter import plugin as default_chatter_plugin_module
 
-            push_runtime_assistant_injection(chat_stream.stream_id, history_text)
+            push_runtime_assistant_injection = getattr(
+                default_chatter_plugin_module,
+                "push_runtime_assistant_injection",
+                None,
+            )
+            if callable(push_runtime_assistant_injection):
+                push_runtime_assistant_injection(chat_stream.stream_id, history_text)
         except Exception as error:
             logger.debug(f"写入实时 assistant 注入失败：{error}")
         logger.debug(f"已注入内心独白到上下文：{chat_stream.stream_id[:8]}...")

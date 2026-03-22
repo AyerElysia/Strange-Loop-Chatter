@@ -1,0 +1,20 @@
+{
+  "name": "command_dispatch_plugin",
+  "version": "1.0.0",
+  "description": "聊天消息命令分流插件",
+  "author": "Neo-MoFox Team",
+  "license": "GPL-3.0",
+  "dependencies": {
+    "plugins": [],
+    "components": []
+  },
+  "include": [
+    {
+      "component_type": "event_handler",
+      "component_name": "command_dispatch",
+      "dependencies": []
+    }
+  ],
+  "entry_point": "plugin.py",
+  "min_core_version": "1.0.0"
+}

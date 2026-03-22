@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import ClassVar, Literal
 
-from src.kernel.config import ConfigBase, SectionBase, config_section, Field
+from src.core.components.base.config import BaseConfig, SectionBase, config_section, Field
 
 
-class PromptLoggerConfig(ConfigBase):
+class PromptLoggerConfig(BaseConfig):
     """Prompt Logger 插件配置类。"""
 
-    config_file_name: ClassVar[str] = "plugins/prompt_logger"
+    config_name: ClassVar[str] = "config"
 
     @config_section("general")
     class GeneralSection(SectionBase):
@@ -119,3 +119,7 @@ class PromptLoggerConfig(ConfigBase):
                 "是否仍允许仅凭 request_name 命中记录。"
             ),
         )
+
+    general: GeneralSection = Field(default_factory=GeneralSection)
+    format: FormatSection = Field(default_factory=FormatSection)
+    filter: FilterSection = Field(default_factory=FilterSection)

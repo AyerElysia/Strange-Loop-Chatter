@@ -40,6 +40,27 @@ class DefaultChatterConfig(BaseConfig):
                 order=1
             )
 
+        @config_section("debug", title="调试设置", tag="debug", order=20)
+        class DebugSection(SectionBase):
+            """调试输出相关配置。"""
+
+            show_prompt: bool = Field(
+                default=False,
+                description="是否输出发送给 LLM 的完整提示词",
+                label="显示完整上下文",
+                tag="debug",
+                hint="开启后会打印系统提示词、历史消息、未读消息和工具列表",
+                order=0
+            )
+            show_response: bool = Field(
+                default=False,
+                description="是否输出 LLM 响应调试摘要",
+                label="显示响应摘要",
+                tag="debug",
+                hint="开启后会打印模型返回的工具调用和文本摘要",
+                order=0
+            )
+
         enabled: bool = Field(
             default=True,
             description="是否启用 DefaultChatter",
@@ -65,11 +86,40 @@ class DefaultChatterConfig(BaseConfig):
             hint="开启后会在每轮对话中强调禁止行为",
             order=2
         )
+        native_multimodal: bool = Field(
+            default=False,
+            description=(
+                "原生多模态模式。启用后，图片直接打包进 LLM payload，"
+                "由主模型在对话上下文中理解图片内容并做出响应。"
+                "需确保对应模型支持多模态输入。"
+            ),
+            label="原生多模态",
+            tag="ai",
+            hint="开启后可直接看图，绕过 VLM 转译",
+            order=3
+        )
+        max_images_per_payload: int = Field(
+            default=4,
+            description=(
+                "原生多模态模式下单次 payload 的图片上限。"
+                "用户新消息图片优先，其次是历史图片。"
+            ),
+            label="单次图片上限",
+            tag="ai",
+            hint="建议保持在 4 左右，避免上下文过重",
+            order=4
+        )
         theme_guide: ThemeGuideSection = Field(
             default_factory=ThemeGuideSection,
             description="按聊天类型区分的额外提示词",
             label="场景引导配置",
-            order=3
+            order=5
+        )
+        debug: DebugSection = Field(
+            default_factory=DebugSection,
+            description="调试输出配置",
+            label="调试配置",
+            order=6
         )
 
     plugin: PluginSection = Field(default_factory=PluginSection)

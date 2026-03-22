@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from src.core.components.base import BaseService, plugin
+from src.core.components.base import BaseService
 from src.kernel.logger import get_logger
 
 if TYPE_CHECKING:
@@ -18,7 +18,6 @@ if TYPE_CHECKING:
 logger = get_logger("prompt_logger.service", display="提示词服务")
 
 
-@plugin("prompt_logger")
 class PromptLoggerService(BaseService):
     """Prompt Logger 服务组件。
 

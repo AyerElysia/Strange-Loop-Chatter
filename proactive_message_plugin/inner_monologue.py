@@ -16,10 +16,10 @@ from src.core.managers import get_plugin_manager
 from src.kernel.logger import get_logger
 from src.kernel.llm import LLMPayload, ROLE, Text
 
-from default_chatter.plugin import SendTextAction
-from plugins.default_chatter.prompt_builder import DefaultChatterPromptBuilder
-from plugins.thinking_plugin.tools.think_tool import ThinkTool
+from default_chatter.prompt_builder import DefaultChatterPromptBuilder
+from thinking_plugin.tools.think_tool import ThinkTool
 from .tools.wait_longer import WaitLongerTool
+from default_chatter.plugin import SendTextAction
 
 if TYPE_CHECKING:
     from src.core.models.stream import ChatStream

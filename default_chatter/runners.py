@@ -12,6 +12,9 @@ from src.core.models.stream import ChatStream
 from src.kernel.logger import Logger
 from src.kernel.llm import LLMPayload, ROLE, Text
 
+from .config import DefaultChatterConfig
+from .debug import format_prompt_for_log, log_dc_result
+from .multimodal import build_multimodal_content, extract_media_from_messages
 from .type_defs import DefaultChatterRuntime, LLMConversationState, LLMResponseLike
 from .tool_flow import append_suspend_payload_if_action_only, process_tool_calls
 
@@ -72,6 +75,73 @@ def _require_response(response: LLMConversationState) -> LLMResponseLike:
     raise TypeError("当前会话状态尚未进入响应阶段")
 
 
+def _get_multimodal_settings(chatter: DefaultChatterRuntime) -> tuple[bool, int]:
+    """读取 default_chatter 的原生多模态配置。"""
+    plugin = getattr(chatter, "plugin", None)
+    config = getattr(plugin, "config", None)
+    if isinstance(config, DefaultChatterConfig):
+        return config.plugin.native_multimodal, max(0, config.plugin.max_images_per_payload)
+    return False, 0
+
+
+def _log_response_debug(chatter: DefaultChatterRuntime, response: LLMConversationState) -> None:
+    """按配置输出 LLM 调试摘要。"""
+    plugin = getattr(chatter, "plugin", None)
+    config = getattr(plugin, "config", None)
+    if isinstance(config, DefaultChatterConfig):
+        log_dc_result(response, config)
+    else:
+        return
+
+
+def _log_prompt_debug(
+    chatter: DefaultChatterRuntime,
+    response: LLMConversationState,
+    logger: Logger,
+) -> None:
+    """按配置输出完整提示词上下文。"""
+    plugin = getattr(chatter, "plugin", None)
+    config = getattr(plugin, "config", None)
+    if not isinstance(config, DefaultChatterConfig):
+        return
+    plugin_cfg = getattr(config, "plugin", None)
+    debug_cfg = getattr(plugin_cfg, "debug", None)
+    if debug_cfg is None or not getattr(debug_cfg, "show_prompt", False):
+        return
+
+    prompt_text = format_prompt_for_log(response)
+    logger.print_panel(
+        prompt_text,
+        title=f"DefaultChatter 提示词 (stream={getattr(chatter, 'stream_id', '')[:8]})",
+        border_style="cyan",
+    )
+
+
+def _build_multimodal_payload(
+    prompt_text: str,
+    unread_msgs: list[Message],
+    *,
+    history_msgs: list[Message] | None = None,
+    max_images: int = 0,
+    include_history_images: bool = False,
+) -> list[object]:
+    """将文本提示和图片组装为原生多模态 content。"""
+    unread_media = extract_media_from_messages(unread_msgs, max_items=max_images)
+    content = build_multimodal_content(prompt_text, unread_media)
+
+    if include_history_images and max_images > len(unread_media):
+        remaining = max_images - len(unread_media)
+        if history_msgs and remaining > 0:
+            history_media = extract_media_from_messages(
+                list(reversed(history_msgs)),
+                max_items=remaining,
+            )
+            if history_media:
+                content.extend(build_multimodal_content("[历史图片参考]", history_media))
+
+    return content
+
+
 def _transition(
     *,
     rt: _EnhancedWorkflowRuntime,
@@ -109,6 +179,7 @@ async def run_enhanced(
     request.add_payload(LLMPayload(ROLE.SYSTEM, Text(system_prompt_text)))
 
     history_text = chatter._build_enhanced_history_text(chat_stream)
+    native_multimodal, max_images = _get_multimodal_settings(chatter)
     usable_map = await chatter.inject_usables(request)
 
     rt = _EnhancedWorkflowRuntime(
@@ -152,7 +223,17 @@ async def run_enhanced(
                 unread_lines=unread_lines,
                 extra=chatter._build_negative_behaviors_extra(),
             )
-            rt.history_merged = True
+
+            if native_multimodal:
+                unread_user_content = _build_multimodal_payload(
+                    unread_user_prompt,
+                    unread_msgs,
+                    history_msgs=chat_stream.context.history_messages,
+                    max_images=max_images,
+                    include_history_images=not rt.history_merged,
+                )
+            else:
+                unread_user_content = Text(unread_user_prompt)
 
             decision = await chatter.sub_agent(
                 unread_lines,
@@ -170,8 +251,9 @@ async def run_enhanced(
 
             chatter._upsert_pending_unread_payload(
                 response=rt.response,
-                formatted_text=unread_user_prompt,
+                formatted_content=unread_user_content,
             )
+            rt.history_merged = True
             _transition(rt=rt, to_phase=_ToolCallWorkflowPhase.MODEL_TURN, logger=logger, reason="accepted unread batch")
 
             # MODEL_TURN 阶段发送后才 flush 本轮采纳的 unread
@@ -181,8 +263,10 @@ async def run_enhanced(
         if rt.phase in (_ToolCallWorkflowPhase.MODEL_TURN, _ToolCallWorkflowPhase.FOLLOW_UP):
             # FOLLOW_UP 阶段严禁 flush 新未读；MODEL_TURN 才 flush 本轮采纳的 unread。
             try:
+                _log_prompt_debug(chatter, rt.response, logger)
                 rt.response = await rt.response.send(stream=False)
                 await rt.response
+                _log_response_debug(chatter, rt.response)
                 if rt.phase == _ToolCallWorkflowPhase.MODEL_TURN:
                     if rt.unread_msgs_to_flush:
                         await chatter.flush_unreads(rt.unread_msgs_to_flush)
@@ -272,6 +356,8 @@ async def run_classical(
         return
 
     usable_map = await chatter.inject_usables(base_request)
+    native_multimodal, max_images = _get_multimodal_settings(chatter)
+    history_images_injected = False
 
     while True:
         _, unread_msgs = await chatter.fetch_unreads()
@@ -309,7 +395,18 @@ async def run_classical(
                 Text(await chatter._build_system_prompt(chat_stream)),
             )
         )
-        request.add_payload(LLMPayload(ROLE.USER, Text(classical_user_text)))
+        if native_multimodal:
+            user_content = _build_multimodal_payload(
+                classical_user_text,
+                unread_msgs,
+                history_msgs=chat_stream.context.history_messages,
+                max_images=max_images,
+                include_history_images=not history_images_injected,
+            )
+            request.add_payload(LLMPayload(ROLE.USER, user_content))
+            history_images_injected = True
+        else:
+            request.add_payload(LLMPayload(ROLE.USER, Text(classical_user_text)))
         if usable_map.get_all():
             request.add_payload(LLMPayload(ROLE.TOOL, usable_map.get_all()))  # type: ignore[arg-type]
 
@@ -320,8 +417,10 @@ async def run_classical(
 
         while True:
             try:
+                _log_prompt_debug(chatter, response, logger)
                 response = await response.send(stream=False)
                 await response
+                _log_response_debug(chatter, response)
             except Exception as error:
                 logger.error(f"LLM 请求失败: {error}", exc_info=True)
                 yield Failure("LLM 请求失败", error)

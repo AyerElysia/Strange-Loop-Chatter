@@ -159,7 +159,9 @@ def log_dc_result(response: Any, config: DefaultChatterConfig) -> None:
         response: LLMResponse 对象
         config: DefaultChatter 配置
     """
-    if not config.debug.show_response:
+    plugin_cfg = getattr(config, "plugin", None)
+    debug_cfg = getattr(plugin_cfg, "debug", None)
+    if debug_cfg is None or not getattr(debug_cfg, "show_response", False):
         return
 
     if not hasattr(response, "call_list") or not response.call_list:

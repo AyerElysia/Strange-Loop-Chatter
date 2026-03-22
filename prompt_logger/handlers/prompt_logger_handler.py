@@ -9,7 +9,6 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from src.core.components import EventType, BaseEventHandler
-from src.core.components.base import plugin
 from src.kernel.event import EventDecision
 
 from ..config import PromptLoggerConfig
@@ -21,7 +20,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger("prompt_logger")
 
 
-@plugin("prompt_logger")
 class PromptLoggerEventHandler(BaseEventHandler):
     """Prompt Logger 事件处理器。
 

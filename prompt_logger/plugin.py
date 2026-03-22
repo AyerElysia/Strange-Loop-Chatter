@@ -19,6 +19,7 @@ from .handlers.prompt_logger_handler import PromptLoggerEventHandler
 from .service import PromptLoggerService
 
 logger = get_logger("prompt_logger", display="提示词记录")
+file_logger = logging.getLogger("prompt_logger.file")
 
 
 def _normalize_names(values: list[str]) -> set[str]:
@@ -101,8 +102,16 @@ class PromptLoggerPlugin(BasePlugin):
         )
         handler.setFormatter(formatter)
 
-        logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
+        for existing in list(file_logger.handlers):
+            file_logger.removeHandler(existing)
+            try:
+                existing.close()
+            except Exception:
+                pass
+
+        file_logger.addHandler(handler)
+        file_logger.setLevel(logging.INFO)
+        file_logger.propagate = False
 
         PromptLoggerPlugin._file_handler = handler
         logger.info(f"日志文件已初始化：{log_file.absolute()}")
@@ -113,7 +122,7 @@ class PromptLoggerPlugin(BasePlugin):
             return
 
         try:
-            logger.removeHandler(self._file_handler)
+            file_logger.removeHandler(self._file_handler)
         except Exception:
             pass
 
@@ -270,17 +279,7 @@ class PromptLoggerPlugin(BasePlugin):
             border_style="cyan" if not is_response else "green",
         )
 
-        handler.emit(
-            logging.LogRecord(
-                name="prompt_logger",
-                level=logging.INFO,
-                pathname=__file__,
-                lineno=0,
-                msg=log_text,
-                args=(),
-                exc_info=None,
-            )
-        )
+        file_logger.info(log_text)
 
     def get_components(self) -> list[type]:
         """获取插件内所有组件类。"""

@@ -74,6 +74,14 @@ class DefaultChatterRuntime(Protocol):
         """向请求注入可用工具。"""
         ...
 
+    def _register_vlm_skip(self) -> None:
+        """为当前聊天流注册原生多模态所需的 VLM 跳过。"""
+        ...
+
+    def _unregister_vlm_skip(self) -> None:
+        """注销当前聊天流的 VLM 跳过。"""
+        ...
+
     async def fetch_unreads(
         self,
         time_format: str = "%H:%M",
@@ -115,7 +123,7 @@ class DefaultChatterRuntime(Protocol):
     def _upsert_pending_unread_payload(
         self,
         response: LLMConversationState,
-        formatted_text: str,
+        formatted_content: object,
     ) -> None:
         """将未读消息写入待发送上下文。"""
         ...
