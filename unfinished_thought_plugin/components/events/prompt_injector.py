@@ -21,7 +21,7 @@ class UnfinishedThoughtPromptInjector(BaseEventHandler):
     """在 prompt 构建时注入随机挑选的未完成念头。"""
 
     handler_name = "unfinished_thought_prompt_injector"
-    handler_description = "在目标 system prompt 的尾部补充区注入未完成念头"
+    handler_description = "在目标 user prompt 的额外区块注入未完成念头"
     weight = 11
     intercept_message = False
     init_subscribe = ["on_prompt_build"]
@@ -76,8 +76,6 @@ class UnfinishedThoughtPromptInjector(BaseEventHandler):
     def _resolve_target_field(self, prompt_name: str) -> str:
         """根据目标模板名选择注入字段。"""
 
-        if prompt_name.endswith("_system_prompt"):
-            return "extra_info"
         if prompt_name.endswith("_user_prompt"):
             return "extra"
         return ""

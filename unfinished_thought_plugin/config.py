@@ -61,7 +61,7 @@ class PromptSection(SectionBase):
     """prompt 注入配置。"""
 
     target_prompt_names: list[str] = Field(
-        default_factory=lambda: ["default_chatter_system_prompt"],
+        default_factory=lambda: ["default_chatter_user_prompt"],
         description="允许注入未完成念头的 prompt 模板名",
     )
     prompt_title: str = Field(

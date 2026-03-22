@@ -812,7 +812,10 @@ class UnfinishedThoughtService(BaseService):
             restore_message_count_on_failure=current_count,
         )
 
-    def _make_thought_payloads(self, state: UnfinishedThoughtState) -> list[dict[str, Any]]:
+    def _make_thought_payloads(
+        self,
+        state: UnfinishedThoughtState,
+    ) -> list[dict[str, Any]]:
         active = [
             item
             for item in self._ordered_thoughts(state)

@@ -102,7 +102,7 @@ unfinished_thought_plugin/
 
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
-| `target_prompt_names` | `["default_chatter_system_prompt"]` | 允许注入的 prompt 模板名 |
+| `target_prompt_names` | `["default_chatter_user_prompt"]` | 允许注入的 prompt 模板名 |
 | `prompt_title` | `"未完成念头"` | prompt 中显示的标题 |
 | `inject_min_items` | `1` | 随机注入最小条数 |
 | `inject_max_items` | `3` | 随机注入最大条数 |
@@ -148,15 +148,15 @@ unfinished_thought_plugin/
 
 ### 3. Prompt 注入
 
-当 `plugin.inject_prompt = true` 时，插件会在 `on_prompt_build` 阶段把当前活跃念头写入目标 system prompt 的尾部补充区。
+当 `plugin.inject_prompt = true` 时，插件会在 `on_prompt_build` 阶段把当前活跃念头写入目标 user prompt 的额外区块。
 
 默认目标模板是：
 
-- `default_chatter_system_prompt`
+- `default_chatter_user_prompt`
 
 如果你想让其他 prompt 也看到未完成念头，只要把模板名加入 `prompt.target_prompt_names`。
 
-如果目标模板名以 `_system_prompt` 结尾，注入位置会是 `extra_info`；如果以 `_user_prompt` 结尾，则保持写入 `extra` 以兼容旧逻辑。
+注入位置固定是 user prompt 的 `extra`，不会改动 system prompt。
 
 默认注入格式是短碎片，而不是长解释。这样主回复模型看到的更接近“后台挂着的未竟片段”，而不是“总结好的笔记”。
 
