@@ -96,6 +96,8 @@ system_prompt = """# 关于你
 - id：{bot_id}
 
 {extra_info}
+
+{continuous_memory}
 """
 
 user_prompt = """你当前正在名为"{stream_name}"的对话中。
@@ -104,9 +106,7 @@ user_prompt = """你当前正在名为"{stream_name}"的对话中。
 {history}
     
 {unreads}
-    
-{continuous_memory}
-    
+
 {extra}
 ---
 请基于上述信息决定接下来的动作。

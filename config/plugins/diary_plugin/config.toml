@@ -1,0 +1,151 @@
+# 插件主配置。
+[plugin]
+# 是否启用日记插件
+# 值类型：bool, 默认值：true
+enabled = true
+
+# 是否向 actor bucket 注入系统提示语
+# 值类型：bool, 默认值：true
+inject_system_prompt = true
+
+# 自动写日记和连续记忆压缩是否复用 default_chatter 的完整系统人设提示词
+# 值类型：bool, 默认值：true
+inherit_default_chatter_persona_prompt = true
+
+# 是否启用严格名字锁定，只有完全匹配核心昵称才视为本体，避免相似名字混淆
+# 值类型：bool, 默认值：true
+strict_identity_name_lock = true
+
+# 日记存储配置。
+[storage]
+# 日记存储根目录
+# 值类型：str, 默认值："data/diaries"
+base_path = "data/diaries"
+
+# 日期目录格式（用于月份目录）
+# 值类型：str, 默认值："%Y-%m"
+date_format = "%Y-%m"
+
+# 日记文件名格式
+# 值类型：str, 默认值："%Y-%m-%d.md"
+file_format = "%Y-%m-%d.md"
+
+# 日记格式配置。
+[format]
+# 是否在日记开头添加基本信息头
+# 值类型：bool, 默认值：true
+enable_header = true
+
+# 是否启用时间段分类（上午/下午/晚上）
+# 值类型：bool, 默认值：true
+enable_section = true
+
+# 时间戳格式
+# 值类型：str, 默认值："%H:%M"
+time_format = "%H:%M"
+
+# 默认时间段分类
+# 值类型：str, 默认值："其他"
+default_section = "其他"
+
+# 去重配置。
+[dedup]
+# 是否启用写前重复检查
+# 值类型：bool, 默认值：true
+enabled = true
+
+# 相似度阈值（超过此值视为重复）
+# 值类型：float, 默认值：0.8
+similarity_threshold = 0.8
+
+# 最小内容长度（短于此长度不进行去重检查）
+# 值类型：int, 默认值：5
+min_content_length = 5
+
+# System Reminder 配置。
+[reminder]
+# System Reminder 注入的 bucket
+# 值类型：str, 默认值："actor"
+bucket = "actor"
+
+# System Reminder 名称
+# 值类型：str, 默认值："关于写日记"
+name = "关于写日记"
+
+# 自定义引导语（会追加到默认引导语后面）
+# 值类型：str, 默认值：""
+custom_instructions = ""
+
+# 自动写日记配置。
+[auto_diary]
+# 是否启用自动写日记功能
+# 值类型：bool, 默认值：true
+enabled = true
+
+# 触发自动写日记的消息数量阈值（同时作为总结的消息条数）
+# 值类型：int, 默认值：20
+message_threshold = 10
+
+# 是否允许群聊自动写日记（False=仅私聊触发）
+# 值类型：bool, 默认值：false
+allow_group_chat = false
+
+# 模型配置。
+[model]
+# 写日记使用的任务模型名称（对应 model.toml 中的 [model_tasks.xxx]）
+# 值类型：str, 默认值："diary"
+task_name = "diary"
+
+# 连续记忆配置。
+[continuous_memory]
+# 是否启用按聊天隔离的连续记忆空间
+# 值类型：bool, 默认值：true
+enabled = true
+
+# 连续记忆存储根目录
+# 值类型：str, 默认值："data/continuous_memories"
+base_path = "data/continuous_memories"
+
+# 私聊连续记忆子目录
+# 值类型：str, 默认值："private"
+private_subdir = "private"
+
+# 群聊连续记忆子目录
+# 值类型：str, 默认值："group"
+group_subdir = "group"
+
+# 讨论组连续记忆子目录
+# 值类型：str, 默认值："discuss"
+discuss_subdir = "discuss"
+
+# 每累计多少个自动写出的新日记项触发一次压缩
+# 值类型：int, 默认值：5
+batch_size = 5
+
+# 最大连续记忆压缩层级（L1-L3）
+# 值类型：int, 默认值：3
+max_levels = 3
+
+# 是否将当前聊天流的连续记忆动态注入主回复 prompt 的专用 continuous_memory 区块
+# 值类型：bool, 默认值：true
+inject_prompt = true
+
+# 是否在 prompt 中注入近期详细记忆条目；默认只注入压缩层摘要
+# 值类型：bool, 默认值：false
+include_recent_entries_in_prompt = false
+
+# 允许注入连续记忆的 system prompt 模板名列表
+# 值类型：list, 默认值：["default_chatter_system_prompt"]
+target_prompt_names = ["default_chatter_system_prompt"]
+
+# 注入 prompt 时展示的近期详细记忆条数
+# 值类型：int, 默认值：5
+recent_entry_limit = 5
+
+# 注入 prompt 时每层展示的摘要条数上限
+# 值类型：int, 默认值：3
+summary_limit_per_level = 3
+
+# 压缩连续记忆使用的任务模型名称，留空则复用 model.task_name
+# 值类型：str, 默认值：""
+compression_model_task = ""

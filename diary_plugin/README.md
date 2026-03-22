@@ -176,11 +176,11 @@ diary_plugin/
 
 ### 4. 连续记忆注入
 
-连续记忆会在 `on_prompt_build` 阶段注入到目标 prompt 的专用 `continuous_memory` 区块中，不会再和 `extra` 混在一起。
+连续记忆会在 `on_prompt_build` 阶段注入到目标 system prompt 的专用 `continuous_memory` 区块中，不会和 `history` / `unreads` 混在一起。
 
 默认目标模板是：
 
-- `default_chatter_user_prompt`
+- `default_chatter_system_prompt`
 
 如果你想让其他插件也吃到连续记忆，只要把模板名加到：
 
@@ -248,7 +248,7 @@ data/continuous_memories/discuss/<stream_id>.json
 
 这是为了避免上下文膨胀。
 
-默认只注入到 `default_chatter_user_prompt`，如果你需要别的插件也看到连续记忆，可以手动扩展 `target_prompt_names`。
+默认只注入到 `default_chatter_system_prompt`，如果你需要别的插件也看到连续记忆，可以手动扩展 `target_prompt_names`。
 
 ---
 

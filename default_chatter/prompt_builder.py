@@ -63,6 +63,7 @@ class DefaultChatterPromptBuilder:
             .set("nickname", chat_stream.bot_nickname)
             .set("bot_id", chat_stream.bot_id)
             .set("theme_guide", selected_theme_guide)
+            .set("stream_id", chat_stream.stream_id or "")
             .build()
         )
 

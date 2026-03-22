@@ -1,0 +1,29 @@
+# 基础设置配置项。
+[settings]
+# 是否启用主动发消息功能。设为 false 可临时禁用，无需从 core.toml 移除插件。
+# 值类型：bool, 默认值：true
+enabled = true
+
+# 首次触发内心独白的等待时间（分钟）
+# 值类型：float, 默认值：10.0
+first_check_minutes = 5.0
+
+# 默认最小等待间隔（分钟），防止 LLM 说'等 1 分钟'太频繁
+# 值类型：float, 默认值：5.0
+min_wait_interval_minutes = 1.0
+
+# 最大等待时间（分钟），超过后强制触发
+# 值类型：float, 默认值：180.0
+max_wait_minutes = 180.0
+
+# 主动发送后若无人回复，再次触发内心独白前的等待时间（分钟）
+# 值类型：float, 默认值：10.0
+post_send_followup_minutes = 180.0
+
+# 内心独白提示中携带的历史独白条数
+# 值类型：int, 默认值：5
+monologue_history_limit = 20
+
+# 忽略的聊天类型列表，如 ['group'] 表示群聊不触发
+# 值类型：list, 默认值：["group"]
+ignored_chat_types = ["group"]

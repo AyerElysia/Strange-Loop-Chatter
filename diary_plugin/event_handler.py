@@ -321,7 +321,7 @@ class ContinuousMemoryPromptInjector(BaseEventHandler):
     """在 prompt 构建时注入连续记忆。"""
 
     handler_name: str = "continuous_memory_prompt_injector"
-    handler_description: str = "在目标 prompt 的 extra 板块中注入当前聊天流连续记忆"
+    handler_description: str = "在目标 system prompt 的连续记忆区块中注入当前聊天流连续记忆"
     weight: int = 10
     init_subscribe: list[str] = ["on_prompt_build"]
 

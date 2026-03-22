@@ -167,8 +167,8 @@ class ContinuousMemorySection(SectionBase):
         description="是否在 prompt 中注入近期详细记忆条目；默认只注入压缩层摘要",
     )
     target_prompt_names: list[str] = Field(
-        default_factory=lambda: ["default_chatter_user_prompt"],
-        description="允许注入连续记忆的 prompt 模板名列表",
+        default_factory=lambda: ["default_chatter_system_prompt"],
+        description="允许注入连续记忆的 system prompt 模板名列表",
     )
     recent_entry_limit: int = Field(
         default=5,
