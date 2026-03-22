@@ -25,6 +25,8 @@
 - `max_inquiry_steps`: 单个课题允许推进几轮
 - `target_prompt_names`: 哪些 prompt 允许注入
 
+当目标模板名以 `_system_prompt` 结尾时，注入内容会进入 `extra_info`，避免堆到用户历史信息里；如果保留旧式 `_user_prompt`，则仍写入 `extra` 以兼容。
+
 ## 命令
 
 - `/drive_core view`
@@ -39,4 +41,3 @@
 - `data/drive_core/private/<stream_id>.json`
 - `data/drive_core/group/<stream_id>.json`
 - `data/drive_core/discuss/<stream_id>.json`
-

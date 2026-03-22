@@ -21,7 +21,7 @@ class DriveCorePromptInjector(BaseEventHandler):
     """在 prompt 构建时注入当前内驱力工作区。"""
 
     handler_name = "drive_core_prompt_injector"
-    handler_description = "在目标 prompt 的 extra 板块注入内驱力状态"
+    handler_description = "在目标 system prompt 的尾部补充区注入内驱力状态"
     weight = 13
     intercept_message = False
     init_subscribe = ["on_prompt_build"]
@@ -67,10 +67,22 @@ class DriveCorePromptInjector(BaseEventHandler):
         if not block:
             return EventDecision.SUCCESS, params
 
-        current_extra = str(values.get("extra", "") or "")
-        values["extra"] = (
-            f"{current_extra}\n\n{block}".strip() if current_extra else block
+        target_field = self._resolve_target_field(prompt_name)
+        if not target_field:
+            return EventDecision.SUCCESS, params
+
+        current_text = str(values.get(target_field, "") or "").strip()
+        values[target_field] = (
+            f"{current_text}\n\n{block}".strip() if current_text else block
         )
         logger.debug(f"已向 prompt 注入内驱力: stream={stream_id[:8]}")
         return EventDecision.SUCCESS, params
 
+    def _resolve_target_field(self, prompt_name: str) -> str:
+        """根据目标模板名选择注入字段。"""
+
+        if prompt_name.endswith("_system_prompt"):
+            return "extra_info"
+        if prompt_name.endswith("_user_prompt"):
+            return "extra"
+        return ""
