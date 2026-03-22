@@ -34,6 +34,7 @@ from src.kernel.llm import LLMPayload, ROLE, Text
 
 from .config import DefaultChatterConfig
 from .decision_agent import decide_should_respond
+from .multimodal import get_media_list
 from .prompt_builder import DefaultChatterPromptBuilder
 from .runners import run_classical, run_enhanced
 from .type_defs import LLMConversationState, LLMResponseLike, SubAgentDecision
@@ -312,6 +313,91 @@ class DefaultChatter(BaseChatter):
         plugin_config = getattr(self.plugin, "config", None)
         return DefaultChatterPromptBuilder.build_negative_behaviors_extra(plugin_config)
 
+    def _is_native_multimodal_enabled(self) -> bool:
+        """当前聊天流是否启用原生多模态。"""
+        plugin_config = getattr(self.plugin, "config", None)
+        return bool(
+            isinstance(plugin_config, DefaultChatterConfig)
+            and plugin_config.plugin.native_multimodal
+        )
+
+    @staticmethod
+    def _count_media_suffix(msg: Message) -> str:
+        """为消息补充媒体摘要。"""
+        media_list = get_media_list(msg)
+        if not media_list:
+            return ""
+
+        image_count = 0
+        emoji_count = 0
+        for media in media_list:
+            media_type = str(media.get("type", "")).lower()
+            if media_type == "emoji":
+                emoji_count += 1
+            elif media_type == "image":
+                image_count += 1
+
+        parts: list[str] = []
+        if image_count:
+            parts.append(f"图片×{image_count}")
+        if emoji_count:
+            parts.append(f"表情包×{emoji_count}")
+        if not parts:
+            return ""
+        return f" [媒体: {'，'.join(parts)}]"
+
+    def format_message_line(
+        self,
+        msg: Message,
+        time_format: str = "%H:%M",
+    ) -> str:
+        """格式化消息时附带媒体摘要，并避免泄露原始媒体结构。"""
+        if not self._is_native_multimodal_enabled():
+            return BaseChatter.format_message_line(msg, time_format)
+
+        raw_time = getattr(msg, "time", None)
+        if isinstance(raw_time, (int, float)):
+            time_str = datetime.datetime.fromtimestamp(raw_time).strftime(time_format)
+        elif isinstance(raw_time, datetime.datetime):
+            time_str = raw_time.strftime(time_format)
+        else:
+            time_str = str(raw_time or "")
+
+        role_raw = getattr(msg, "sender_role", None)
+        role_str = BaseChatter._format_role(role_raw)
+        role_part = f"<{role_str}> " if role_str else ""
+
+        platform_id = getattr(msg, "sender_id", "") or ""
+        id_part = f"[{platform_id}] " if platform_id else ""
+
+        nickname = getattr(msg, "sender_name", "") or ""
+        cardname = getattr(msg, "sender_cardname", None)
+        if cardname and cardname != nickname:
+            name_part = f"{nickname}${cardname}"
+        else:
+            name_part = nickname or "未知发送者"
+
+        message_id = getattr(msg, "message_id", "") or ""
+        msg_id_part = f"[{message_id}]" if message_id else ""
+
+        media_suffix = DefaultChatter._count_media_suffix(msg)
+        content = getattr(msg, "processed_plain_text", None)
+        if content and str(content).strip():
+            content = str(content)
+            if media_suffix:
+                content = f"{content}{media_suffix}"
+        else:
+            raw_content = getattr(msg, "content", "")
+            if media_suffix:
+                if isinstance(raw_content, str) and raw_content.strip():
+                    content = f"{raw_content}{media_suffix}"
+                else:
+                    content = media_suffix.strip()
+            else:
+                content = str(raw_content)
+
+        return f"【{time_str}】{role_part}{id_part}{name_part} {msg_id_part}： {content}"
+
     async def _build_system_prompt(self, chat_stream: ChatStream) -> str:
         """构建系统提示词"""
         plugin_config = self.plugin.config
@@ -368,23 +454,24 @@ class DefaultChatter(BaseChatter):
     @staticmethod
     def _upsert_pending_unread_payload(
         response: LLMConversationState,
-        formatted_text: str,
+        formatted_content: object,
     ) -> None:
         """在未发送前合并未读消息到最后一个 USER payload。"""
+        if isinstance(formatted_content, list):
+            new_content = list(formatted_content)
+        elif isinstance(formatted_content, Text):
+            new_content = [formatted_content]
+        else:
+            new_content = [Text(str(formatted_content))]
+
         if response.payloads:
             last_payload = response.payloads[-1]
             if last_payload.role == ROLE.USER:
-                if last_payload.content and isinstance(last_payload.content[-1], Text):
-                    existing_text = last_payload.content[-1].text
-                    separator = "\n" if existing_text else ""
-                    last_payload.content[-1] = Text(
-                        f"{existing_text}{separator}{formatted_text}"
-                    )
-                else:
-                    last_payload.content.append(Text(formatted_text))
+                last_payload.content.extend(new_content)
                 return
 
-        response.add_payload(LLMPayload(ROLE.USER, Text(formatted_text)))
+        payload_content = new_content[0] if len(new_content) == 1 else new_content
+        response.add_payload(LLMPayload(ROLE.USER, payload_content))
 
     async def sub_agent(
         self,
@@ -437,16 +524,20 @@ class DefaultChatter(BaseChatter):
             yield Failure("无法激活聊天流")
             return
 
-        mode = self._get_mode()
-        logger.info(f"DefaultChatter 当前模式: {mode}")
+        self._register_vlm_skip()
+        try:
+            mode = self._get_mode()
+            logger.info(f"DefaultChatter 当前模式: {mode}")
 
-        if mode == "classical":
-            async for result in self._execute_classical(chat_stream):
+            if mode == "classical":
+                async for result in self._execute_classical(chat_stream):
+                    yield result
+                return
+
+            async for result in self._execute_enhanced(chat_stream):
                 yield result
-            return
-
-        async for result in self._execute_enhanced(chat_stream):
-            yield result
+        finally:
+            self._unregister_vlm_skip()
 
     async def _execute_enhanced(
         self, chat_stream: ChatStream
@@ -487,6 +578,39 @@ class DefaultChatter(BaseChatter):
     ) -> tuple[bool, bool]:
         """执行工具调用并将结果写回响应上下文。"""
         return await super().run_tool_call(call, response, usable_map, trigger_msg)
+
+    def _register_vlm_skip(self) -> None:
+        """启用原生多模态时，跳过当前聊天流的 VLM 转译。"""
+        plugin_config = getattr(self.plugin, "config", None)
+        if not (
+            isinstance(plugin_config, DefaultChatterConfig)
+            and plugin_config.plugin.native_multimodal
+        ):
+            return
+
+        try:
+            from src.core.managers import get_media_manager
+
+            get_media_manager().skip_vlm_for_stream(self.stream_id)
+            logger.info(f"DefaultChatter 已为聊天流 {self.stream_id[:8]} 启用原生多模态")
+        except Exception as exc:
+            logger.warning(f"DefaultChatter 启用原生多模态失败: {exc}")
+
+    def _unregister_vlm_skip(self) -> None:
+        """退出时恢复当前聊天流的 VLM 转译。"""
+        plugin_config = getattr(self.plugin, "config", None)
+        if not (
+            isinstance(plugin_config, DefaultChatterConfig)
+            and plugin_config.plugin.native_multimodal
+        ):
+            return
+
+        try:
+            from src.core.managers import get_media_manager
+
+            get_media_manager().unskip_vlm_for_stream(self.stream_id)
+        except Exception as exc:
+            logger.debug(f"DefaultChatter 取消原生多模态失败: {exc}")
 
 
 # ─── Plugin ─────────────────────────────────────────────────
