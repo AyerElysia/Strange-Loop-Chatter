@@ -12,6 +12,12 @@
 
 它的目标是让角色表现出更强的连续思维感，而不是每一轮都像重新开始。
 
+最近一轮调整后，这个插件更强调“碎片感”而不是“复盘感”：
+
+- 扫描输入会优先使用轻量状态视图
+- prompt 注入会尽量压短成片段
+- 过于像总结的扫描结果会在写入前被过滤
+
 ---
 
 ## 功能
@@ -26,8 +32,10 @@
 
 - 每累计固定数量的有效对话后，自动触发一次扫描。
 - 扫描时只把最近一段历史交给模型。
+- 扫描状态默认使用轻量视图，不再把完整 `reason`、扫描历史和统计信息回喂给模型。
 - 模型会基于“当前所有念头 + 最近历史”做增删改。
 - 扫描失败时会恢复触发前的计数，避免丢掉下一次自动扫描节奏。
+- 如果模型输出明显像总结，插件会在写入前做轻量过滤。
 
 ### 3. 主模型 prompt 注入
 
@@ -87,6 +95,8 @@ unfinished_thought_plugin/
 |---|---|---|
 | `trigger_every_n_messages` | `8` | 每隔多少条有效对话自动扫描一次 |
 | `history_window_size` | `12` | 扫描时给念头模型看的历史记录条数 |
+| `use_compact_snapshot` | `true` | 扫描时是否仅向模型提供轻量状态视图 |
+| `reject_summary_like_output` | `true` | 是否过滤过于像总结的输出 |
 
 ### `[prompt]`
 
@@ -96,6 +106,8 @@ unfinished_thought_plugin/
 | `prompt_title` | `"未完成念头"` | prompt 中显示的标题 |
 | `inject_min_items` | `1` | 随机注入最小条数 |
 | `inject_max_items` | `3` | 随机注入最大条数 |
+| `compact_mode` | `true` | 是否以更短更碎的格式注入未完成念头 |
+| `max_fragment_length` | `80` | 注入 prompt 时单条念头的最大展示长度 |
 
 ### `[model]`
 
@@ -143,6 +155,8 @@ unfinished_thought_plugin/
 - `default_chatter_user_prompt`
 
 如果你想让其他 prompt 也看到未完成念头，只要把模板名加入 `prompt.target_prompt_names`。
+
+默认注入格式是短碎片，而不是长解释。这样主回复模型看到的更接近“后台挂着的未竟片段”，而不是“总结好的笔记”。
 
 ---
 
@@ -202,6 +216,11 @@ data/unfinished_thoughts/discuss/<stream_id>.json
 
 这两个插件一起使用时，角色会更像有持续内部状态的主体，而不是只会记事实的聊天机器人。
 
+如果你希望角色更稳定地保留人设连续性，这两个插件可以并行使用：
+
+- `self_narrative_plugin` 负责自我叙事
+- `unfinished_thought_plugin` 负责未完成片段
+
 ---
 
 ## 说明
@@ -213,3 +232,8 @@ data/unfinished_thoughts/discuss/<stream_id>.json
 - 不做复杂排序
 
 先把“固定扫描 + 随机注入 + 持久化恢复”这条闭环稳定跑通，再继续往上叠加内部状态系统。
+
+如果后续你发现它又开始变得像总结，优先检查这两个开关：
+
+- `scan.use_compact_snapshot`
+- `scan.reject_summary_like_output`
