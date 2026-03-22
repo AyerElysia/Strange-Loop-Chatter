@@ -1,0 +1,29 @@
+{
+    "name": "prompt_logger",
+    "version": "1.1.0",
+    "description": "通用提示词可视化插件 — 将发送给 LLM 的完整提示词记录到专门日志文件",
+    "author": "MoFox Studio",
+    "dependencies": {
+        "plugins": [],
+        "components": []
+    },
+    "include": [
+        {
+            "component_type": "config",
+            "component_name": "config",
+            "dependencies": []
+        },
+        {
+            "component_type": "service",
+            "component_name": "prompt_logger",
+            "dependencies": []
+        },
+        {
+            "component_type": "event_handler",
+            "component_name": "prompt_logger_handler",
+            "dependencies": []
+        }
+    ],
+    "entry_point": "plugin.py",
+    "min_core_version": "1.0.0"
+}
