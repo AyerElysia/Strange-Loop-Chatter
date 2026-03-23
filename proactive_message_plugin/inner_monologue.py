@@ -18,6 +18,7 @@ from src.kernel.llm import LLMPayload, ROLE, Text
 
 from default_chatter.prompt_builder import DefaultChatterPromptBuilder
 from thinking_plugin.tools.think_tool import ThinkTool
+from emoji_sender.action import SendEmojiMemeAction
 from .tools.wait_longer import WaitLongerTool
 from default_chatter.plugin import SendTextAction
 
@@ -177,7 +178,9 @@ async def generate_inner_monologue(
         if system_prompt:
             llm_request.add_payload(LLMPayload(ROLE.SYSTEM, [Text(system_prompt)]))
 
-        tool_registry = llm_api.create_tool_registry([ThinkTool, SendTextAction, WaitLongerTool])
+        tool_registry = llm_api.create_tool_registry(
+            [ThinkTool, SendTextAction, SendEmojiMemeAction, WaitLongerTool]
+        )
         llm_request.add_payload(LLMPayload(ROLE.TOOL, tool_registry.get_all()))
         llm_request.add_payload(LLMPayload(ROLE.USER, [Text(user_prompt)]))
 

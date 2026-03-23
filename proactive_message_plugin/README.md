@@ -203,7 +203,7 @@ proactive_message_plugin/
 | 事件 | 触发时机 | 处理逻辑 |
 |------|----------|----------|
 | `ON_MESSAGE_RECEIVED` | 收到用户消息 | 重置等待状态 |
-| `ON_CHATTER_STEP` | Chatter 执行一步 | 检查是否进入 Wait 状态，进入则开始等待计时 |
+| `ON_CHATTER_STEP_RESULT` | Chatter 执行一步后 | 检查是否进入 Wait 状态，进入则开始等待计时 |
 
 ## 🎯 使用场景
 

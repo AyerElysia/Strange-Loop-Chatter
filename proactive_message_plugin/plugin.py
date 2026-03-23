@@ -37,7 +37,7 @@ class ProactiveMessageEventHandler(BaseEventHandler):
 
     订阅以下事件：
     - ON_MESSAGE_RECEIVED: 收到用户消息时重置等待状态
-    - ON_CHATTER_STEP: Chatter 执行一步时检查是否进入 Wait 状态
+    - ON_CHATTER_STEP_RESULT: Chatter 执行一步后检查是否进入 Wait 状态
     """
 
     plugin_name = "proactive_message_plugin"
@@ -46,7 +46,7 @@ class ProactiveMessageEventHandler(BaseEventHandler):
 
     init_subscribe: list[EventType | str] = [
         EventType.ON_MESSAGE_RECEIVED,
-        EventType.ON_CHATTER_STEP,
+        EventType.ON_CHATTER_STEP_RESULT,
     ]
 
     async def execute(
@@ -68,7 +68,11 @@ class ProactiveMessageEventHandler(BaseEventHandler):
             return EventDecision.SUCCESS, params
 
         try:
-            if event_name == EventType.ON_MESSAGE_RECEIVED:
+            normalized_event_name = (
+                event_name.value if isinstance(event_name, EventType) else str(event_name)
+            )
+
+            if normalized_event_name == EventType.ON_MESSAGE_RECEIVED.value:
                 # 收到用户消息
                 chat_stream = params.get("chat_stream")
                 message = params.get("message")
@@ -89,7 +93,7 @@ class ProactiveMessageEventHandler(BaseEventHandler):
                 if chat_stream:
                     await plugin._on_user_message(chat_stream)
 
-            elif event_name == EventType.ON_CHATTER_STEP:
+            elif normalized_event_name == EventType.ON_CHATTER_STEP_RESULT.value:
                 # Chatter 执行一步
                 stream_id = params.get("stream_id")
                 result = params.get("result")
@@ -179,15 +183,28 @@ class ProactiveMessagePlugin(BasePlugin):
     async def _on_chatter_step(self, stream_id: str, context, result) -> None:
         """当 Chatter 执行一步时调用"""
         from src.core.components.base.chatter import Wait
+
         if isinstance(result, Wait):
             # Bot 进入等待状态
             try:
                 from src.app.plugin_system.api.stream_api import get_stream
+                from src.core.managers import get_stream_manager
 
                 chat_stream = await get_stream(stream_id)
-                if chat_stream and not self._should_ignore(chat_stream):
-                    import asyncio
-                    asyncio.create_task(self._start_waiting(chat_stream))
+                if chat_stream is None:
+                    logger.debug(f"[{stream_id[:8]}] get_stream 未命中，尝试从 StreamManager 兜底获取")
+                    chat_stream = get_stream_manager()._streams.get(stream_id)
+
+                if chat_stream is None:
+                    logger.warning(f"[{stream_id[:8]}] 检测到 Wait，但未找到 chat_stream，无法启动主动消息计时")
+                    return
+
+                if self._should_ignore(chat_stream):
+                    logger.debug(f"[{stream_id[:8]}] 检测到 Wait，但该聊天类型被忽略")
+                    return
+
+                logger.debug(f"[{stream_id[:8]}] 检测到 Wait，准备启动主动消息等待计时")
+                await self._start_waiting(chat_stream)
             except Exception as e:
                 logger.debug(f"处理 Chatter Wait 状态失败：{e}")
 
