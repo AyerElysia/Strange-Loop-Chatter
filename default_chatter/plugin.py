@@ -42,7 +42,10 @@ from .runners import run_classical, run_enhanced
 from .type_defs import LLMConversationState, LLMResponseLike, SubAgentDecision
 
 logger = get_logger("default_chatter")
-_REASON_LEAK_PATTERN = re.compile(r'[,，]?\s*reason[:：]', re.IGNORECASE)
+_REASON_LEAK_PATTERN = re.compile(
+    r'[,，]?\s*["\']?reason["\']?\s*[:：]',
+    re.IGNORECASE,
+)
 
 # ─── 系统提示词构建 ─────────────────────────────────────────────
 system_prompt = """# 关于你
@@ -87,7 +90,9 @@ system_prompt = """# 关于你
 - send_text 使用规范：
 1. 如果你需要发送多条消息，可以像这样分段"content": ["你好", "请问你是谁？", "找我有什么事吗？"]
 2. 私聊场景下，reply_to 默认不要使用，除非确实需要引用某条历史消息来避免歧义。
-3. content 里只能写真正要发给用户的正文，不要把 reason/thought 等元信息写进去。
+3. content 里只能写真正要发给用户的正文，不要把 reason/thought/expected_reaction/max_wait_seconds/mood/delay_seconds/followup_type/topic 等元信息写进去。
+4. 严禁把多个 JSON 对象、<br/>、或其他 action/tool 的参数拼进 content；这些信息必须分别通过各自工具调用传递。
+5. 当同时需要回复和调用其他工具时，content 只保留要发出的文本，其他参数一律不要塞进 content。
 - Tool：tool通常是你在对话中需要查询信息或执行特定功能时调用的工具，例如查询天气、计算器等。你可以调用 tool 来获取这些信息或功能，调用时请务必按照规定的格式提供必要的信息。这类工具通常会返回一些结果信息，因此当你调用tool并收到返回结果后，你应该根据结果信息继续进行合理的回复或进一步执行其他工具。
 - Agent：agent通常是你在对话中需要调用的智能体，例如执行复杂任务、处理多轮对话等。你可以调用 agent 来完成这些任务，调用时请务必按照规定的格式提供必要的信息。这类工具通常会返回一些结果信息，因此当你调用agent并收到返回结果后，你应该根据结果信息继续进行合理的回复或进一步执行其他工具。
 
@@ -160,9 +165,13 @@ class SendTextAction(BaseAction):
     action_name = "send_text"
     action_description = (
         "发送文本消息给用户。"
-        "content 支持单条字符串或字符串数组。"
-        "如果你需要发送多条消息，可以像这样分段"
+        "content 只能是字符串或字符串数组（分段发送），例如"
         "\"content\": [\"你好\", \"请问你是谁？\", \"找我有什么事吗？\"]。"
+        "content 中只能包含要发给用户的纯文本正文。"
+        "严禁把 reason/thought/expected_reaction/max_wait_seconds/mood/"
+        "delay_seconds/followup_type/topic 等元信息写进 content。"
+        "严禁把多个 JSON 对象或 <br/> 拼接进 content。"
+        "如果还需要其他 action/tool，请单独调用，不要塞到 content 里。"
         "分段消息会按顺序发送，并自动模拟段间打字延迟。"
         "私聊场景下 reply_to 默认不要使用，除非确实需要引用某条历史消息来避免歧义。"
         "注意：本工具无法发送表情包等非文本内容。"
@@ -171,10 +180,81 @@ class SendTextAction(BaseAction):
     chatter_allow: list[str] = ["default_chatter"]
 
     @staticmethod
-    def _normalize_content_segments(content: str | list[str]) -> list[str]:
+    def _to_non_empty_segments(raw: list[object]) -> list[str]:
+        """将任意列表转换为非空字符串段。"""
+        return [s.strip() for s in raw if isinstance(s, str) and s.strip()]
+
+    @staticmethod
+    def _extract_leading_json_array(text: str) -> str | None:
+        """从文本开头提取首个平衡的 JSON 数组字符串。"""
+        if not text.startswith("["):
+            return None
+
+        depth = 0
+        in_string = False
+        escaped = False
+
+        for index, char in enumerate(text):
+            if in_string:
+                if escaped:
+                    escaped = False
+                    continue
+                if char == "\\":
+                    escaped = True
+                    continue
+                if char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+                continue
+            if char == "[":
+                depth += 1
+                continue
+            if char == "]":
+                depth -= 1
+                if depth == 0:
+                    return text[: index + 1]
+
+        return None
+
+    @classmethod
+    def _try_parse_segments_from_text(cls, text: str) -> list[str] | None:
+        """尝试从文本中解析分段列表，失败返回 None。"""
+        if not text:
+            return None
+
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = None
+
+        if isinstance(parsed, list):
+            return cls._to_non_empty_segments(parsed)
+        if isinstance(parsed, dict):
+            content = parsed.get("content")
+            if isinstance(content, list):
+                return cls._to_non_empty_segments(content)
+            if isinstance(content, str):
+                stripped = content.strip()
+                return [stripped] if stripped else []
+
+        leading_array = cls._extract_leading_json_array(text)
+        if leading_array:
+            try:
+                parsed_array = json.loads(leading_array)
+                if isinstance(parsed_array, list):
+                    return cls._to_non_empty_segments(parsed_array)
+            except Exception:
+                return None
+        return None
+
+    @classmethod
+    def _normalize_content_segments(cls, content: str | list[str]) -> list[str]:
         """将 content 统一规范为分段文本列表。"""
         if isinstance(content, list):
-            return [s.strip() for s in content if isinstance(s, str) and s.strip()]
+            return cls._to_non_empty_segments(content)
 
         if not isinstance(content, str):
             return []
@@ -183,17 +263,17 @@ class SendTextAction(BaseAction):
         if not stripped:
             return []
 
-        if stripped.startswith("["):
-            try:
-                parsed = json.loads(stripped)
-                if isinstance(parsed, list):
-                    return [
-                        s.strip() for s in parsed if isinstance(s, str) and s.strip()
-                    ]
-            except Exception:
-                pass
+        # 某些模型会把多个 JSON 块用 <br/> 串联，send_text 只消费首块 content。
+        first_block = re.split(r"<br\s*/?>", stripped, maxsplit=1, flags=re.IGNORECASE)[0]
+        first_block = first_block.strip()
+        if not first_block:
+            return []
 
-        return [stripped]
+        parsed_segments = cls._try_parse_segments_from_text(first_block)
+        if parsed_segments is not None:
+            return parsed_segments
+
+        return [first_block]
 
     @staticmethod
     def _sanitize_segment(content: str) -> str:
@@ -331,11 +411,12 @@ class SendTextAction(BaseAction):
         self,
         content: Annotated[
             str | list[str],
-            "要发送的内容。支持字符串或字符串数组；数组会按顺序分条发送。",
+            "要发送给用户的纯文本内容。仅允许 string 或 string[]；"
+            "禁止把 reason/thought/expected_reaction 等元信息、多个 JSON 块或 <br/> 拼进 content。",
         ],
         reply_to: Annotated[
             str | None,
-            "可选，要引用回复的目标消息 ID。分条发送时仅第一条使用。",
+            "可选，要引用回复的目标消息 ID。私聊默认留空，只有必须引用才能消歧时才填写。分条发送时仅第一条使用。",
         ] = None,
     ) -> tuple[bool, str]:
         """执行发送文本消息的逻辑
