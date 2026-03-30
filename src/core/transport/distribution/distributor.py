@@ -72,6 +72,17 @@ async def _on_message_received(_: str, params: dict) -> tuple[EventDecision, dic
         stream_id = chat_stream.stream_id
         context = chat_stream.context
 
+        # 防御性保护：忽略机器人自身回声消息，避免自触发对话循环。
+        # 适配器层本应过滤，但这里再做一层兜底。
+        bot_id = str(getattr(chat_stream, "bot_id", "") or "").strip()
+        sender_id = str(getattr(message, "sender_id", "") or "").strip()
+        if bot_id and sender_id and bot_id == sender_id:
+            logger.debug(
+                "忽略机器人自身回声消息: "
+                f"stream={stream_id[:8]} sender_id={sender_id}"
+            )
+            return EventDecision.SUCCESS, params
+
         # 2. 持久化消息到数据库 + 更新未读消息
         await sm.add_message(message)
 
