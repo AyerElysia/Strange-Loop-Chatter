@@ -1286,3 +1286,68 @@ class LifeEngineService(BaseService):
             )
         finally:
             self._state.running = False
+
+    async def trigger_heartbeat_manually(self) -> dict[str, Any]:
+        """手动触发一次心跳（用于测试/调试）。
+        
+        Returns:
+            包含心跳结果的字典
+        """
+        if not self._is_enabled():
+            return {
+                "success": False,
+                "error": "life_engine 未启用",
+            }
+
+        # 检查是否在睡眠窗口
+        in_sleep_window, sleep_window_desc = self._in_sleep_window_now()
+        if in_sleep_window:
+            return {
+                "success": False,
+                "error": f"当前在睡眠时段（{sleep_window_desc}），心跳已暂停",
+            }
+
+        logger.info("life_engine 手动触发心跳")
+        
+        try:
+            self._state.heartbeat_count += 1
+            self._state.last_heartbeat_at = _now_iso()
+            injected_content = await self.inject_wake_context()
+            
+            log_heartbeat_event(
+                heartbeat_count=self._state.heartbeat_count,
+                last_heartbeat_at=self._state.last_heartbeat_at,
+                pending_message_count=self._state.pending_event_count,
+                last_wake_context_at=self._state.last_wake_context_at,
+                last_wake_context_size=self._state.last_wake_context_size,
+            )
+            
+            model_reply = await self._run_heartbeat_model(injected_content)
+            await self._record_model_reply(model_reply)
+            
+            logger.info(
+                f"life_engine 手动心跳完成 #{self._state.heartbeat_count}: "
+                f"{_shorten_text(model_reply, max_length=120)}"
+            )
+            
+            return {
+                "success": True,
+                "heartbeat_count": self._state.heartbeat_count,
+                "heartbeat_at": self._state.last_heartbeat_at,
+                "event_count": self._state.last_wake_context_size,
+                "reply": model_reply,
+            }
+        except Exception as exc:  # noqa: BLE001
+            self._state.last_model_error = str(exc)
+            logger.error(f"life_engine 手动心跳失败: {exc}\n{traceback.format_exc()}")
+            log_error(
+                "manual_heartbeat_failed",
+                str(exc),
+                heartbeat_count=self._state.heartbeat_count,
+                heartbeat_at=self._state.last_heartbeat_at,
+            )
+            return {
+                "success": False,
+                "error": str(exc),
+                "heartbeat_count": self._state.heartbeat_count,
+            }

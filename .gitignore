@@ -103,3 +103,4 @@ plugins/*
 !plugins/napcat_adapter/
 !plugins/booku_memory/
 !plugins/emoji_sender/
+!plugins/life_engine/

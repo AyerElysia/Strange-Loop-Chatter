@@ -250,6 +250,39 @@ class LifeEngineWakeDFCTool(BaseTool):
         if chat_stream is None:
             return False, f"找不到目标聊天流: {target_stream_id}"
 
+        target_extra: dict[str, Any] = {}
+        try:
+            stream_info = await stream_manager.get_stream_info(chat_stream.stream_id)
+        except Exception:
+            stream_info = None
+
+        if str(chat_stream.chat_type or "").lower() == "group":
+            group_id = ""
+            group_name = ""
+            if stream_info:
+                group_id = str(stream_info.get("group_id") or "").strip()
+                group_name = str(stream_info.get("group_name") or "").strip()
+            if group_id:
+                target_extra["target_group_id"] = group_id
+            if group_name:
+                target_extra["target_group_name"] = group_name
+        else:
+            person_id = str(stream_info.get("person_id") or "").strip() if stream_info else ""
+            if person_id:
+                try:
+                    from src.core.utils.user_query_helper import get_user_query_helper
+
+                    person = await get_user_query_helper().person_crud.get_by(
+                        person_id=person_id
+                    )
+                    if person and person.user_id:
+                        target_extra["target_user_id"] = str(person.user_id)
+                    nickname = str(getattr(person, "nickname", "") or "").strip() if person else ""
+                    if nickname:
+                        target_extra["target_user_name"] = nickname
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"life_engine 无法为 DFC 唤醒解析私聊目标: {exc}")
+
         wake_prompt = (
             "[内心想法传递]\n"
             f"重要度: {importance}\n"
@@ -274,6 +307,7 @@ class LifeEngineWakeDFCTool(BaseTool):
             life_wake_reason=reason,
             life_wake_importance=importance,
             life_wake_message=text,
+            **target_extra,
         )
 
         chat_stream.context.add_unread_message(trigger_message)

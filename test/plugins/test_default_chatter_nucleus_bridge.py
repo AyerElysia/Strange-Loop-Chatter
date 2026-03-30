@@ -52,7 +52,7 @@ async def test_message_nucleus_tool_queues_message(monkeypatch: pytest.MonkeyPat
 
     tool = MessageNucleusTool(plugin=DefaultChatterPlugin(config=DefaultChatterConfig()))
     success, result = await tool.execute(
-        message="帮我问问另一个我最近在想什么",
+        content="帮我问问另一个我最近在想什么",
         stream_id="stream-1",
         platform="qq",
         chat_type="private",
@@ -86,7 +86,7 @@ async def test_message_nucleus_tool_fails_when_life_engine_missing(
     )
 
     tool = MessageNucleusTool(plugin=DefaultChatterPlugin(config=DefaultChatterConfig()))
-    success, result = await tool.execute(message="你好")
+    success, result = await tool.execute(content="你好")
 
     assert success is False
     assert "life_engine 未加载" in result
@@ -130,11 +130,53 @@ async def test_default_chatter_run_tool_call_autofills_nucleus_context(
 
     assert appended is True
     assert exec_success is True
-    assert captured["message"] == "替我问问另一个我"
+    assert captured["content"] == "替我问问另一个我"
     assert captured["stream_id"] == "stream-42"
     assert captured["platform"] == "qq"
     assert captured["chat_type"] == "group"
     assert captured["sender_name"] == "Alice"
+
+
+@pytest.mark.asyncio
+async def test_default_chatter_run_tool_call_accepts_legacy_message_arg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """旧参数名 message 仍应被兼容转换，避免热更新后炸掉。"""
+    chatter = _build_chatter()
+    captured: dict[str, Any] = {}
+
+    async def _fake_exec_llm_usable(_usable_cls: Any, _message: Any, **kwargs: Any) -> tuple[bool, str]:
+        captured.update(kwargs)
+        return True, "queued"
+
+    monkeypatch.setattr(chatter, "exec_llm_usable", _fake_exec_llm_usable)
+
+    registry = ToolRegistry()
+    registry.register(MessageNucleusTool)
+    response = _FakeResponse()
+    trigger_msg = SimpleNamespace(
+        stream_id="stream-88",
+        platform="qq",
+        chat_type="private",
+        sender_name="Alice",
+    )
+    call = SimpleNamespace(
+        id="call-2",
+        name="tool-message_nucleus",
+        args={"message": "旧字段也要能工作"},
+    )
+
+    appended, exec_success = await chatter.run_tool_call(
+        call=call,
+        response=response,
+        usable_map=registry,
+        trigger_msg=trigger_msg,
+    )
+
+    assert appended is True
+    assert exec_success is True
+    assert captured["content"] == "旧字段也要能工作"
+    assert "message" not in captured
 
 
 def test_default_chatter_plugin_exposes_message_nucleus_tool() -> None:

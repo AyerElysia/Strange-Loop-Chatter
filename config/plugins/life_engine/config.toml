@@ -10,12 +10,10 @@ heartbeat_interval_seconds = 300
 
 # 睡觉时间，格式 HH:MM（24小时制）。与 wake_time 同时配置后生效。
 # 值类型：str, 默认值：""
-# 示例：sleep_time = "01:00" 表示凌晨1点开始睡眠
 sleep_time = "01:00"
 
 # 苏醒时间，格式 HH:MM（24小时制）。与 sleep_time 同时配置后生效。
 # 值类型：str, 默认值：""
-# 示例：wake_time = "07:30" 表示早上7点半苏醒
 wake_time = "07:30"
 
 # 是否在每次心跳时输出日志。
