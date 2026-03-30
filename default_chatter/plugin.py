@@ -778,6 +778,9 @@ class DefaultChatter(BaseChatter):
         """执行工具调用并将结果写回响应上下文。"""
         if call.name == _MESSAGE_NUCLEUS and trigger_msg is not None:
             raw_args = dict(call.args) if isinstance(getattr(call, "args", None), dict) else {}
+            legacy_message = raw_args.pop("message", None)
+            if legacy_message is not None and "content" not in raw_args:
+                raw_args["content"] = legacy_message
             raw_args.setdefault("stream_id", str(getattr(trigger_msg, "stream_id", "") or self.stream_id))
             raw_args.setdefault("platform", str(getattr(trigger_msg, "platform", "") or ""))
             raw_args.setdefault("chat_type", str(getattr(trigger_msg, "chat_type", "") or ""))

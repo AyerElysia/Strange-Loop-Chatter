@@ -23,7 +23,7 @@ class MessageNucleusTool(BaseTool):
 
     async def execute(
         self,
-        message: Annotated[str, "要转交给生命中枢的话。应直接写想问或想说的内容。"],
+        content: Annotated[str, "要转交给生命中枢的话。应直接写想问或想说的内容。"],
         stream_id: Annotated[
             str,
             "当前对话流 ID。通常留空，由系统自动填充。",
@@ -41,9 +41,9 @@ class MessageNucleusTool(BaseTool):
             "当前说话身份展示名。通常留空，由系统自动填充。",
         ] = "",
     ) -> tuple[bool, str]:
-        text = str(message or "").strip()
+        text = str(content or "").strip()
         if not text:
-            return False, "message 不能为空"
+            return False, "content 不能为空"
 
         life_plugin = get_plugin_manager().get_plugin("life_engine")
         if life_plugin is None:
