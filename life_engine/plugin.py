@@ -14,6 +14,8 @@ from .audit import (
 from .config import LifeEngineConfig
 from .event_handler import LifeEngineMessageCollectorHandler
 from .service import LifeEngineService
+from .tools import ALL_TOOLS
+from .todo_tools import TODO_TOOLS
 
 
 logger = get_logger("life_engine", display="life_engine")
@@ -21,14 +23,21 @@ logger = get_logger("life_engine", display="life_engine")
 
 @register_plugin
 class LifeEnginePlugin(BasePlugin):
-    """生命中枢最小原型插件。
+    """生命中枢插件。
 
-    仅提供一个并行存在的后台心跳服务与旁路消息收集器，不接管正常聊天流程。
+    提供一个独立于 DFC 的并行存在系统，使用统一的事件流模型处理
+    消息、心跳、工具调用等交互，保持时间连续性。
+
+    特性：
+    - 统一事件流：所有交互都是事件，按时间顺序展示
+    - 文件系统操作：提供限定在 workspace 内的文件操作工具
+    - TODO 系统：为数字生命设计的待办事项系统
+    - 可配置可见事件数：通过 context_history_max_events 控制
     """
 
     plugin_name: str = "life_engine"
-    plugin_description: str = "生命中枢最小原型，维护并行心跳并收集聊天流上下文"
-    plugin_version: str = "1.5.0"
+    plugin_description: str = "生命中枢，维护并行心跳与统一事件流上下文"
+    plugin_version: str = "3.0.0"
 
     configs: list[type] = [LifeEngineConfig]
     dependent_components: list[str] = []
@@ -46,7 +55,7 @@ class LifeEnginePlugin(BasePlugin):
 
     def get_components(self) -> list[type]:
         """返回插件提供的组件。"""
-        return [LifeEngineService, LifeEngineMessageCollectorHandler]
+        return [LifeEngineService, LifeEngineMessageCollectorHandler, *ALL_TOOLS, *TODO_TOOLS]
 
     async def on_plugin_loaded(self) -> None:
         """插件加载后启动心跳。"""

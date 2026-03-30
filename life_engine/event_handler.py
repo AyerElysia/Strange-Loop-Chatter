@@ -15,20 +15,26 @@ logger = get_logger("life_engine", display="life_engine")
 
 
 class LifeEngineMessageCollectorHandler(BaseEventHandler):
-    """收集所有聊天流消息，供 life_engine 中枢在心跳时处理。"""
+    """收集聊天流入站/出站消息，供 life_engine 中枢在心跳时统一处理。"""
 
     plugin_name = "life_engine"
     handler_name = "message_collector"
-    handler_description = "收集所有聊天流消息并堆积到 life_engine 队列"
+    handler_description = "收集收发消息并堆积到 life_engine 队列"
     weight = 50
     intercept_message = False
-    init_subscribe: list[EventType | str] = [EventType.ON_MESSAGE_RECEIVED]
+    init_subscribe: list[EventType | str] = [
+        EventType.ON_MESSAGE_RECEIVED,
+        EventType.ON_MESSAGE_SENT,
+    ]
 
     async def execute(
         self, event_name: str, params: dict[str, Any]
     ) -> tuple[EventDecision, dict[str, Any]]:
-        """把收到的消息记录到 life_engine 服务队列。"""
-        if event_name != EventType.ON_MESSAGE_RECEIVED.value:
+        """把收发消息事件中的 message 记录到 life_engine 服务队列。"""
+        if event_name not in {
+            EventType.ON_MESSAGE_RECEIVED.value,
+            EventType.ON_MESSAGE_SENT.value,
+        }:
             return EventDecision.PASS, params
 
         plugin = self.plugin
@@ -44,7 +50,11 @@ class LifeEngineMessageCollectorHandler(BaseEventHandler):
             if service is None:
                 return EventDecision.SUCCESS, params
 
-            await service.record_message(message)
+            direction = "received"
+            if event_name == EventType.ON_MESSAGE_SENT.value:
+                direction = "sent"
+
+            await service.record_message(message, direction=direction)
         except Exception as exc:  # noqa: BLE001
             logger.error(f"life_engine 收集消息失败: {exc}")
             log_error(

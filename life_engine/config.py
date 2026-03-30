@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import ClassVar
 
 from src.core.components.base.config import BaseConfig, Field, SectionBase, config_section
+
+
+# 默认工作空间路径
+_DEFAULT_WORKSPACE = str(Path(__file__).parent.parent.parent / "data" / "life_engine_workspace")
 
 
 class LifeEngineConfig(BaseConfig):
@@ -27,24 +32,20 @@ class LifeEngineConfig(BaseConfig):
             description="心跳间隔（秒）。",
         )
 
-        heartbeat_prompt: str = Field(
-            default=(
-                "你是一个并行存在的生命中枢原型。"
-                "每次心跳都只输出给自己看的内部报文，简要总结当前状态、最近消息、关注点与下一步倾向，"
-                "不要接管正常聊天流程，不要直接对外回复。"
-            ),
-            description="心跳提示词。当前版本只暴露，不直接注入聊天主链路。",
-        )
-
         log_heartbeat: bool = Field(
             default=True,
             description="是否在每次心跳时输出日志。",
         )
 
-        context_history_max_messages: int = Field(
-            default=80,
+        context_history_max_events: int = Field(
+            default=100,
             ge=1,
-            description="滚动累计上下文最多保留的消息条数。",
+            description="滚动事件流最多保留的事件条数（包括心跳、消息、工具调用等）。",
+        )
+
+        workspace_path: str = Field(
+            default=_DEFAULT_WORKSPACE,
+            description="中枢文件系统操作的工作空间路径。中枢只能在此目录下进行文件操作。",
         )
 
     @config_section("model")
