@@ -1,11 +1,15 @@
-"""life_engine service tests."""
+"""life_engine 服务测试。"""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
 
 from plugins.life_engine.config import LifeEngineConfig
-from plugins.life_engine.service import LifeEngineMessageRecord, LifeEngineService
+from plugins.life_engine.service import LifeEngineService
 
 
 @dataclass
@@ -13,40 +17,63 @@ class _DummyPlugin:
     config: LifeEngineConfig
 
 
-def _make_service() -> LifeEngineService:
+def _make_service(tmp_path: Path) -> LifeEngineService:
     config = LifeEngineConfig()
     config.settings.enabled = True
+    config.settings.workspace_path = str(tmp_path)
     return LifeEngineService(_DummyPlugin(config=config))
 
 
-def test_record_model_reply_does_not_append_history() -> None:
-    """模型回复只应记录状态，不应写回滚动历史。"""
+@pytest.mark.asyncio
+async def test_enqueue_dfc_message_appends_pending_event(tmp_path: Path) -> None:
+    """DFC 留言应进入 pending 队列并持久化。"""
+    service = _make_service(tmp_path)
 
-    service = _make_service()
-    seed = LifeEngineMessageRecord(
-        received_at="2026-03-30T18:00:00+08:00",
-        platform="qq",
-        chat_type="group",
-        source_label="qq | 群聊 | 测试群",
-        source_detail="群ID=123",
+    receipt = await service.enqueue_dfc_message(
+        "另一个我最近有什么想法么？",
         stream_id="stream-1",
-        sender_display="Alice",
-        sender_id="10001",
-        message_id="msg-1",
-        reply_to=None,
-        message_type="text",
-        content="hello",
+        platform="qq",
+        chat_type="private",
+        sender_name="DFC",
     )
-    service._message_history.append(seed)
-    service._state.history_message_count = len(service._message_history)
-    service._state.heartbeat_count = 7
-    service._state.last_heartbeat_at = "2026-03-30T18:01:00+08:00"
 
-    service._record_model_reply("  内部报文  ")
+    assert receipt["queued"] is True
+    assert receipt["stream_id"] == "stream-1"
+    assert receipt["pending_event_count"] == 1
 
-    assert len(service._message_history) == 1
-    assert service._message_history[0] is seed
-    assert service._state.history_message_count == 1
-    assert service._state.last_model_reply == "内部报文"
-    assert service._state.last_model_reply_at is not None
-    assert service._state.last_model_error is None
+    assert len(service._pending_events) == 1
+    event = service._pending_events[0]
+    assert event.event_id == receipt["event_id"]
+    assert event.event_type.value == "message"
+    assert event.source == "qq"
+    assert event.stream_id == "stream-1"
+    assert event.chat_type == "private"
+    assert event.sender == "DFC"
+    assert event.content == "另一个我最近有什么想法么？"
+    assert "DFC 留言给生命中枢" in event.source_detail
+
+    persisted = json.loads((tmp_path / "life_engine_context.json").read_text(encoding="utf-8"))
+    assert len(persisted["pending_events"]) == 1
+    assert persisted["pending_events"][0]["event_id"] == event.event_id
+    assert persisted["pending_events"][0]["content_type"] == "dfc_message"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_dfc_message_rejects_empty_message(tmp_path: Path) -> None:
+    """空留言必须被拒绝。"""
+    service = _make_service(tmp_path)
+
+    with pytest.raises(ValueError, match="message 不能为空"):
+        await service.enqueue_dfc_message("   ")
+
+
+@pytest.mark.asyncio
+async def test_enqueue_dfc_message_rejects_when_disabled(tmp_path: Path) -> None:
+    """life_engine 禁用时不应接受 DFC 留言。"""
+    config = LifeEngineConfig()
+    config.settings.enabled = False
+    config.settings.workspace_path = str(tmp_path)
+    service = LifeEngineService(_DummyPlugin(config=config))
+
+    with pytest.raises(RuntimeError, match="life_engine 未启用"):
+        await service.enqueue_dfc_message("帮我记一下")

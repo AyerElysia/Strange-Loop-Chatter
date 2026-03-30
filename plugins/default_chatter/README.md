@@ -5,7 +5,7 @@
 
 ## 你这版改动后，它的定位
 
-这版 `default_chatter` 的关键价值可以概括为 6 点：
+这版 `default_chatter` 的关键价值可以概括为 7 点：
 
 1. 人设随机注入：系统提示词的人设字段支持按概率独立采样注入，降低“每轮固定模板化复读”。
 2. 双执行模式：`enhanced`（FSM 连续回合）与 `classical`（单轮更克制）。
@@ -13,6 +13,7 @@
 4. 子代理决策：群聊先判定“要不要回”，私聊直接放行。
 5. 原生多模态：支持把图片/表情包/视频直接编入 LLM payload，并可跳过 VLM 转译。
 6. 调试可视化：可输出完整 prompt 面板和 tool call 摘要，便于定位模型行为。
+7. 中枢异步桥接：可向 `life_engine` 留言，但不阻塞等待中枢同步返回。
 
 ## 目录结构
 
@@ -24,6 +25,7 @@ default_chatter/
 ├── decision_agent.py         # 子代理判定与 token 预算裁剪
 ├── prompt_builder.py         # system/user prompt 组装与人设概率注入
 ├── multimodal.py             # 图片/表情包/视频提取与 content 组装
+├── nucleus_bridge.py         # DFC -> 生命中枢 的异步留言工具
 ├── config.py                 # 配置模型定义（模式、调试、多模态、人设注入等）
 ├── type_defs.py              # 运行时协议与类型约束
 ├── debug/
@@ -56,6 +58,20 @@ default_chatter/
 
 - 工具名：`action-pass_and_wait`
 - 语义：本轮不动作，挂起等待下一条用户消息。
+
+### 4) Tool: `message_nucleus`
+
+- 工具名：`tool-message_nucleus`
+- 语义：
+  - 向 `life_engine` 异步留言
+  - 不等待中枢即时回复
+  - 由中枢在后续 heartbeat 自己整理，再决定是否调用 `nucleus_wake_dfc`
+- 适用场景：
+  - “另一个我最近在想什么？”
+  - “关于那个人，另一个我有没有什么意见？”
+  - “这件事你先替我交给中枢慢慢想”
+
+这个工具只暴露给 `default_chatter`，不会出现在其他 chatter 的工具列表里。
 
 ## 执行流（重点）
 
