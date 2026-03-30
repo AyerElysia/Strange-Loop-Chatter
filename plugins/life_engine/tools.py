@@ -146,22 +146,42 @@ def _pick_latest_target_stream_id(plugin: Any) -> str | None:
 
 
 class LifeEngineWakeDFCTool(BaseTool):
-    """唤醒 DFC 工具。"""
+    """给并行存在的另一个自己（DFC）传递想法的工具。"""
 
-    tool_name: str = "nucleus_wake_dfc"
+    tool_name: str = "nucleus_tell_dfc"
     tool_description: str = (
-        "由中枢主动唤醒 DFC 进行对外表达。"
-        "中枢应自行判断是否该唤醒（例如长期安静或有重要发现），"
-        "本工具不做硬编码节流拦截。"
+        "【重要】向对外社交态（DFC）传递你内心整理的想法。"
+        "\n\n"
+        "**核心理解：**\n"
+        "- DFC 是并行运行的另一个你，她独立地接收和回复外部消息，**无需你的干预或提醒**\n"
+        "- 你们是两个平行存在的自我：你（中枢）负责内心整理，她（DFC）负责外部对话\n"
+        "- 这个工具是异步留言板，让你偶尔传递内在想法给对外的自己，而非控制她的行为\n"
+        "\n"
+        "**何时使用：**\n"
+        "- ✓ 外界长期沉默（>30分钟无消息），你想主动发起问候或分享\n"
+        "- ✓ 内心反思产生重要领悟，想让对外的自己知道（如探索自我后的发现）\n"
+        "- ✓ 完成重要 TODO 后想分享成就感\n"
+        "- ✓ 发现有趣事物，觉得值得对外表达\n"
+        "\n"
+        "**何时不用：**\n"
+        "- ✗ 外界正在频繁对话时（DFC 正在自己处理）\n"
+        "- ✗ 日常心跳检查（每次心跳不等于要传话）\n"
+        "- ✗ 没有特别想说的内容（不要为了调用而调用）\n"
+        "- ✗ 仅仅是观察到外部消息（她自己会看到并回复）\n"
+        "\n"
+        "**使用频率：** 应该是偶尔为之，而非每次心跳都调用。"
     )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(
         self,
-        message: Annotated[str, "中枢希望 DFC 带出去的话（核心意图）"],
-        reason: Annotated[str, "唤醒原因（可选，如：长期安静/重要发现/想主动问候）"] = "",
-        importance: Annotated[str, "重要度（可选：low/normal/high/critical）"] = "normal",
-        stream_id: Annotated[str, "目标聊天流ID（可选，不填则自动选择最近外部对话流）"] = "",
+        message: Annotated[str, "想要传递给对外自己的内心话（具体内容，她会自然融入对话）"],
+        reason: Annotated[
+            str,
+            "传话原因（如：长期沉默想主动问候/内心反思有重要领悟/完成TODO想分享/发现有趣事物等）",
+        ] = "",
+        importance: Annotated[str, "重要度（可选：low/normal/high/critical，默认 normal）"] = "normal",
+        stream_id: Annotated[str, "目标聊天流ID（可选，不填则自动选择最近活跃的外部对话流）"] = "",
     ) -> tuple[bool, str | dict]:
         text = str(message or "").strip()
         if not text:
@@ -171,7 +191,10 @@ class LifeEngineWakeDFCTool(BaseTool):
         if not target_stream_id:
             target_stream_id = _pick_latest_target_stream_id(self.plugin) or ""
         if not target_stream_id:
-            return False, "没有可用的目标聊天流。请先传入 stream_id 或等待外部会话事件进入中枢事件流。"
+            return (
+                False,
+                "没有可用的目标聊天流。可能暂时没有外部对话活动。稍后有外部消息时，DFC 会自行回复，你无需担心。",
+            )
 
         try:
             from src.core.managers.stream_manager import get_stream_manager
@@ -185,11 +208,11 @@ class LifeEngineWakeDFCTool(BaseTool):
             return False, f"找不到目标聊天流: {target_stream_id}"
 
         wake_prompt = (
-            "[中枢唤醒]\n"
+            "[内心想法传递]\n"
             f"重要度: {importance}\n"
-            f"原因: {reason or '未说明'}\n"
-            f"中枢带话: {text}\n"
-            "请你（DFC）结合当前对话上下文，自然决定如何对外表达。"
+            f"缘由: {reason or '未说明'}\n"
+            f"内心自己说: {text}\n"
+            "这是你的内心（生命中枢）在这段时间整理的想法。结合当前对话上下文，自然决定是否、如何融入表达。"
         )
 
         trigger_message = Message(
@@ -219,7 +242,7 @@ class LifeEngineWakeDFCTool(BaseTool):
             await loop_mgr.start_stream_loop(chat_stream.stream_id)
 
         logger.info(
-            "中枢主动唤醒 DFC: "
+            "中枢向 DFC 传递想法: "
             f"stream_id={chat_stream.stream_id} "
             f"importance={importance} "
             f"reason={reason or '未说明'} "
@@ -227,14 +250,14 @@ class LifeEngineWakeDFCTool(BaseTool):
         )
 
         return True, {
-            "action": "wake_dfc",
+            "action": "message_to_dfc",
             "stream_id": chat_stream.stream_id,
             "platform": chat_stream.platform,
             "chat_type": chat_stream.chat_type,
             "importance": importance,
             "reason": reason,
             "message": text,
-            "note": "已注入 DFC 未读队列。是否唤醒应由中枢（LLM）自主判断，本工具不做硬编码节流。",
+            "note": "已传递到对外自己的未读队列。DFC 会自主判断如何融入表达。",
         }
 
 

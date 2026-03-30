@@ -2,13 +2,13 @@
 
 生命中枢是一个独立于 DFC（对话流控制器）的并行存在系统。
 它通过周期性心跳来处理堆积的消息、进行内部思考、并为未来的
-工具调用、主动唤醒 DFC 等功能提供基础骨架。
+工具调用、主动与 DFC 通信等功能提供基础骨架。
 
 核心设计：
 1. 事件流：所有交互（消息、心跳、工具调用）统一为 Event，保持时间连续性
 2. 心跳循环：定期唤醒，处理堆积的事件
 3. 上下文管理：维护滚动的事件流历史
-4. 未来扩展：工具调用、主动唤醒 DFC、记忆/反思/探索等
+4. 未来扩展：工具调用、主动与 DFC 通信、记忆/反思/探索等
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import asyncio
 import json
 import traceback
 from dataclasses import dataclass, asdict, field
-from datetime import datetime, timezone
+from datetime import datetime, time as dtime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -74,6 +74,24 @@ def _shorten_text(text: str, *, max_length: int = 240) -> str:
     if len(normalized) <= max_length:
         return normalized
     return normalized[: max_length - 1] + "…"
+
+
+def _parse_hhmm(value: str) -> dtime | None:
+    """解析 HH:MM（24 小时制）时间字符串。"""
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    parts = raw.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError:
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return dtime(hour=hour, minute=minute)
 
 
 class EventType(str, Enum):
@@ -158,6 +176,7 @@ class LifeEngineService(BaseService):
         self._pending_events: list[LifeEngineEvent] = []
         self._event_history: list[LifeEngineEvent] = []
         self._lock: asyncio.Lock | None = None
+        self._sleep_state_active: bool = False
 
     def _get_lock(self) -> asyncio.Lock:
         """获取懒加载锁。"""
@@ -180,6 +199,46 @@ class LifeEngineService(BaseService):
         """返回滚动事件流保留上限。"""
         cfg = self._cfg()
         return max(1, int(cfg.settings.context_history_max_events))
+
+    def _sleep_window_config(self) -> tuple[dtime | None, dtime | None]:
+        """返回配置的睡眠窗口（sleep, wake）。"""
+        cfg = self._cfg()
+        return _parse_hhmm(cfg.settings.sleep_time), _parse_hhmm(cfg.settings.wake_time)
+
+    def _sleep_window_status(self) -> tuple[bool, str]:
+        """返回睡眠窗口配置是否有效及说明。"""
+        cfg = self._cfg()
+        sleep_raw = (cfg.settings.sleep_time or "").strip()
+        wake_raw = (cfg.settings.wake_time or "").strip()
+        sleep_at, wake_at = self._sleep_window_config()
+        if not sleep_raw and not wake_raw:
+            return False, "disabled"
+        if sleep_at is None or wake_at is None:
+            return False, "invalid-format"
+        if sleep_at == wake_at:
+            return False, "invalid-equal"
+        return True, f"{sleep_at.strftime('%H:%M')}~{wake_at.strftime('%H:%M')}"
+
+    def _in_sleep_window_now(self) -> tuple[bool, str]:
+        """判断当前是否处于睡眠窗口。"""
+        sleep_at, wake_at = self._sleep_window_config()
+        if sleep_at is None or wake_at is None:
+            return False, "sleep-window-disabled"
+
+        now = datetime.now().astimezone().time()
+        now_hm = dtime(hour=now.hour, minute=now.minute, second=0, microsecond=0)
+
+        if sleep_at == wake_at:
+            return False, "sleep-window-invalid-equal"
+
+        # 普通窗口：例如 01:00 -> 07:00
+        if sleep_at < wake_at:
+            in_sleep = sleep_at <= now_hm < wake_at
+        else:
+            # 跨日窗口：例如 23:00 -> 07:00
+            in_sleep = (now_hm >= sleep_at) or (now_hm < wake_at)
+
+        return in_sleep, f"{sleep_at.strftime('%H:%M')}~{wake_at.strftime('%H:%M')}"
 
     def _next_sequence(self) -> int:
         """获取下一个事件序列号。"""
@@ -385,6 +444,44 @@ class LifeEngineService(BaseService):
             stream_id=stream_id,
         )
 
+    def _build_dfc_message_event(
+        self,
+        message: str,
+        *,
+        stream_id: str = "",
+        platform: str = "",
+        chat_type: str = "",
+        sender_name: str = "",
+    ) -> LifeEngineEvent:
+        """构建一条来自 DFC 的异步留言事件。"""
+        seq = self._next_sequence()
+        platform_name = str(platform or "default_chatter").strip() or "default_chatter"
+        chat_type_name = str(chat_type or "unknown").strip().lower() or "unknown"
+        sender_display = str(sender_name or "另一个我（DFC）").strip() or "另一个我（DFC）"
+        target_stream_id = str(stream_id or "").strip()
+        detail_parts = [
+            platform_name,
+            "入站",
+            "内部对话",
+            "DFC 留言给生命中枢",
+        ]
+        if target_stream_id:
+            detail_parts.append(f"stream_id={target_stream_id}")
+
+        return LifeEngineEvent(
+            event_id=f"dfc_msg_{seq}",
+            event_type=EventType.MESSAGE,
+            timestamp=_now_iso(),
+            sequence=seq,
+            source=platform_name,
+            source_detail=" | ".join(detail_parts),
+            content=_shorten_text(str(message or "").strip(), max_length=500),
+            content_type="dfc_message",
+            sender=sender_display,
+            chat_type=chat_type_name,
+            stream_id=target_stream_id or None,
+        )
+
     def _build_heartbeat_event(self, content: str) -> LifeEngineEvent:
         """构建心跳事件（中枢内部思考）。"""
         heartbeat_count = self._state.heartbeat_count
@@ -444,12 +541,17 @@ class LifeEngineService(BaseService):
     def snapshot(self) -> dict[str, Any]:
         """返回当前状态快照。"""
         data = asdict(self._state)
+        in_sleep_window, sleep_window_desc = self._in_sleep_window_now()
         data["heartbeat_interval_seconds"] = int(self._cfg().settings.heartbeat_interval_seconds)
         data["model_task_name"] = self._cfg().model.task_name
         data["pending_event_count"] = len(self._pending_events)
         data["history_event_count"] = len(self._event_history)
         data["context_history_max_events"] = self._history_limit()
         data["workspace_path"] = self._cfg().settings.workspace_path
+        data["sleep_time"] = self._cfg().settings.sleep_time
+        data["wake_time"] = self._cfg().settings.wake_time
+        data["in_sleep_window"] = in_sleep_window
+        data["sleep_window"] = sleep_window_desc
         data["log_file_path"] = str(get_life_log_file())
         return data
 
@@ -487,6 +589,65 @@ class LifeEngineService(BaseService):
             direction=direction,
             pending_message_count=self._state.pending_event_count,
         )
+
+    async def enqueue_dfc_message(
+        self,
+        message: str,
+        *,
+        stream_id: str = "",
+        platform: str = "",
+        chat_type: str = "",
+        sender_name: str = "",
+    ) -> dict[str, Any]:
+        """接收来自 DFC 的异步留言，等待后续 heartbeat 处理。"""
+        if not self._is_enabled():
+            raise RuntimeError("life_engine 未启用")
+
+        text = str(message or "").strip()
+        if not text:
+            raise ValueError("message 不能为空")
+
+        event = self._build_dfc_message_event(
+            text,
+            stream_id=stream_id,
+            platform=platform,
+            chat_type=chat_type,
+            sender_name=sender_name,
+        )
+
+        async with self._get_lock():
+            self._pending_events.append(event)
+            self._state.pending_event_count = len(self._pending_events)
+        await self._save_runtime_context()
+
+        log_message_received(
+            received_at=event.timestamp,
+            platform=event.source,
+            chat_type=event.chat_type or "unknown",
+            source_label=event.source_detail,
+            source_detail=event.source_detail,
+            stream_id=event.stream_id or "",
+            sender_display=event.sender or "另一个我（DFC）",
+            sender_id="default_chatter",
+            message_id=event.event_id,
+            reply_to=None,
+            message_type=event.content_type,
+            content=event.content,
+            direction="received",
+            pending_message_count=self._state.pending_event_count,
+        )
+        logger.info(
+            "life_engine 已接收 DFC 留言: "
+            f"stream_id={event.stream_id or 'unknown'} "
+            f"sender={event.sender or '另一个我（DFC）'} "
+            f"pending={self._state.pending_event_count}"
+        )
+        return {
+            "event_id": event.event_id,
+            "stream_id": event.stream_id or "",
+            "pending_event_count": self._state.pending_event_count,
+            "queued": True,
+        }
 
     async def record_tool_call(
         self,
@@ -902,6 +1063,12 @@ class LifeEngineService(BaseService):
             return
 
         await self._load_runtime_context()
+        sleep_enabled, sleep_desc = self._sleep_window_status()
+        if not sleep_enabled and sleep_desc != "disabled":
+            logger.warning(
+                "life_engine 睡眠时段配置无效，已忽略。"
+                "请使用 HH:MM 格式，且 sleep_time 与 wake_time 不可相同。"
+            )
 
         self._state.running = True
         self._state.started_at = _now_iso()
@@ -921,7 +1088,9 @@ class LifeEngineService(BaseService):
             "life_engine 已启动: "
             f"interval={int(cfg.settings.heartbeat_interval_seconds)}s "
             f"task={cfg.model.task_name} "
-            f"workspace={cfg.settings.workspace_path}"
+            f"workspace={cfg.settings.workspace_path} "
+            f"sleep={cfg.settings.sleep_time or '-'} "
+            f"wake={cfg.settings.wake_time or '-'}"
         )
         log_lifecycle(
             "started",
@@ -974,6 +1143,26 @@ class LifeEngineService(BaseService):
 
                 if not self._state.running:
                     break
+
+                in_sleep_window, sleep_window_desc = self._in_sleep_window_now()
+                if in_sleep_window:
+                    if not self._sleep_state_active:
+                        logger.info(
+                            "life_engine 进入睡眠时段，暂停心跳处理: "
+                            f"window={sleep_window_desc}"
+                        )
+                        self._sleep_state_active = True
+                    if should_log_heartbeat:
+                        logger.info(
+                            f"life_engine heartbeat tick: 睡眠中（{sleep_window_desc}），跳过"
+                        )
+                    continue
+                elif self._sleep_state_active:
+                    logger.info(
+                        "life_engine 睡眠时段结束，恢复心跳处理: "
+                        f"window={sleep_window_desc}"
+                    )
+                    self._sleep_state_active = False
 
                 self._state.heartbeat_count += 1
                 self._state.last_heartbeat_at = _now_iso()
