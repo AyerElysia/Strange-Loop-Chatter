@@ -180,6 +180,20 @@ class NapcatAdapter(BaseAdapter):
         # 通过所有过滤条件
         return True
 
+    @staticmethod
+    def _is_self_message_event(raw: dict[str, Any]) -> bool:
+        """判断是否为机器人自身回声消息。"""
+        if raw.get("post_type") != "message":
+            return False
+
+        self_id = raw.get("self_id")
+        sender = raw.get("sender") or {}
+        sender_id = sender.get("user_id")
+        if not self_id or not sender_id:
+            return False
+
+        return str(self_id) == str(sender_id)
+
     async def on_adapter_loaded(self) -> None:
         """适配器加载时的初始化"""
         logger.info("Napcat 适配器正在启动...")
@@ -237,6 +251,10 @@ class NapcatAdapter(BaseAdapter):
         try:
             # 消息事件
             if post_type == "message":
+                # 过滤机器人自己发出的回声消息，避免进入 ON_MESSAGE_RECEIVED 形成自触发循环
+                if self._is_self_message_event(raw):
+                    logger.debug("过滤机器人自身消息回声事件，避免自触发循环")
+                    return None
                 return await self.message_handler.handle_raw_message(raw)  # type: ignore[return-value]
 
             # 通知事件
