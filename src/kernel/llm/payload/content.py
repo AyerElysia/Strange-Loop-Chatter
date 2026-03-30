@@ -1,6 +1,6 @@
 """LLM payload 内容类型定义。
 
-定义了用于构建 LLM 消息的各类内容类型：Content（基类）、File、Text、Image、Audio。
+定义了用于构建 LLM 消息的各类内容类型：Content（基类）、File、Text、Image、Audio、Video。
 File 支持文件路径、文件对象、base64 字符串三种输入，并在构造时统一规范化为纯 base64 编码字符串。
 Image 和 Audio 均继承自 File，共享相同的规范化逻辑，并在语义上区分媒体类型。
 """
@@ -204,3 +204,21 @@ class Audio(File):
         """返回对象的字符串表示。"""
         preview = self.value[:16] + "..." if len(self.value) > 16 else self.value
         return f"Audio(value={preview!r})"
+
+
+class Video(File):
+    """视频内容。
+
+    继承自 :class:`File`，在构造时将输入统一规范化为纯 base64 字符串。
+
+    支持与 :class:`File` 完全相同的三种输入形式：
+
+    - **文件路径**（``str`` 或 ``Path``）：读取视频文件并 base64 编码。
+    - **文件对象**（``BinaryIO``）：读取并编码。
+    - **base64 / data URL / base64| 字符串**：剥离前缀后存储纯 base64。
+    """
+
+    def __repr__(self) -> str:
+        """返回对象的字符串表示。"""
+        preview = self.value[:16] + "..." if len(self.value) > 16 else self.value
+        return f"Video(value={preview!r})"

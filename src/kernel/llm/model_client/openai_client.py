@@ -14,6 +14,7 @@ import threading
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+from src.kernel.logger import get_logger
 from src.kernel.llm.payload.tooling import LLMUsable
 from src.kernel.llm.tool_call_compat import (
     build_tool_call_compat_prompt,
@@ -21,10 +22,12 @@ from src.kernel.llm.tool_call_compat import (
 )
 
 from ..exceptions import LLMConfigurationError, LLMContentFilterError
-from ..payload import Image, LLMPayload, Text, ToolCall, ToolResult
+from ..payload import Image, LLMPayload, Text, ToolCall, ToolResult, Video
 from ..roles import ROLE
 from ..token_counter import count_payload_tokens
 from .base import StreamEvent
+
+logger = get_logger("kernel.llm.openai_client", display="OpenAI客户端")
 
 
 def _log_openai_request_body(
@@ -141,6 +144,115 @@ def _image_to_data_url(value: str) -> str:
         pass
 
     raise FileNotFoundError(f"Image file not found: {value}")
+
+
+def _video_to_data_url(value: str, mime: str = "video/mp4") -> str:
+    """将各种视频表示转换为 data URL 字符串。"""
+    if value.startswith("base64|"):
+        b64 = value.split("|", 1)[1]
+        return f"data:{mime};base64,{b64}"
+
+    if _is_data_url(value):
+        return value
+
+    try:
+        base64.b64decode(value, validate=True)
+        return f"data:{mime};base64,{value}"
+    except Exception:
+        pass
+
+    path = Path(value)
+    try:
+        if path.exists() and path.is_file():
+            data = path.read_bytes()
+            b64 = base64.b64encode(data).decode("ascii")
+            ext = path.suffix.lower()
+            ext_map = {
+                ".mp4": "video/mp4",
+                ".mov": "video/quicktime",
+                ".webm": "video/webm",
+                ".mkv": "video/x-matroska",
+                ".avi": "video/x-msvideo",
+            }
+            guessed_mime = ext_map.get(ext, mime)
+            return f"data:{guessed_mime};base64,{b64}"
+    except OSError:
+        pass
+
+    raise FileNotFoundError(f"Video file not found: {value}")
+
+
+def _messages_contain_native_video(messages: list[dict[str, Any]]) -> bool:
+    """检查 messages 中是否包含原生视频内容块。"""
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if isinstance(item, dict) and item.get("type") in {"video_url", "input_video"}:
+                return True
+    return False
+
+
+def _strip_native_video_from_messages(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """移除 messages 中的视频内容块，返回新 messages 和移除数量。"""
+    removed = 0
+    rebuilt: list[dict[str, Any]] = []
+
+    for msg in messages:
+        if not isinstance(msg, dict):
+            rebuilt.append(msg)
+            continue
+
+        cloned = dict(msg)
+        content = cloned.get("content")
+        if not isinstance(content, list):
+            rebuilt.append(cloned)
+            continue
+
+        new_content: list[Any] = []
+        local_removed = 0
+        for item in content:
+            if isinstance(item, dict) and item.get("type") in {"video_url", "input_video"}:
+                local_removed += 1
+                continue
+            new_content.append(item)
+
+        if local_removed > 0 and not new_content:
+            new_content.append({"type": "text", "text": "[视频原生输入降级为文本摘要]"})
+
+        removed += local_removed
+        cloned["content"] = new_content
+        rebuilt.append(cloned)
+
+    return rebuilt, removed
+
+
+def _is_native_video_unsupported_error(error: Exception) -> bool:
+    """判断异常是否属于“视频输入不被当前端点支持”。"""
+    error_name = type(error).__name__.lower()
+    error_text = str(error).lower()
+    haystack = f"{error_name} {error_text}"
+
+    video_markers = ("video_url", "input_video", "video")
+    unsupported_markers = (
+        "unsupported",
+        "not support",
+        "not supported",
+        "unknown",
+        "unrecognized",
+        "invalid",
+        "invalid_request",
+        "bad request",
+        "content type",
+        "schema",
+    )
+
+    return any(marker in haystack for marker in video_markers) and any(
+        marker in haystack for marker in unsupported_markers
+    )
 
 
 def _to_openai_tool(tool: Any) -> dict[str, Any]:
@@ -365,6 +477,9 @@ def _payloads_to_openai_messages(
             elif isinstance(part, Image):
                 url = _image_to_data_url(part.value)
                 parts.append({"type": "image_url", "image_url": {"url": url}})
+            elif isinstance(part, Video):
+                url = _video_to_data_url(part.value)
+                parts.append({"type": "video_url", "video_url": {"url": url}})
             else:
                 parts.append({"type": "text", "text": str(part)})
 
@@ -690,6 +805,7 @@ class OpenAIChatClient:
             force_ipv4=force_ipv4,
         )
         messages, openai_tools = _payloads_to_openai_messages(payloads)
+        has_native_video = _messages_contain_native_video(messages)
         tool_call_compat = bool(model_set.get("tool_call_compat", False))
 
         if tool_call_compat and openai_tools:
@@ -772,6 +888,7 @@ class OpenAIChatClient:
                 params=params,
                 tool_call_compat=tool_call_compat,
                 openai_tools=openai_tools,
+                has_native_video=has_native_video,
                 api_key=api_key,
                 base_url=base_url,
                 timeout=timeout,
@@ -780,7 +897,11 @@ class OpenAIChatClient:
                 model_name=model_name,
             )
 
-        return await self._create_stream(client=client, params=params)
+        return await self._create_stream(
+            client=client,
+            params=params,
+            has_native_video=has_native_video,
+        )
 
     async def _create_non_stream(
         self,
@@ -789,6 +910,7 @@ class OpenAIChatClient:
         params: dict[str, Any],
         tool_call_compat: bool,
         openai_tools: list[dict[str, Any]],
+        has_native_video: bool,
         api_key: str,
         base_url: str | None,
         timeout: float | None,
@@ -821,25 +943,42 @@ class OpenAIChatClient:
         try:
             resp = await client.chat.completions.create(**params)
         except Exception as e:
-            err_name = type(e).__name__.lower()
-            err_text = str(e).lower()
-            if any(
-                kw in err_name or kw in err_text
-                for kw in ("timeout", "connect", "network", "transport")
-            ):
-                stale = self._evict_client(
-                    api_key=api_key,
-                    base_url=base_url,
-                    timeout=timeout,
-                    trust_env=trust_env,
-                    force_ipv4=force_ipv4,
-                )
-                if stale is not None:
-                    try:
-                        await stale.close()
-                    except Exception:
-                        pass
-            raise
+            if has_native_video and _is_native_video_unsupported_error(e):
+                fallback_params = dict(params)
+                original_messages = fallback_params.get("messages")
+                if isinstance(original_messages, list):
+                    downgraded_messages, removed = _strip_native_video_from_messages(original_messages)
+                    if removed > 0:
+                        logger.warning(
+                            "检测到上游不支持原生视频输入，自动降级为文本摘要模式重试。"
+                            f"移除视频块数量: {removed}"
+                        )
+                        fallback_params["messages"] = downgraded_messages
+                        resp = await client.chat.completions.create(**fallback_params)
+                    else:
+                        raise
+                else:
+                    raise
+            else:
+                err_name = type(e).__name__.lower()
+                err_text = str(e).lower()
+                if any(
+                    kw in err_name or kw in err_text
+                    for kw in ("timeout", "connect", "network", "transport")
+                ):
+                    stale = self._evict_client(
+                        api_key=api_key,
+                        base_url=base_url,
+                        timeout=timeout,
+                        trust_env=trust_env,
+                        force_ipv4=force_ipv4,
+                    )
+                    if stale is not None:
+                        try:
+                            await stale.close()
+                        except Exception:
+                            pass
+                raise
 
         if not resp.choices:
             raise LLMContentFilterError(
@@ -864,6 +1003,7 @@ class OpenAIChatClient:
         *,
         client: Any,
         params: dict[str, Any],
+        has_native_video: bool,
     ) -> tuple[None, None, AsyncIterator[StreamEvent]]:
         """执行流式聊天请求并返回事件迭代器。
 
@@ -874,9 +1014,27 @@ class OpenAIChatClient:
         Returns:
             三元组 ``(None, None, AsyncIterator[StreamEvent])``。
         """
-        stream_params = dict(params)
-        stream_params["stream"] = True
-        stream_resp = await client.chat.completions.create(**params, stream=True)
+        try:
+            stream_resp = await client.chat.completions.create(**params, stream=True)
+        except Exception as e:
+            if has_native_video and _is_native_video_unsupported_error(e):
+                fallback_params = dict(params)
+                original_messages = fallback_params.get("messages")
+                if isinstance(original_messages, list):
+                    downgraded_messages, removed = _strip_native_video_from_messages(original_messages)
+                    if removed > 0:
+                        logger.warning(
+                            "流式请求检测到上游不支持原生视频输入，自动降级为文本摘要模式重试。"
+                            f"移除视频块数量: {removed}"
+                        )
+                        fallback_params["messages"] = downgraded_messages
+                        stream_resp = await client.chat.completions.create(**fallback_params, stream=True)
+                    else:
+                        raise
+                else:
+                    raise
+            else:
+                raise
 
         async def iter_events() -> AsyncIterator[StreamEvent]:
             """逐块迭代流式响应，产出 StreamEvent。

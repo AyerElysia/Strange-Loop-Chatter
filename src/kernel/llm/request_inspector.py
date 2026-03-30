@@ -236,6 +236,21 @@ def _render_content_list(content: list[Any]) -> list[dict[str, Any]]:
             )
             continue
 
+        if item_type in {"video_url", "input_video"}:
+            video_url_obj = item.get("video_url")
+            video_url: dict[str, Any] = video_url_obj if isinstance(video_url_obj, dict) else {}
+            url = video_url.get("url") or item.get("url") or ""
+            blocks.append(
+                _make_block(
+                    "media",
+                    media_type="video",
+                    title="视频内容",
+                    text="请求中包含视频输入。",
+                    meta=_format_scalar(url)[:120],
+                )
+            )
+            continue
+
         if item_type == "refusal":
             blocks.append(_make_block("markdown", text=str(item.get("refusal", "")), label="拒绝说明"))
             continue

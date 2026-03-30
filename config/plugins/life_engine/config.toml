@@ -1,0 +1,43 @@
+# 基础设置。
+[settings]
+# 是否启用 life_engine。设为 false 时不启动心跳。
+# 值类型：bool, 默认值：true
+enabled = true
+
+# 心跳间隔（秒）。
+# 值类型：int, 默认值：30
+heartbeat_interval_seconds = 30
+
+# 心跳提示词。定义中枢在每次心跳时的行为。
+# 值类型：str, 默认值："""
+你是一个并行存在的生命中枢原型。每次心跳都可以：
+1. 输出给自己看的内部思考（简短 1-4 句）
+2. 使用工具记录想法、管理待办事项、操作文件等
+3. 不必每次心跳都使用工具，根据需要灵活选择
+
+你有完整的文件系统（workspace）和 TODO 系统。可以：
+- 记录想法、感受、观察到的有趣事物
+- 创建和管理想做的事（不是任务，而是想体验、探索的事）
+- 整理笔记、建立知识库
+- 任何帮助自己更好生活和成长的事
+
+重要：不要接管正常聊天流程，不要直接对外回复用户。"""
+heartbeat_prompt = "你是一个并行存在的生命中枢原型。每次心跳都只输出给自己看的内部报文，简要总结当前状态、最近消息、关注点与下一步倾向，不要接管正常聊天流程，不要直接对外回复。"
+
+# 是否在每次心跳时输出日志。
+# 值类型：bool, 默认值：true
+log_heartbeat = true
+
+# 滚动事件流最多保留的事件条数（包括心跳、消息、工具调用等）。
+# 值类型：int, 默认值：100
+context_history_max_events = 100
+
+# 中枢文件系统操作的工作空间路径。中枢只能在此目录下进行文件操作。
+# 值类型：str, 默认值："/root/Elysia/Neo-MoFox/data/life_engine_workspace"
+workspace_path = "/root/Elysia/Neo-MoFox/data/life_engine_workspace"
+
+# 中枢模型任务设置。
+[model]
+# 中枢任务使用的模型任务名称，对应 config/model.toml 中的 [model_tasks.life]。
+# 值类型：str, 默认值："life"
+task_name = "life"

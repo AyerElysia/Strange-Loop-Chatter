@@ -3,15 +3,17 @@
 提供默认的聊天对话逻辑，包含三个核心 Action：
 - send_text: 发送文本消息给用户
 - pass_and_wait: 跳过本次动作，等待新消息
-- stop_conversation: 结束当前对话轮次，设置冷却时间
 
 使用 personality 配置动态构建系统提示词。
 """
 
 from __future__ import annotations
 
+import asyncio
 import datetime
-from typing import AsyncGenerator
+import json
+import re
+from typing import Annotated, Any, AsyncGenerator
 
 from src.core.components.types import ChatType
 from src.app.plugin_system.api.log_api import get_logger
@@ -34,11 +36,16 @@ from src.kernel.llm import LLMPayload, ROLE, Text
 
 from .config import DefaultChatterConfig
 from .decision_agent import decide_should_respond
+from .multimodal import get_media_list
 from .prompt_builder import DefaultChatterPromptBuilder
 from .runners import run_classical, run_enhanced
 from .type_defs import LLMConversationState, LLMResponseLike, SubAgentDecision
 
 logger = get_logger("default_chatter")
+_REASON_LEAK_PATTERN = re.compile(
+    r'[,，]?\s*["\']?reason["\']?\s*[:：]',
+    re.IGNORECASE,
+)
 
 # ─── 系统提示词构建 ─────────────────────────────────────────────
 system_prompt = """# 关于你
@@ -80,6 +87,12 @@ system_prompt = """# 关于你
 
 # 工具介绍
 - Action：action通常是你在对话中需要执行的动作，例如发送消息、结束对话等。你可以调用 action 来完成这些任务，调用时请务必按照规定的格式提供必要的信息。这类工具通常不会提供任何信息，因此如果当你调用action并收到返回结果后，你只需要输出"__SUSPEND__"表示挂起对话等待下一步指令即可。
+- send_text 使用规范：
+1. 如果你需要发送多条消息，可以像这样分段"content": ["你好", "请问你是谁？", "找我有什么事吗？"]
+2. 私聊场景下，reply_to 默认不要使用，除非确实需要引用某条历史消息来避免歧义。
+3. content 里只能写真正要发给用户的正文，不要把 reason/thought/expected_reaction/max_wait_seconds/mood/delay_seconds/followup_type/topic 等元信息写进去。
+4. 严禁把多个 JSON 对象、<br/>、或其他 action/tool 的参数拼进 content；这些信息必须分别通过各自工具调用传递。
+5. 当同时需要回复和调用其他工具时，content 只保留要发出的文本，其他参数一律不要塞进 content。
 - Tool：tool通常是你在对话中需要查询信息或执行特定功能时调用的工具，例如查询天气、计算器等。你可以调用 tool 来获取这些信息或功能，调用时请务必按照规定的格式提供必要的信息。这类工具通常会返回一些结果信息，因此当你调用tool并收到返回结果后，你应该根据结果信息继续进行合理的回复或进一步执行其他工具。
 - Agent：agent通常是你在对话中需要调用的智能体，例如执行复杂任务、处理多轮对话等。你可以调用 agent 来完成这些任务，调用时请务必按照规定的格式提供必要的信息。这类工具通常会返回一些结果信息，因此当你调用agent并收到返回结果后，你应该根据结果信息继续进行合理的回复或进一步执行其他工具。
 
@@ -91,10 +104,12 @@ system_prompt = """# 关于你
 *你的行为应当与当前的平台和聊天类型相匹配，例如你不应该在群聊中过于热情，也不应该在私聊中过于冷淡。*
 
 在该平台你的信息：
-- 昵称：{platform_name}
-- id：{platform_id}
+- 昵称：{nickname}
+- id：{bot_id}
 
 {extra_info}
+
+{continuous_memory}
 """
 
 user_prompt = """你当前正在名为"{stream_name}"的对话中。
@@ -103,7 +118,7 @@ user_prompt = """你当前正在名为"{stream_name}"的对话中。
 {history}
     
 {unreads}
-    
+
 {extra}
 ---
 请基于上述信息决定接下来的动作。
@@ -123,12 +138,13 @@ sub_agent_system_prompt = """你是一个聊天意图识别助手。
 2. 话题相关：消息内容与当前正在进行的话题高度相关，需要机器人进一步说明、回答或参与。
 3. 话语完整：对方的话已经说完，或者是一个完整的问题/指令。
 4. 情感互动：对方在表达某种需要回应的情绪（如问候、告别、称赞、抱怨等）。
+5. 近期多照顾一下 新人 希羽(小名念羽夏）
 
 你应该在以下情况判定为 "不需要回复" (should_respond = false)：
 1. 话题无关：消息是群聊中的闲聊，且机器人并非话题参与者。
 2. 话未说完：明显是一连串消息中的中间部分，可以继续等待后续。
-3. 机器博弈：检测到是其他 Bot 的自动回复或无意义的刷屏消息。
-4. 纯粹表情：只有单个表情且不携带任何需要回复的语义。
+
+
 
 # 输出格式
 请务必返回 JSON 格式，如下所示：
@@ -147,54 +163,209 @@ class SendTextAction(BaseAction):
     """发送文本消息"""
 
     action_name = "send_text"
-    action_description = "发送一段文本消息给用户。你可以一次调用多个 send_text 来分多段回复，但每次调用必须提供你想说的话的文本内容，不要添加任何标记或格式，只写纯文本即可。你也可以选择引用之前某条消息作为背景，使用 reply_to 参数指定。注意：本工具无法发送表情包等非文本内容。"
+    action_description = (
+        "发送文本消息给用户。"
+        "content 只能是字符串或字符串数组（分段发送），例如"
+        "\"content\": [\"你好\", \"请问你是谁？\", \"找我有什么事吗？\"]。"
+        "content 中只能包含要发给用户的纯文本正文。"
+        "严禁把 reason/thought/expected_reaction/max_wait_seconds/mood/"
+        "delay_seconds/followup_type/topic 等元信息写进 content。"
+        "严禁把多个 JSON 对象或 <br/> 拼接进 content。"
+        "如果还需要其他 action/tool，请单独调用，不要塞到 content 里。"
+        "分段消息会按顺序发送，并自动模拟段间打字延迟。"
+        "私聊场景下 reply_to 默认不要使用，除非确实需要引用某条历史消息来避免歧义。"
+        "注意：本工具无法发送表情包等非文本内容。"
+    )
 
     chatter_allow: list[str] = ["default_chatter"]
 
-    async def execute(self, content: str, reply_to: str | None = None) -> tuple[bool, str]:
-        """执行发送文本消息的逻辑
+    @staticmethod
+    def _to_non_empty_segments(raw: list[object]) -> list[str]:
+        """将任意列表转换为非空字符串段。"""
+        return [s.strip() for s in raw if isinstance(s, str) and s.strip()]
 
-        Args:
-            content: 要发送的文本内容，不用添加标记，只写你想说的话即可
-            reply_to: 可选，要引用回复的目标消息 ID。若指定此参数，发送的消息将作为对该消息的回复
-        """
-        import re
-        from src.core.models.message import Message
+    @staticmethod
+    def _extract_leading_json_array(text: str) -> str | None:
+        """从文本开头提取首个平衡的 JSON 数组字符串。"""
+        if not text.startswith("["):
+            return None
 
-        # 清洗 LLM 可能侧漏的 reason 字段
-        if content:
-            # 匹配 ,reason: 或 reason: 及其后的所有内容
-            content = re.split(r'[,，]?\s*reason[:：]', content, flags=re.IGNORECASE)[0].strip()
+        depth = 0
+        in_string = False
+        escaped = False
 
+        for index, char in enumerate(text):
+            if in_string:
+                if escaped:
+                    escaped = False
+                    continue
+                if char == "\\":
+                    escaped = True
+                    continue
+                if char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+                continue
+            if char == "[":
+                depth += 1
+                continue
+            if char == "]":
+                depth -= 1
+                if depth == 0:
+                    return text[: index + 1]
+
+        return None
+
+    @classmethod
+    def _try_parse_segments_from_text(cls, text: str) -> list[str] | None:
+        """尝试从文本中解析分段列表，失败返回 None。"""
+        if not text:
+            return None
+
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = None
+
+        if isinstance(parsed, list):
+            return cls._to_non_empty_segments(parsed)
+        if isinstance(parsed, dict):
+            content = parsed.get("content")
+            if isinstance(content, list):
+                return cls._to_non_empty_segments(content)
+            if isinstance(content, str):
+                stripped = content.strip()
+                return [stripped] if stripped else []
+
+        leading_array = cls._extract_leading_json_array(text)
+        if leading_array:
+            try:
+                parsed_array = json.loads(leading_array)
+                if isinstance(parsed_array, list):
+                    return cls._to_non_empty_segments(parsed_array)
+            except Exception:
+                return None
+        return None
+
+    @classmethod
+    def _normalize_content_segments(cls, content: str | list[str]) -> list[str]:
+        """将 content 统一规范为分段文本列表。"""
+        if isinstance(content, list):
+            return cls._to_non_empty_segments(content)
+
+        if not isinstance(content, str):
+            return []
+
+        stripped = content.strip()
+        if not stripped:
+            return []
+
+        # 某些模型会把多个 JSON 块用 <br/> 串联，send_text 只消费首块 content。
+        first_block = re.split(r"<br\s*/?>", stripped, maxsplit=1, flags=re.IGNORECASE)[0]
+        first_block = first_block.strip()
+        if not first_block:
+            return []
+
+        parsed_segments = cls._try_parse_segments_from_text(first_block)
+        if parsed_segments is not None:
+            return parsed_segments
+
+        return [first_block]
+
+    @staticmethod
+    def _sanitize_segment(content: str) -> str:
+        """清洗 LLM 可能侧漏到正文里的元字段。"""
         if not content:
-            return True, "内容为空，跳过发送"
-        
-        # 如果需要引用消息，创建带reply_to的Message对象
+            return ""
+        return _REASON_LEAK_PATTERN.split(content, maxsplit=1)[0].strip()
+
+    @staticmethod
+    def _resolve_reply_timing_config(
+        plugin_config: DefaultChatterConfig | None,
+    ) -> tuple[float, float, float]:
+        """读取发送节奏配置并返回 (chars_per_sec, min_delay, max_delay)。"""
+        default_chars_per_sec = 15.0
+        default_min_delay = 0.8
+        default_max_delay = 4.0
+
+        if not isinstance(plugin_config, DefaultChatterConfig):
+            return default_chars_per_sec, default_min_delay, default_max_delay
+
+        reply_config = getattr(plugin_config.plugin, "reply", None)
+        if reply_config is None:
+            return default_chars_per_sec, default_min_delay, default_max_delay
+
+        chars_per_sec = float(
+            getattr(reply_config, "typing_chars_per_sec", default_chars_per_sec)
+        )
+        min_delay = float(
+            getattr(reply_config, "typing_delay_min", default_min_delay)
+        )
+        max_delay = float(
+            getattr(reply_config, "typing_delay_max", default_max_delay)
+        )
+        return chars_per_sec, min_delay, max_delay
+
+    @classmethod
+    def _calculate_typing_delay(
+        cls,
+        content: str,
+        plugin_config: DefaultChatterConfig | None,
+    ) -> float:
+        """根据文本长度计算分段发送延迟。"""
+        chars_per_sec, min_delay, max_delay = cls._resolve_reply_timing_config(
+            plugin_config
+        )
+        if chars_per_sec <= 0:
+            return 0.0
+
+        base_delay = len(content) / chars_per_sec
+        lower = max(0.0, min_delay)
+        upper = max(0.0, max_delay)
+        if upper < lower:
+            upper = lower
+        return max(lower, min(base_delay, upper))
+
+    def _get_plugin_config(self) -> DefaultChatterConfig | None:
+        plugin_config = getattr(self.plugin, "config", None)
+        if isinstance(plugin_config, DefaultChatterConfig):
+            return plugin_config
+        return None
+
+    async def _send_one_segment(
+        self,
+        content: str,
+        reply_to: str | None = None,
+    ) -> bool:
+        """发送单条分段消息。"""
         if reply_to:
             target_stream_id = self.chat_stream.stream_id
             platform = self.chat_stream.platform
             chat_type = self.chat_stream.chat_type
             context = self.chat_stream.context
-            
+
             from src.core.managers.adapter_manager import get_adapter_manager
             from uuid import uuid4
-            
+
             bot_info = await get_adapter_manager().get_bot_info_by_platform(platform)
-            
+
             target_user_id = None
             target_group_id = None
             target_user_name = None
             target_group_name = None
-            
+
             def _get_last_context_message() -> Message | None:
                 if context.unread_messages:
                     return context.unread_messages[-1]
                 if context.history_messages:
                     return context.history_messages[-1]
                 return context.current_message
-            
+
             last_msg = _get_last_context_message()
-            
+
             if chat_type == "group":
                 if last_msg:
                     target_group_id = last_msg.extra.get("group_id")
@@ -204,7 +375,7 @@ class SendTextAction(BaseAction):
                 if not target_user_id and last_msg:
                     target_user_id = last_msg.sender_id
                     target_user_name = last_msg.sender_name
-            
+
             extra: dict[str, str] = {}
             if target_user_id:
                 extra["target_user_id"] = target_user_id
@@ -214,65 +385,89 @@ class SendTextAction(BaseAction):
                 extra["target_group_id"] = target_group_id
             if target_group_name:
                 extra["target_group_name"] = target_group_name
-            
+
             message = Message(
                 message_id=f"action_{self.action_name}_{uuid4().hex}",
                 content=content,
                 processed_plain_text=content,
                 message_type=MessageType.TEXT,
                 sender_id=bot_info.get("bot_id", "") if bot_info else "",
-                sender_name=bot_info.get("bot_name", "Bot") if bot_info else "Bot",
+                sender_name=bot_info.get("bot_nickname", "Bot") if bot_info else "Bot",
                 platform=platform,
                 chat_type=chat_type,
                 stream_id=target_stream_id,
                 reply_to=reply_to,
             )
             message.extra.update(extra)
-            
+
             from src.core.transport.message_send import get_message_sender
+
             sender = get_message_sender()
-            success = await sender.send_message(message)
-            return success, f"已发送消息:{content}"
-        else:
-            await self._send_to_stream(content)
-            return True, f"已发送消息:{content}"
+            return await sender.send_message(message)
+
+        return await self._send_to_stream(content)
+
+    async def execute(
+        self,
+        content: Annotated[
+            str | list[str],
+            "要发送给用户的纯文本内容。仅允许 string 或 string[]；"
+            "禁止把 reason/thought/expected_reaction 等元信息、多个 JSON 块或 <br/> 拼进 content。",
+        ],
+        reply_to: Annotated[
+            str | None,
+            "可选，要引用回复的目标消息 ID。私聊默认留空，只有必须引用才能消歧时才填写。分条发送时仅第一条使用。",
+        ] = None,
+    ) -> tuple[bool, str]:
+        """执行发送文本消息的逻辑
+
+        Args:
+            content: 要发送的文本内容。支持字符串或字符串数组
+            reply_to: 可选，要引用回复的目标消息 ID。分条发送时仅首条应用
+        """
+        segments = self._normalize_content_segments(content)
+        cleaned_segments = [
+            self._sanitize_segment(segment) for segment in segments
+        ]
+        cleaned_segments = [segment for segment in cleaned_segments if segment]
+
+        if not cleaned_segments:
+            return True, "内容为空，跳过发送"
+
+        plugin_config = self._get_plugin_config()
+        sent_count = 0
+
+        for index, segment in enumerate(cleaned_segments):
+            if index > 0:
+                delay = self._calculate_typing_delay(segment, plugin_config)
+                if delay > 0:
+                    await asyncio.sleep(delay)
+
+            segment_reply_to = reply_to if index == 0 else None
+            success = await self._send_one_segment(segment, segment_reply_to)
+            if not success:
+                return False, f"第{index + 1}条消息发送失败"
+            sent_count += 1
+
+        preview = cleaned_segments[0][:80] if cleaned_segments else ""
+        return True, f"已发送{sent_count}条消息: {preview}"
 
 
 class PassAndWaitAction(BaseAction):
     """跳过本次动作，等待新消息"""
 
     action_name = "pass_and_wait"
-    action_description = "跳过本次动作，不进行任何操作，但保持对话继续，等待用户新消息。若当前不需要回复，但对话还在进行中，使用本工具等待用户的下一条消息。请不要和结束对话混淆，除非你非常确定你和用户的对话没有结束，或者你需要等待用户提供更多信息来决定下一步怎么做，否则你通常应该直接结束对话，等待下一轮新消息触发新的对话。"
+    action_description = "跳过本次动作，不进行任何操作，但保持对话继续，等待用户新消息。若当前不需要回复，就使用本工具等待用户的下一条消息。"
 
     chatter_allow: list[str] = ["default_chatter"]
 
     async def execute(self) -> tuple[bool, str]:
         """跳过本次动作，不执行任何操作"""
         return True, "已跳过，等待新消息"
-
-
-class StopConversationAction(BaseAction):
-    """结束当前对话轮次"""
-
-    action_name = "stop_conversation"
-    action_description = "结束当前对话，过一段时间后再允许开启新对话。如果对话已经自然结束，或者你认为本轮对话可以告一段落，或者你暂时不想继续对话，使用本工具结束这轮对话。通常当你已经做出回应，且后续的消息很可能是新的话题时，使用本工具结束对话。你可以指定一个冷却时间（分钟），在此期间即使有新消息也不会触发新的对话，直到冷却时间结束后才会重新允许开启新对话。"
-
-    chatter_allow: list[str] = ["default_chatter"]
-
-    async def execute(self, minutes: float) -> tuple[bool, str]:
-        """结束对话并设置冷却时间
-
-        Args:
-            minutes: 冷却时间（分钟），在此期间不会开启新对话
-        """
-        return True, f"对话已结束，将在 {minutes} 分钟后允许新对话"
-
-
 # ─── Chatter ────────────────────────────────────────────────
 
 # 控制流标记名称，与 BaseAction.to_schema() 生成的 name 保持一致（含 action- 前缀）
 _PASS_AND_WAIT = "action-pass_and_wait"
-_STOP_CONVERSATION = "action-stop_conversation"
 _SEND_TEXT = "action-send_text"
 
 # SUSPEND 占位符：当 LLM 本轮全部调用的都是 action 时，注入此占位防止上下文缺少 assistant 轮次
@@ -286,7 +481,7 @@ class DefaultChatter(BaseChatter):
     1. 构建 LLM 上下文（系统提示 + 历史消息 + 当前未读消息）
     2. 注册所有可用的 LLMUsable 工具
     3. 循环调用 LLM 并执行其返回的 tool calls
-    4. 根据 pass_and_wait / stop_conversation 控制对话流程
+    4. 根据 pass_and_wait 控制对话流程
     """
 
     chatter_name: str = "default_chatter"
@@ -310,6 +505,96 @@ class DefaultChatter(BaseChatter):
         """
         plugin_config = getattr(self.plugin, "config", None)
         return DefaultChatterPromptBuilder.build_negative_behaviors_extra(plugin_config)
+
+    def _is_native_multimodal_enabled(self) -> bool:
+        """当前聊天流是否启用原生多模态。"""
+        plugin_config = getattr(self.plugin, "config", None)
+        return bool(
+            isinstance(plugin_config, DefaultChatterConfig)
+            and plugin_config.plugin.native_multimodal
+        )
+
+    @staticmethod
+    def _count_media_suffix(msg: Message) -> str:
+        """为消息补充媒体摘要。"""
+        media_list = get_media_list(msg)
+        if not media_list:
+            return ""
+
+        image_count = 0
+        emoji_count = 0
+        video_count = 0
+        for media in media_list:
+            media_type = str(media.get("type", "")).lower()
+            if media_type == "emoji":
+                emoji_count += 1
+            elif media_type == "image":
+                image_count += 1
+            elif media_type == "video":
+                video_count += 1
+
+        parts: list[str] = []
+        if image_count:
+            parts.append(f"图片×{image_count}")
+        if emoji_count:
+            parts.append(f"表情包×{emoji_count}")
+        if video_count:
+            parts.append(f"视频×{video_count}")
+        if not parts:
+            return ""
+        return f" [媒体: {'，'.join(parts)}]"
+
+    def format_message_line(
+        self,
+        msg: Message,
+        time_format: str = "%H:%M",
+    ) -> str:
+        """格式化消息时附带媒体摘要，并避免泄露原始媒体结构。"""
+        if not self._is_native_multimodal_enabled():
+            return BaseChatter.format_message_line(msg, time_format)
+
+        raw_time = getattr(msg, "time", None)
+        if isinstance(raw_time, (int, float)):
+            time_str = datetime.datetime.fromtimestamp(raw_time).strftime(time_format)
+        elif isinstance(raw_time, datetime.datetime):
+            time_str = raw_time.strftime(time_format)
+        else:
+            time_str = str(raw_time or "")
+
+        role_raw = getattr(msg, "sender_role", None)
+        role_str = BaseChatter._format_role(role_raw)
+        role_part = f"<{role_str}> " if role_str else ""
+
+        platform_id = getattr(msg, "sender_id", "") or ""
+        id_part = f"[{platform_id}] " if platform_id else ""
+
+        nickname = getattr(msg, "sender_name", "") or ""
+        cardname = getattr(msg, "sender_cardname", None)
+        if cardname and cardname != nickname:
+            name_part = f"{nickname}${cardname}"
+        else:
+            name_part = nickname or "未知发送者"
+
+        message_id = getattr(msg, "message_id", "") or ""
+        msg_id_part = f"[{message_id}]" if message_id else ""
+
+        media_suffix = DefaultChatter._count_media_suffix(msg)
+        content = getattr(msg, "processed_plain_text", None)
+        if content and str(content).strip():
+            content = str(content)
+            if media_suffix:
+                content = f"{content}{media_suffix}"
+        else:
+            raw_content = getattr(msg, "content", "")
+            if media_suffix:
+                if isinstance(raw_content, str) and raw_content.strip():
+                    content = f"{raw_content}{media_suffix}"
+                else:
+                    content = media_suffix.strip()
+            else:
+                content = str(raw_content)
+
+        return f"【{time_str}】{role_part}{id_part}{name_part} {msg_id_part}： {content}"
 
     async def _build_system_prompt(self, chat_stream: ChatStream) -> str:
         """构建系统提示词"""
@@ -367,23 +652,24 @@ class DefaultChatter(BaseChatter):
     @staticmethod
     def _upsert_pending_unread_payload(
         response: LLMConversationState,
-        formatted_text: str,
+        formatted_content: object,
     ) -> None:
         """在未发送前合并未读消息到最后一个 USER payload。"""
+        if isinstance(formatted_content, list):
+            new_content = list(formatted_content)
+        elif isinstance(formatted_content, Text):
+            new_content = [formatted_content]
+        else:
+            new_content = [Text(str(formatted_content))]
+
         if response.payloads:
             last_payload = response.payloads[-1]
             if last_payload.role == ROLE.USER:
-                if last_payload.content and isinstance(last_payload.content[-1], Text):
-                    existing_text = last_payload.content[-1].text
-                    separator = "\n" if existing_text else ""
-                    last_payload.content[-1] = Text(
-                        f"{existing_text}{separator}{formatted_text}"
-                    )
-                else:
-                    last_payload.content.append(Text(formatted_text))
+                last_payload.content.extend(new_content)
                 return
 
-        response.add_payload(LLMPayload(ROLE.USER, Text(formatted_text)))
+        payload_content = new_content[0] if len(new_content) == 1 else new_content
+        response.add_payload(LLMPayload(ROLE.USER, payload_content))
 
     async def sub_agent(
         self,
@@ -421,8 +707,8 @@ class DefaultChatter(BaseChatter):
         """执行聊天器的对话循环。
 
         一轮对话包含完整的上下文消息（系统提示 + 历史 + 未读 + LLM call history）。
-        新的 LLM 交互记录会不断追加到上下文中。当 stop_conversation 被调用后，
-        本轮对话结束，下次触发将使用全新的上下文。
+        新的 LLM 交互记录会不断追加到上下文中；当本轮自然结束后，
+        下次触发将使用全新的上下文。
 
         Yields:
             Wait | Success | Failure | Stop: 执行结果
@@ -436,36 +722,32 @@ class DefaultChatter(BaseChatter):
             yield Failure("无法激活聊天流")
             return
 
-        mode = self._get_mode()
-        logger.info(f"DefaultChatter 当前模式: {mode}")
+        self._register_vlm_skip()
+        try:
+            mode = self._get_mode()
+            logger.info(f"DefaultChatter 当前模式: {mode}")
 
-        if mode == "classical":
-            async for result in self._execute_classical(chat_stream):
+            if mode == "classical":
+                async for result in self._execute_classical(chat_stream):
+                    yield result
+                return
+
+            async for result in self._execute_enhanced(chat_stream):
                 yield result
-            return
-
-        async for result in self._execute_enhanced(chat_stream):
-            yield result
+        finally:
+            self._unregister_vlm_skip()
 
     async def _execute_enhanced(
         self, chat_stream: ChatStream
     ) -> AsyncGenerator[Wait | Success | Failure | Stop, None]:
         """enhanced 模式执行流程（保留原有行为）。"""
-        plugin_config = getattr(self.plugin, "config", None)
-        enable_cooldown = (
-            plugin_config.plugin.enable_cooldown
-            if isinstance(plugin_config, DefaultChatterConfig)
-            else False
-        )
         async for result in run_enhanced(
             chatter=self,
             chat_stream=chat_stream,
             logger=logger,
             pass_call_name=_PASS_AND_WAIT,
-            stop_call_name=_STOP_CONVERSATION,
             send_text_call_name=_SEND_TEXT,
             suspend_text=_SUSPEND_TEXT,
-            enable_cooldown=enable_cooldown,
         ):
             yield result
 
@@ -473,21 +755,13 @@ class DefaultChatter(BaseChatter):
         self, chat_stream: ChatStream
     ) -> AsyncGenerator[Wait | Success | Failure | Stop, None]:
         """classical 模式执行流程。"""
-        plugin_config = getattr(self.plugin, "config", None)
-        enable_cooldown = (
-            plugin_config.plugin.enable_cooldown
-            if isinstance(plugin_config, DefaultChatterConfig)
-            else False
-        )
         async for result in run_classical(
             chatter=self,
             chat_stream=chat_stream,
             logger=logger,
             pass_call_name=_PASS_AND_WAIT,
-            stop_call_name=_STOP_CONVERSATION,
             send_text_call_name=_SEND_TEXT,
             suspend_text=_SUSPEND_TEXT,
-            enable_cooldown=enable_cooldown,
         ):
             yield result
 
@@ -500,6 +774,39 @@ class DefaultChatter(BaseChatter):
     ) -> tuple[bool, bool]:
         """执行工具调用并将结果写回响应上下文。"""
         return await super().run_tool_call(call, response, usable_map, trigger_msg)
+
+    def _register_vlm_skip(self) -> None:
+        """启用原生多模态时，跳过当前聊天流的 VLM 转译。"""
+        plugin_config = getattr(self.plugin, "config", None)
+        if not (
+            isinstance(plugin_config, DefaultChatterConfig)
+            and plugin_config.plugin.native_multimodal
+        ):
+            return
+
+        try:
+            from src.core.managers import get_media_manager
+
+            get_media_manager().skip_vlm_for_stream(self.stream_id)
+            logger.info(f"DefaultChatter 已为聊天流 {self.stream_id[:8]} 启用原生多模态")
+        except Exception as exc:
+            logger.warning(f"DefaultChatter 启用原生多模态失败: {exc}")
+
+    def _unregister_vlm_skip(self) -> None:
+        """退出时恢复当前聊天流的 VLM 转译。"""
+        plugin_config = getattr(self.plugin, "config", None)
+        if not (
+            isinstance(plugin_config, DefaultChatterConfig)
+            and plugin_config.plugin.native_multimodal
+        ):
+            return
+
+        try:
+            from src.core.managers import get_media_manager
+
+            get_media_manager().unskip_vlm_for_stream(self.stream_id)
+        except Exception as exc:
+            logger.debug(f"DefaultChatter 取消原生多模态失败: {exc}")
 
 
 # ─── Plugin ─────────────────────────────────────────────────
@@ -544,9 +851,7 @@ class DefaultChatterPlugin(BasePlugin):
                 "current_time": optional(
                     datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 ),
-                "extra_info": optional(""),
-                "platform_name": optional("未知"),
-                "platform_id": optional("未知ID"),
+                "extra_info": optional("")
             },
         )
 
@@ -599,5 +904,4 @@ class DefaultChatterPlugin(BasePlugin):
             DefaultChatter,
             SendTextAction,
             PassAndWaitAction,
-            StopConversationAction,
         ]

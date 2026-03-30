@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
-from src.kernel.llm.payload.content import Audio, Content, File, Image, Text
+from src.kernel.llm.payload.content import Audio, Content, File, Image, Text, Video
 
 
 class TestContent:
@@ -207,6 +207,41 @@ class TestAudio:
         b64_b = base64.b64encode(b"bbb").decode("utf-8")
         assert Audio(b64_a) == Audio(b64_a)
         assert Audio(b64_a) != Audio(b64_b)
+
+
+class TestVideo:
+    """Test cases for Video content."""
+
+    def test_video_creation_with_file_path(self, tmp_path: Path) -> None:
+        """Test creating Video with an actual file path; value is normalized to pure base64."""
+        video_file = tmp_path / "clip.mp4"
+        video_file.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+        video = Video(str(video_file))
+        assert video.value == base64.b64encode(b"\x00\x00\x00\x18ftypmp42").decode("utf-8")
+
+    def test_video_creation_with_data_url(self) -> None:
+        """Test creating Video with data URL; value is stripped to pure base64."""
+        b64_payload = "AAAAGGZ0eXBtcDQy"
+        data_url = f"data:video/mp4;base64,{b64_payload}"
+        video = Video(data_url)
+        assert video.value == b64_payload
+
+    def test_video_creation_with_pure_base64(self) -> None:
+        """Test creating Video with a pure base64 string."""
+        b64 = base64.b64encode(b"fake_video_bytes").decode("utf-8")
+        video = Video(b64)
+        assert video.value == b64
+
+    def test_video_creation_from_bytesio(self) -> None:
+        """Test creating Video from a BytesIO object."""
+        data = b"fake_video_bytes"
+        video = Video(BytesIO(data))
+        assert video.value == base64.b64encode(data).decode("utf-8")
+
+    def test_video_is_file_subclass(self) -> None:
+        """Test that Video is also a File subclass."""
+        b64 = base64.b64encode(b"x").decode("utf-8")
+        assert isinstance(Video(b64), File)
 
 
 # ---------------------------------------------------------------------------

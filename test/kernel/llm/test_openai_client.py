@@ -16,6 +16,7 @@ from src.kernel.llm import (
     Text,
     ToolCall,
     ToolResult,
+    Video,
 )
 
 
@@ -136,6 +137,25 @@ class TestPayloadsToOpenAIMessages:
         assert len(content) == 2
         assert content[0]["type"] == "text"
         assert content[1]["type"] == "image_url"
+
+    def test_multimodal_content_with_video(self):
+        """测试多模态内容（文本+视频）。"""
+        from src.kernel.llm.model_client.openai_client import _payloads_to_openai_messages
+
+        payloads = [
+            LLMPayload(
+                ROLE.USER,
+                [Text("看看这个视频"), Video("base64|AAAAGGZ0eXBtcDQy")],
+            )
+        ]
+        messages, tools = _payloads_to_openai_messages(payloads)
+
+        assert len(messages) == 1
+        assert tools == []
+        content = messages[0]["content"]
+        assert isinstance(content, list)
+        assert len(content) == 2
+        assert content[1]["type"] == "video_url"
 
     def test_tool_payload(self):
         """测试工具定义payload。"""
@@ -715,6 +735,62 @@ class TestOpenAIChatClient:
         assert call_kwargs["presence_penalty"] == 0.1
 
     @pytest.mark.asyncio
+    async def test_create_retries_without_native_video_when_unsupported(self):
+        """测试上游不支持 video_url 时会自动降级并重试。"""
+        from src.kernel.llm.model_client.openai_client import OpenAIChatClient
+
+        mock_completion = MagicMock()
+        mock_completion.choices = [MagicMock()]
+        mock_completion.choices[0].message.content = "fallback-ok"
+        mock_completion.choices[0].message.tool_calls = None
+
+        mock_chat = AsyncMock()
+        mock_chat.completions.create = AsyncMock(
+            side_effect=[
+                Exception("invalid_request_error: unsupported content type video_url"),
+                mock_completion,
+            ]
+        )
+
+        mock_openai_client = MagicMock()
+        mock_openai_client.chat.completions.create = mock_chat.completions.create
+
+        client = OpenAIChatClient()
+        client._clients = {}
+        client._get_client = MagicMock(return_value=mock_openai_client)
+
+        payloads = [LLMPayload(ROLE.USER, [Text("描述一下"), Video("base64|AAAAGGZ0eXBtcDQy")])]
+        model_set = {
+            "api_key": "test-key",
+            "base_url": None,
+            "timeout": None,
+            "max_tokens": None,
+            "temperature": None,
+            "extra_params": {},
+        }
+
+        message, tool_calls, stream_iter = await client.create(
+            model_name="gpt-4o",
+            payloads=payloads,
+            tools=[],
+            request_name="test",
+            model_set=model_set,
+            stream=False,
+        )
+
+        assert message == "fallback-ok"
+        assert tool_calls == []
+        assert stream_iter is None
+        assert mock_chat.completions.create.await_count == 2
+
+        first_call_kwargs = mock_chat.completions.create.await_args_list[0].kwargs
+        second_call_kwargs = mock_chat.completions.create.await_args_list[1].kwargs
+        first_content = first_call_kwargs["messages"][0]["content"]
+        second_content = second_call_kwargs["messages"][0]["content"]
+        assert any(item.get("type") == "video_url" for item in first_content if isinstance(item, dict))
+        assert all(item.get("type") != "video_url" for item in second_content if isinstance(item, dict))
+
+    @pytest.mark.asyncio
     async def test_create_inject_reasoning_content_for_thinking_tool_calls(self):
         """测试开启 thinking 时为 tool_calls 消息补齐 reasoning_content。"""
         from src.kernel.llm.model_client.openai_client import OpenAIChatClient
@@ -1019,4 +1095,3 @@ class TestOpenAIChatClient:
 
         await cast(Any, stream_iter).aclose()
         assert fake_stream.closed is True
-

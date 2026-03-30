@@ -22,11 +22,6 @@
             "component_type": "action",
             "component_name": "pass_and_wait",
             "dependencies": []
-        },
-        {
-            "component_type": "action",
-            "component_name": "stop_conversation",
-            "dependencies": []
         }
     ],
     "entry_point": "plugin.py",

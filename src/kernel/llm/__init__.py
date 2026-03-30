@@ -25,6 +25,7 @@ from .payload import (
 	Audio,
 	Content,
 	Image,
+	Video,
 	LLMPayload,
 	LLMUsable,
 	Text,
@@ -76,6 +77,7 @@ __all__ = [
 	"Text",
 	"Image",
 	"Audio",
+	"Video",
 	# 工具相关
 	"ToolResult",
 	"ToolCall",

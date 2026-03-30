@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.kernel.llm.payload.content import Audio, Image, Text
+from src.kernel.llm.payload.content import Audio, Image, Text, Video
 from src.kernel.llm.payload.payload import LLMPayload, _normalize_content
 from src.kernel.llm.roles import ROLE
 
@@ -37,12 +37,14 @@ class TestNormalizeContent:
             Text(text="Text"),
             Image(value="image.jpg"),
             Audio(value="audio.mp3"),
+            Video(value="video.mp4"),
         ]
         result = _normalize_content(content_list)
-        assert len(result) == 3
+        assert len(result) == 4
         assert isinstance(result[0], Text)
         assert isinstance(result[1], Image)
         assert isinstance(result[2], Audio)
+        assert isinstance(result[3], Video)
 
 
 class TestLLMPayload:

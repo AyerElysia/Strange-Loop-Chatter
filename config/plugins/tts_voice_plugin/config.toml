@@ -1,0 +1,204 @@
+# 插件基本配置。
+[plugin]
+# 是否启用插件
+# 值类型：bool, 默认值：false
+enable = true
+
+# 触发语音合成的关键词列表
+# 值类型：list, 默认值：["发语音", "语音", "说句话", "用语音说", "听你", "听声音", "想听你", "想听声音", "讲个话", "说段话", "念一下", "读一下", "用嘴说", "说", "能发语音吗", "亲口"]
+keywords = ["发语音", "语音", "说句话", "用语音说", "听你", "听声音", "想听你", "想听声音", "讲个话", "说段话", "念一下", "读一下", "用嘴说", "说", "能发语音吗", "亲口"]
+
+# 组件启用控制。
+[components]
+# 是否启用 Action 组件
+# 值类型：bool, 默认值：true
+action_enabled = true
+
+# 是否启用 Command 组件
+# 值类型：bool, 默认值：true
+command_enabled = true
+
+# 自定义提示词配置。
+[prompt]
+# 追加到 tts_voice_action action 描述末尾的自定义指令。
+# 可描述希望 AI 主动使用语音功能的具体场景，例如：在表达亲密感、讲故事或用户明确要求听声音时主动使用。
+# 不会覆盖已有的触发条件，只是扩充场景说明。
+# 值类型：str, 默认值：""
+custom_instructions = ""
+
+# TTS 语音合成基础配置。
+[tts]
+# GPT-SoVITS 服务地址
+# 值类型：str, 默认值："http://127.0.0.1:9880"
+server = "http://127.0.0.1:9880"
+
+# TTS 请求超时秒数
+# 值类型：int, 默认值：180
+timeout = 180
+
+# 最大合成文本长度
+# 值类型：int, 默认值：1000
+max_text_length = 1000
+
+# 允许发送给 TTS API 的 text_lang 语言代码列表。支持带说明格式（如 zh(中英混合)），服务端会自动提取括号前代码。
+# 值类型：list, 默认值：["zh", "en", "ja", "yue", "auto", "auto_yue"]
+supported_text_languages = ["zh", "en", "ja", "yue", "auto", "auto_yue"]
+
+# 当输入语言非法或不受支持时的兜底语言代码
+# 值类型：str, 默认值："zh"
+fallback_text_language = "zh"
+
+# TTS 风格参数配置，每个实例代表一种独立的语音风格。
+[[tts_styles]]
+# 风格唯一标识符，必须有一个名为 default
+# 值类型：str, 默认值："default"
+style_name = "default"
+
+# 显示名称
+# 值类型：str, 默认值："默认"
+name = "温柔"
+
+# 参考音频路径
+# 值类型：str, 默认值："C:/path/to/your/reference.wav"
+refer_wav_path = "/root/Elysia/GPT-SoVITS/ref/ref_audio.wav"
+
+# 参考音频文本
+# 值类型：str, 默认值："这是一个示例文本，请替换为您自己的参考音频文本。"
+prompt_text = "就暂且停下脚步吧，然后看看你的身旁，看看你的背后。"
+
+# 参考音频语言
+# 值类型：str, 默认值："zh"
+prompt_language = "zh"
+
+# GPT 模型路径
+# 值类型：str, 默认值："C:/path/to/your/gpt_weights.ckpt"
+gpt_weights = "/root/Elysia/GPT-SoVITS/GPT_weights_v4/elysia_v4_hq_20260315-e24.ckpt"
+
+# SoVITS 模型路径
+# 值类型：str, 默认值："C:/path/to/your/sovits_weights.pth"
+sovits_weights = "/root/Elysia/GPT-SoVITS/SoVITS_weights_v4/elysia_v4_hq_20260315_e120_s6360_l32.pth"
+
+# 语速因子
+# 值类型：float, 默认值：1.0
+speed_factor = 0.9
+
+# 文本语言模式 (zh/ja/en/auto 等)
+# 值类型：str, 默认值："auto"
+text_language = "auto"
+
+[[tts_styles]]
+# 风格唯一标识符，必须有一个名为 default
+# 值类型：str, 默认值："default"
+style_name = "happy"
+
+# 显示名称
+# 值类型：str, 默认值："默认"
+name = "开心"
+
+# 参考音频路径
+# 值类型：str, 默认值："C:/path/to/your/reference.wav"
+refer_wav_path = "/root/Elysia/GPT-SoVITS/ref/happy.wav"
+
+# 参考音频文本
+# 值类型：str, 默认值："这是一个示例文本，请替换为您自己的参考音频文本。"
+prompt_text = "多和我说说话吧，我也好想了解你呀。"
+
+# 参考音频语言
+# 值类型：str, 默认值："zh"
+prompt_language = "zh"
+
+# GPT 模型路径
+# 值类型：str, 默认值："C:/path/to/your/gpt_weights.ckpt"
+gpt_weights = "/root/Elysia/GPT-SoVITS/GPT_weights_v4/elysia_v4_hq_20260315-e24.ckpt"
+
+# SoVITS 模型路径
+# 值类型：str, 默认值："C:/path/to/your/sovits_weights.pth"
+sovits_weights = "/root/Elysia/GPT-SoVITS/SoVITS_weights_v4/elysia_v4_hq_20260315_e120_s6360_l32.pth"
+
+# 语速因子
+# 值类型：float, 默认值：1.0
+speed_factor = 1.0
+
+# 文本语言模式 (zh/ja/en/auto 等)
+# 值类型：str, 默认值："auto"
+text_language = "auto"
+
+# TTS 高级参数配置（语速、采样、批处理等）。
+[tts_advanced]
+# 输出音频格式
+# 值类型：str, 默认值："wav"
+media_type = "ogg"
+
+# Top-K 采样参数
+# 值类型：int, 默认值：9
+top_k = 20
+
+# Top-P 核采样参数
+# 值类型：float, 默认值：0.8
+top_p = 1.0
+
+# 温度参数
+# 值类型：float, 默认值：0.8
+temperature = 0.9
+
+# 批处理大小
+# 值类型：int, 默认值：6
+batch_size = 6
+
+# 批处理阈值
+# 值类型：float, 默认值：0.75
+batch_threshold = 0.75
+
+# 文本分割方法
+# 值类型：str, 默认值："cut5"
+text_split_method = "cut5"
+
+# 重复惩罚因子
+# 值类型：float, 默认值：1.4
+repetition_penalty = 1.4
+
+# 采样步数
+# 值类型：int, 默认值：150
+sample_steps = 60
+
+# 是否启用超采样
+# 值类型：bool, 默认值：true
+super_sampling = true
+
+# 空间音效配置。
+[spatial_effects]
+# 是否启用空间音效处理
+# 值类型：bool, 默认值：false
+enabled = false
+
+# 是否启用标准混响效果
+# 值类型：bool, 默认值：false
+reverb_enabled = true
+
+# 混响的房间大小 (0.0-1.0)
+# 值类型：float, 默认值：0.2
+room_size = 0.2
+
+# 混响的阻尼/高频衰减 (0.0-1.0)
+# 值类型：float, 默认值：0.6
+damping = 0.6
+
+# 混响的湿声比例 (0.0-1.0)
+# 值类型：float, 默认值：0.3
+wet_level = 0.3
+
+# 混响的干声比例 (0.0-1.0)
+# 值类型：float, 默认值：0.8
+dry_level = 0.8
+
+# 混响的立体声宽度 (0.0-1.0)
+# 值类型：float, 默认值：1.0
+width = 1.0
+
+# 是否启用卷积混响（需要 assets/small_room_ir.wav）
+# 值类型：bool, 默认值：false
+convolution_enabled = false
+
+# 卷积混响的干湿比 (0.0-1.0)
+# 值类型：float, 默认值：0.7
+convolution_mix = 0.7

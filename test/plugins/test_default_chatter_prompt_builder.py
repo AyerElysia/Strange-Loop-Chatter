@@ -187,3 +187,135 @@ def test_build_system_prompt_falls_back_to_stream_values(
     )
 
     assert prompt == "platform_name=stream-name|platform_id=stream-id"
+
+
+def test_build_system_prompt_uses_independent_persona_probabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """应按每个字段各自概率独立决定注入。"""
+    config = DefaultChatterConfig.from_dict(
+        {
+            "plugin": {
+                "probabilistic_persona_injection_enabled": True,
+                "personality_core_injection_probability": 1.0,
+                "personality_side_injection_probability": 0.0,
+                "reply_style_injection_probability": 1.0,
+                "identity_injection_probability": 0.0,
+                "background_story_injection_probability": 0.0,
+            }
+        }
+    )
+    stream = ChatStream(
+        stream_id="persona-independent-stream",
+        platform="qq",
+        chat_type="private",
+        bot_id="100",
+        bot_nickname="fox",
+    )
+
+    class _FakeTemplate:
+        def __init__(self) -> None:
+            self.values: dict[str, str] = {}
+
+        def set(self, key: str, value: str):
+            self.values[key] = value
+            return self
+
+        async def build(self) -> str:
+            return (
+                f"core={self.values.get('personality_core', '')}|"
+                f"side={self.values.get('personality_side', '')}|"
+                f"style={self.values.get('reply_style', '')}|"
+                f"identity={self.values.get('identity', '')}|"
+                f"story={self.values.get('background_story', '')}"
+            )
+
+    fake_template = _FakeTemplate()
+    monkeypatch.setattr(
+        "plugins.default_chatter.prompt_builder.get_prompt_manager",
+        lambda: SimpleNamespace(get_template=lambda _name: fake_template),
+    )
+    monkeypatch.setattr(
+        "plugins.default_chatter.prompt_builder.get_core_config",
+        lambda: SimpleNamespace(
+            personality=SimpleNamespace(
+                personality_core="CORE",
+                personality_side="SIDE",
+                reply_style="STYLE",
+                identity="IDENTITY",
+                background_story="STORY",
+            )
+        ),
+    )
+
+    prompt = asyncio.run(
+        DefaultChatterPromptBuilder.build_system_prompt(config, stream)
+    )
+
+    assert prompt == "core=CORE|side=|style=STYLE|identity=|story="
+
+
+def test_build_system_prompt_ignores_probabilities_when_feature_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """关闭概率开关时应始终注入所有人设字段。"""
+    config = DefaultChatterConfig.from_dict(
+        {
+            "plugin": {
+                "probabilistic_persona_injection_enabled": False,
+                "personality_core_injection_probability": 0.0,
+                "personality_side_injection_probability": 0.0,
+                "reply_style_injection_probability": 0.0,
+                "identity_injection_probability": 0.0,
+                "background_story_injection_probability": 0.0,
+            }
+        }
+    )
+    stream = ChatStream(
+        stream_id="persona-disabled-stream",
+        platform="qq",
+        chat_type="private",
+        bot_id="100",
+        bot_nickname="fox",
+    )
+
+    class _FakeTemplate:
+        def __init__(self) -> None:
+            self.values: dict[str, str] = {}
+
+        def set(self, key: str, value: str):
+            self.values[key] = value
+            return self
+
+        async def build(self) -> str:
+            return (
+                f"core={self.values.get('personality_core', '')}|"
+                f"side={self.values.get('personality_side', '')}|"
+                f"style={self.values.get('reply_style', '')}|"
+                f"identity={self.values.get('identity', '')}|"
+                f"story={self.values.get('background_story', '')}"
+            )
+
+    fake_template = _FakeTemplate()
+    monkeypatch.setattr(
+        "plugins.default_chatter.prompt_builder.get_prompt_manager",
+        lambda: SimpleNamespace(get_template=lambda _name: fake_template),
+    )
+    monkeypatch.setattr(
+        "plugins.default_chatter.prompt_builder.get_core_config",
+        lambda: SimpleNamespace(
+            personality=SimpleNamespace(
+                personality_core="CORE",
+                personality_side="SIDE",
+                reply_style="STYLE",
+                identity="IDENTITY",
+                background_story="STORY",
+            )
+        ),
+    )
+
+    prompt = asyncio.run(
+        DefaultChatterPromptBuilder.build_system_prompt(config, stream)
+    )
+
+    assert prompt == "core=CORE|side=SIDE|style=STYLE|identity=IDENTITY|story=STORY"

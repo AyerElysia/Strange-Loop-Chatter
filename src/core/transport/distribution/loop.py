@@ -220,6 +220,17 @@ async def run_chat_stream(
                         )
                         logger.debug(f"[驱动器] stream={stream_id[:8]}, 进入 Stop 状态 (time={result.time})，销毁生成器")
                         manager._chatter_genes.pop(stream_id, None)
+
+                    await event_manager.publish_event(
+                        EventType.ON_CHATTER_STEP_RESULT,
+                        {
+                            "stream_id": stream_id,
+                            "context": context,
+                            "tick": tick,
+                            "chatter_gene": chatter_gene,
+                            "result": result,
+                        },
+                    )
                         
                     manager._stats["total_process_cycles"] += 1
 

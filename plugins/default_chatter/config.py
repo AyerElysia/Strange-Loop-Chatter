@@ -40,6 +40,57 @@ class DefaultChatterConfig(BaseConfig):
                 order=1
             )
 
+        @config_section("debug", title="调试设置", tag="debug", order=20)
+        class DebugSection(SectionBase):
+            """调试输出相关配置。"""
+
+            show_prompt: bool = Field(
+                default=False,
+                description="是否输出发送给 LLM 的完整提示词",
+                label="显示完整上下文",
+                tag="debug",
+                hint="开启后会打印系统提示词、历史消息、未读消息和工具列表",
+                order=0
+            )
+            show_response: bool = Field(
+                default=False,
+                description="是否输出 LLM 响应调试摘要",
+                label="显示响应摘要",
+                tag="debug",
+                hint="开启后会打印模型返回的工具调用和文本摘要",
+                order=0
+            )
+
+        @config_section("reply", title="回复节奏", tag="performance", order=30)
+        class ReplySection(SectionBase):
+            """send_text 分段发送节奏配置。"""
+
+            typing_chars_per_sec: float = Field(
+                default=15.0,
+                ge=0.0,
+                description="模拟打字速度(字/秒)，小于等于 0 时不添加分段延迟",
+                label="打字速度",
+                tag="performance",
+                hint="用于分段发送时计算段间延迟",
+                order=0
+            )
+            typing_delay_min: float = Field(
+                default=0.8,
+                ge=0.0,
+                description="分段发送时的最小段间延迟(秒)",
+                label="最小延迟",
+                tag="performance",
+                order=1
+            )
+            typing_delay_max: float = Field(
+                default=4.0,
+                ge=0.0,
+                description="分段发送时的最大段间延迟(秒)",
+                label="最大延迟",
+                tag="performance",
+                order=2
+            )
+
         enabled: bool = Field(
             default=True,
             description="是否启用 DefaultChatter",
@@ -65,19 +116,126 @@ class DefaultChatterConfig(BaseConfig):
             hint="开启后会在每轮对话中强调禁止行为",
             order=2
         )
-        enable_cooldown: bool = Field(
-            default=True,
-            description="是否启用回复后冷却功能。开启后 stop_conversation 工具指定的冷却时间将生效，期间新消息不会触发回复；关闭时冷却时间归零，消息可立即触发新对话",
-            label="启用回复后冷却",
-            tag="performance",
-            hint="关闭可避免因 LLM 设置过长冷却时间导致长时间无法回复",
+        probabilistic_persona_injection_enabled: bool = Field(
+            default=False,
+            description="是否启用系统提示词中的人设段落概率注入",
+            label="启用概率人设注入",
+            tag="ai",
+            hint="开启后各人设字段按独立概率注入",
             order=3
+        )
+        personality_core_injection_probability: float = Field(
+            default=1.0,
+            ge=0.0,
+            le=1.0,
+            description="personality_core 注入概率，取值 0.0~1.0",
+            label="核心人格概率",
+            tag="ai",
+            hint="建议较高，作为主要人格锚点",
+            order=4
+        )
+        personality_side_injection_probability: float = Field(
+            default=1.0,
+            ge=0.0,
+            le=1.0,
+            description="personality_side 注入概率，取值 0.0~1.0",
+            label="人格侧面概率",
+            tag="ai",
+            hint="可低于核心人格，提升自由度",
+            order=5
+        )
+        reply_style_injection_probability: float = Field(
+            default=1.0,
+            ge=0.0,
+            le=1.0,
+            description="reply_style 注入概率，取值 0.0~1.0",
+            label="回复风格概率",
+            tag="ai",
+            hint="控制表达风格的约束强度",
+            order=6
+        )
+        identity_injection_probability: float = Field(
+            default=1.0,
+            ge=0.0,
+            le=1.0,
+            description="identity 注入概率，取值 0.0~1.0",
+            label="身份描述概率",
+            tag="ai",
+            hint="可适度降低，避免过强身份模板化",
+            order=7
+        )
+        background_story_injection_probability: float = Field(
+            default=1.0,
+            ge=0.0,
+            le=1.0,
+            description="background_story 注入概率，取值 0.0~1.0",
+            label="背景故事概率",
+            tag="ai",
+            hint="建议较低，减少重复背景负担",
+            order=8
+        )
+        native_multimodal: bool = Field(
+            default=False,
+            description=(
+                "原生多模态模式。启用后，图片直接打包进 LLM payload，"
+                "由主模型在对话上下文中理解图片内容并做出响应。"
+                "需确保对应模型支持多模态输入。"
+            ),
+            label="原生多模态",
+            tag="ai",
+            hint="开启后可直接看图，绕过 VLM 转译",
+            order=9
+        )
+        max_images_per_payload: int = Field(
+            default=4,
+            description=(
+                "原生多模态模式下单次 payload 的图片上限。"
+                "用户新消息图片优先，其次是历史图片。"
+            ),
+            label="单次图片上限",
+            tag="ai",
+            hint="建议保持在 4 左右，避免上下文过重",
+            order=10
+        )
+        max_videos_per_payload: int = Field(
+            default=1,
+            description=(
+                "原生多模态模式下单次 payload 的视频上限。"
+                "超出部分仅保留文本摘要，不再以原生视频输入。"
+            ),
+            label="单次视频上限",
+            tag="ai",
+            hint="建议保持 1，避免 payload 过重或上游拒绝",
+            order=11
+        )
+        native_video_multimodal: bool = Field(
+            default=True,
+            description=(
+                "原生多模态模式下是否启用原生视频输入。"
+                "关闭后视频仅以文本摘要参与对话。"
+            ),
+            label="启用原生视频",
+            tag="ai",
+            hint="建议在上游模型明确支持视频输入时开启",
+            order=12
         )
         theme_guide: ThemeGuideSection = Field(
             default_factory=ThemeGuideSection,
             description="按聊天类型区分的额外提示词",
             label="场景引导配置",
-            order=4
+            order=13
+        )
+        reply: ReplySection = Field(
+            default_factory=ReplySection,
+            description="发送分段与节奏配置",
+            label="回复节奏配置",
+            order=14
+        )
+        debug: DebugSection = Field(
+            default_factory=DebugSection,
+            description="调试输出配置",
+            label="调试配置",
+            order=15
         )
 
     plugin: PluginSection = Field(default_factory=PluginSection)

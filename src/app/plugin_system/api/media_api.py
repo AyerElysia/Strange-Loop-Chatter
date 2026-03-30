@@ -46,8 +46,8 @@ def _validate_media_type(media_type: str) -> None:
     Returns:
         None
     """
-    if media_type not in {"image", "emoji"}:
-        raise ValueError("media_type 必须是 'image' 或 'emoji'")
+    if media_type not in {"image", "emoji", "video"}:
+        raise ValueError("media_type 必须是 'image'、'emoji' 或 'video'")
 
 
 async def recognize_media(
@@ -55,7 +55,7 @@ async def recognize_media(
     media_type: str,
     use_cache: bool = True,
 ) -> str | None:
-    """识别媒体内容（图片或表情包）。
+    """识别媒体内容（图片、表情包或视频）。
 
     Args:
         base64_data: Base64 编码的媒体内容
@@ -67,7 +67,13 @@ async def recognize_media(
     """
     _validate_non_empty(base64_data, "base64_data")
     _validate_media_type(media_type)
-    return await _get_media_manager().recognize_media(
+    manager = _get_media_manager()
+    if media_type == "video":
+        return await manager.recognize_video(
+            video_data=base64_data,
+            use_cache=use_cache,
+        )
+    return await manager.recognize_media(
         base64_data=base64_data,
         media_type=media_type,
         use_cache=use_cache,
@@ -94,10 +100,18 @@ async def recognize_batch(
             raise ValueError("media_list 必须包含 (base64_data, media_type) 元组")
         _validate_non_empty(item[0], "base64_data")
         _validate_media_type(item[1])
-    return await _get_media_manager().recognize_batch(
-        media_list=media_list,
-        use_cache=use_cache,
-    )
+
+    # 兼容 video：MediaManager.recognize_batch 仅面向 image/emoji，
+    # 因此这里统一逐条走 recognize_media 路由。
+    results: list[tuple[int, str | None]] = []
+    for idx, (base64_data, media_type) in enumerate(media_list):
+        description = await recognize_media(
+            base64_data=base64_data,
+            media_type=media_type,
+            use_cache=use_cache,
+        )
+        results.append((idx, description))
+    return results
 
 
 async def save_media_info(

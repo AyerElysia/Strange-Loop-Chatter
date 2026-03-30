@@ -20,7 +20,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import shutil
 import time
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +54,8 @@ class MediaManager:
     def __init__(self):
         """初始化媒体管理器。"""
         self._vlm_model_set = None
+        self._video_model_set = None
+        self._vlm_available = False
         self._skip_vlm_stream_ids: set[str] = set()  # 已注册跳过 VLM 识别的聊天流 ID
         self._initialize_vlm()
         self._register_prompts()
@@ -60,17 +64,23 @@ class MediaManager:
         self._start_cleanup_scheduler()
 
     def _initialize_vlm(self) -> None:
-        """初始化 VLM 模型配置。"""
+        """初始化 VLM/视频模型配置。"""
         try:
             from src.app.plugin_system.api.llm_api import get_model_set_by_task
 
             self._vlm_model_set = get_model_set_by_task("vlm")
             self._vlm_available = self._vlm_model_set is not None
+            self._video_model_set = get_model_set_by_task("video")
             
             if self._vlm_available:
                 logger.info("VLM 模型已加载，媒体识别功能可用")
             else:
                 logger.info("未配置 VLM 模型，媒体识别功能不可用")
+
+            if self._video_model_set:
+                logger.info("视频摘要模型已加载（非原生视频，将走抽帧摘要链路）")
+            else:
+                logger.info("未配置 video 任务模型，视频摘要将回退到关键帧描述拼接")
         except Exception as e:
             logger.error(f"初始化 VLM 模型失败: {e}")
 
@@ -320,6 +330,76 @@ class MediaManager:
             )
             results.append((idx, description))
         return results
+
+    async def recognize_video(
+        self,
+        video_data: str | dict[str, Any],
+        use_cache: bool = True,
+        max_frames: int = 3,
+    ) -> str | None:
+        """识别视频内容（非原生视频：抽关键帧 -> 图片识别 -> 文本总结）。
+
+        Args:
+            video_data: 视频数据（base64 字符串，或包含 base64 的字典）
+            use_cache: 是否使用缓存
+            max_frames: 最多抽取关键帧数量
+
+        Returns:
+            视频摘要文本，失败返回 None
+        """
+        try:
+            base64_data, metadata = self._extract_video_payload(video_data)
+            if not base64_data:
+                return None
+
+            video_hash = self._compute_hash(base64_data)
+
+            if use_cache:
+                cached = await self._get_cached_description(video_hash, "video")
+                if cached:
+                    logger.debug(f"从缓存获取 video 描述: {video_hash[:8]}...")
+                    return cached
+
+            frame_images = await self._extract_video_keyframes(
+                base64_data=base64_data,
+                filename=str(metadata.get("filename", "video.mp4") or "video.mp4"),
+                max_frames=max_frames,
+            )
+            if not frame_images:
+                return None
+
+            frame_descriptions: list[str] = []
+            for idx, frame_base64 in enumerate(frame_images, start=1):
+                try:
+                    description = await self.recognize_media(
+                        frame_base64,
+                        "image",
+                        use_cache=True,
+                    )
+                    if description:
+                        frame_descriptions.append(f"关键帧{idx}: {description}")
+                except Exception as e:
+                    logger.debug(f"视频关键帧识别失败(frame={idx}): {e}")
+
+            if not frame_descriptions:
+                return None
+
+            summary = await self._summarize_video_frames(frame_descriptions, metadata)
+            if not summary:
+                summary = "；".join(frame_descriptions[:max(1, min(3, len(frame_descriptions)))])
+
+            await self._save_description_cache(video_hash, "video", summary)
+            await self.save_media_info(
+                media_hash=video_hash,
+                media_type="video",
+                file_path=str(metadata.get("filename") or f"video:{video_hash[:16]}"),
+                description=summary,
+                vlm_processed=True,
+            )
+            return summary
+        except Exception as e:
+            logger.error(f"识别 video 失败: {e}", exc_info=True)
+            return None
 
     # ──────────────────────────────────────────
     # 公共 API：数据库操作
@@ -587,6 +667,124 @@ class MediaManager:
         except Exception as e:
             logger.error(f"保存描述缓存失败: {e}", exc_info=True)
 
+    async def _summarize_video_frames(
+        self,
+        frame_descriptions: list[str],
+        metadata: dict[str, Any],
+    ) -> str | None:
+        """基于关键帧描述生成视频摘要。"""
+        if not frame_descriptions:
+            return None
+
+        model_set = self._video_model_set or self._vlm_model_set
+        if not model_set:
+            return None
+
+        try:
+            from src.app.plugin_system.api.llm_api import create_llm_request
+            from src.kernel.llm import LLMContextManager, LLMPayload, ROLE, Text
+
+            request = create_llm_request(
+                model_set,
+                "video_frame_summary",
+                context_manager=LLMContextManager(max_payloads=4),
+            )
+
+            filename = str(metadata.get("filename", "video.mp4") or "video.mp4")
+            size_mb = metadata.get("size_mb")
+            size_text = f"{float(size_mb):.2f}MB" if isinstance(size_mb, (int, float)) else "未知"
+
+            prompt = (
+                "你会收到一个视频的关键帧识别结果，请生成一段 60~120 字的中文摘要。\n"
+                "要求：\n"
+                "1. 只基于给定关键帧，不要编造。\n"
+                "2. 用“视频大致在讲什么 + 主要对象/动作 + 场景线索”的结构。\n"
+                "3. 若信息不足，请明确说“画面信息有限”。\n"
+                f"视频文件：{filename}，大小：{size_text}\n\n"
+                "关键帧描述：\n"
+                + "\n".join(frame_descriptions)
+            )
+
+            request.add_payload(LLMPayload(ROLE.USER, [Text(prompt)]))
+            response = await request.send(stream=False)
+            await response
+
+            message = (response.message or "").strip()
+            if not message:
+                return None
+            if len(message) > 160:
+                return message[:157] + "..."
+            return message
+        except Exception as e:
+            logger.debug(f"视频关键帧总结失败: {e}")
+            return None
+
+    async def _extract_video_keyframes(
+        self,
+        base64_data: str,
+        filename: str = "video.mp4",
+        max_frames: int = 3,
+    ) -> list[str]:
+        """从视频中抽取关键帧并返回 base64 图片列表。"""
+        if max_frames <= 0:
+            return []
+
+        if shutil.which("ffmpeg") is None:
+            logger.warning("未找到 ffmpeg，无法进行视频抽帧")
+            return []
+
+        try:
+            clean_base64 = self._extract_clean_base64(base64_data)
+            binary_data = await asyncio.to_thread(base64.b64decode, clean_base64)
+        except Exception as e:
+            logger.debug(f"视频 base64 解码失败: {e}")
+            return []
+
+        suffix = Path(filename).suffix or ".mp4"
+        frame_results: list[str] = []
+
+        try:
+            with TemporaryDirectory(prefix="mofox_video_") as temp_dir:
+                temp_path = Path(temp_dir)
+                input_path = temp_path / f"input{suffix}"
+                await asyncio.to_thread(input_path.write_bytes, binary_data)
+                frame_pattern = str(temp_path / "frame_%03d.jpg")
+
+                proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(input_path),
+                    "-frames:v",
+                    str(max_frames),
+                    "-q:v",
+                    "2",
+                    frame_pattern,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await proc.communicate()
+                if proc.returncode != 0:
+                    err_text = stderr.decode("utf-8", errors="ignore").strip()
+                    logger.debug(f"ffmpeg 抽帧失败: {err_text or 'unknown'}")
+                    return []
+
+                frame_files = sorted(temp_path.glob("frame_*.jpg"))
+                for frame_file in frame_files[:max_frames]:
+                    try:
+                        frame_bytes = await asyncio.to_thread(frame_file.read_bytes)
+                        frame_results.append(f"base64|{base64.b64encode(frame_bytes).decode('utf-8')}")
+                    except Exception as e:
+                        logger.debug(f"读取关键帧失败({frame_file.name}): {e}")
+        except Exception as e:
+            logger.debug(f"视频抽帧流程失败: {e}")
+            return []
+
+        return frame_results
+
     @staticmethod
     def _extract_clean_base64(data: str) -> str:
         """提取纯净的 base64 数据（移除前缀和多余字符）。
@@ -609,6 +807,21 @@ class MediaManager:
         data = data.replace("\n", "").replace("\r", "").replace(" ", "")
         
         return data
+
+    @staticmethod
+    def _extract_video_payload(video_data: str | dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """提取视频 base64 数据和元信息。"""
+        if isinstance(video_data, dict):
+            for key in ("base64", "data", "video_base64"):
+                candidate = video_data.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate, video_data
+            return "", video_data
+
+        if isinstance(video_data, str):
+            return video_data, {}
+
+        return "", {}
     
     async def _save_to_pending(
         self,

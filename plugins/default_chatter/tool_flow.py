@@ -19,8 +19,6 @@ class ToolCallOutcome:
     """一次 call_list 处理结果。"""
 
     should_wait: bool = False
-    should_stop: bool = False
-    stop_minutes: float = 0.0
     sent_once: bool = False
     has_pending_tool_results: bool = False
 
@@ -37,7 +35,6 @@ async def process_tool_calls(
     usable_map: ToolRegistry,
     trigger_msg: Message | None,
     pass_call_name: str,
-    stop_call_name: str,
     send_text_call_name: str | None,
     break_on_send_text: bool,
     cross_round_seen_signatures: set[str] | None = None,
@@ -115,21 +112,6 @@ async def process_tool_calls(
                 )
             )
             outcome.should_wait = True
-            continue
-
-        if call.name == stop_call_name:
-            outcome.stop_minutes = float(args.get("minutes", 5.0))
-            response.add_payload(
-                LLMPayload(
-                    ROLE.TOOL_RESULT,
-                    ToolResult(  # type: ignore[arg-type]
-                        value=f"对话已结束，将在 {outcome.stop_minutes} 分钟后允许新对话",
-                        call_id=call.id,
-                        name=call.name,
-                    ),
-                )
-            )
-            outcome.should_stop = True
             continue
 
         appended, success = await run_tool_call(call, response, usable_map, trigger_msg)

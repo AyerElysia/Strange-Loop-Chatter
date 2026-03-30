@@ -1,0 +1,61 @@
+# 插件基础配置。
+[plugin]
+# 是否启用 unfinished_thought_plugin
+# 值类型：bool, 默认值：true
+enabled = true【
+
+# 是否在 prompt 构建时注入未完成念头
+# 值类型：bool, 默认值：true
+inject_prompt = true
+
+# 持久化配置。
+[storage]
+# 未完成念头存储根目录
+# 值类型：str, 默认值："data/unfinished_thoughts"
+base_path = "data/unfinished_thoughts"
+
+# 单个聊天流允许维护的未完成念头上限
+# 值类型：int, 默认值：20
+max_thoughts = 20
+
+# 保留的扫描历史记录上限
+# 值类型：int, 默认值：12
+max_history_records = 12
+
+# 扫描配置。
+[scan]
+# 每隔多少条有效对话自动扫描一次
+# 值类型：int, 默认值：8
+trigger_every_n_messages = 8
+
+# 扫描时给念头模型看的历史记录条数
+# 值类型：int, 默认值：12
+history_window_size = 12
+
+# prompt 注入配置。
+[prompt]
+# 允许注入未完成念头的 prompt 模板名
+# 值类型：list, 默认值：["default_chatter_user_prompt"]
+target_prompt_names = ["default_chatter_user_prompt"]
+
+# prompt 中显示的标题
+# 值类型：str, 默认值："未完成念头"
+prompt_title = "未完成念头"
+
+# prompt 中随机注入的最小条数
+# 值类型：int, 默认值：1
+inject_min_items = 1
+
+# prompt 中随机注入的最大条数
+# 值类型：int, 默认值：3
+inject_max_items = 3
+
+# 模型配置。
+[model]
+# 扫描未完成念头使用的模型任务名
+# 值类型：str, 默认值："diary"
+task_name = "diary"
+
+# 当主任务不可用时的回退模型任务名
+# 值类型：str, 默认值："actor"
+fallback_task_name = "actor"

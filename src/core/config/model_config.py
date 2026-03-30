@@ -218,6 +218,16 @@ class ModelTasksSection(SectionBase):
         default_factory=lambda: TaskConfigSection(model_list=["siliconflow-deepseek-ai/DeepSeek-V3.2"]),
         description="动作器模型配置",
     )
+    diary: TaskConfigSection = Field(
+        default_factory=lambda: TaskConfigSection(model_list=["siliconflow-deepseek-ai/DeepSeek-V3.2"]),
+        description="日记相关模型配置",
+    )
+    life: TaskConfigSection = Field(
+        default_factory=lambda: TaskConfigSection(
+            model_list=["siliconflow-deepseek-ai/DeepSeek-V3.2"]
+        ),
+        description="生命中枢任务配置",
+    )
     sub_actor: TaskConfigSection = Field(
         default_factory=lambda: TaskConfigSection(model_list=["siliconflow-deepseek-ai/DeepSeek-V3.2"]),
         description="副动作器模型配置",

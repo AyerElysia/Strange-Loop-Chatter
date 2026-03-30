@@ -94,9 +94,12 @@ data/*
 config/*
 plugins/*
 
+!config/plugins/
+!config/plugins/default_chatter/
+!config/plugins/default_chatter/config.toml
+
 
 !plugins/default_chatter/
 !plugins/napcat_adapter/
 !plugins/booku_memory/
 !plugins/emoji_sender/
-
