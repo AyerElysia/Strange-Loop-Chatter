@@ -28,7 +28,7 @@ class LifeEnginePlugin(BasePlugin):
 
     plugin_name: str = "life_engine"
     plugin_description: str = "生命中枢最小原型，维护并行心跳并收集聊天流上下文"
-    plugin_version: str = "1.2.0"
+    plugin_version: str = "1.5.0"
 
     configs: list[type] = [LifeEngineConfig]
     dependent_components: list[str] = []

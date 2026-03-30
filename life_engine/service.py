@@ -8,15 +8,19 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Any
 
+from src.app.plugin_system.api.llm_api import create_llm_request, get_model_set_by_task
 from src.app.plugin_system.api.log_api import get_logger
+from src.core.config import get_core_config
 from src.core.components.base import BaseService
 from src.core.models.message import Message
 from src.kernel.concurrency import get_task_manager
+from src.kernel.llm import LLMPayload, ROLE, Text
 
 from .audit import (
     get_life_log_file,
     log_error,
     log_heartbeat as log_heartbeat_event,
+    log_heartbeat_model_response,
     log_lifecycle,
     log_message_received,
     log_wake_context_injected,
@@ -80,8 +84,12 @@ class LifeEngineState:
     last_heartbeat_at: str | None = None
     heartbeat_count: int = 0
     pending_message_count: int = 0
+    history_message_count: int = 0
     last_wake_context_at: str | None = None
     last_wake_context_size: int = 0
+    last_model_reply_at: str | None = None
+    last_model_reply: str | None = None
+    last_model_error: str | None = None
     last_error: str | None = None
 
 
@@ -94,7 +102,7 @@ class LifeEngineService(BaseService):
 
     service_name: str = "life_engine"
     service_description: str = "生命中枢最小原型服务，仅维持并行心跳与事件上下文"
-    version: str = "1.2.0"
+    version: str = "1.5.0"
 
     def __init__(self, plugin) -> None:
         super().__init__(plugin)
@@ -102,6 +110,7 @@ class LifeEngineService(BaseService):
         self._heartbeat_task_id: str | None = None
         self._stop_event: asyncio.Event | None = None
         self._pending_messages: list[LifeEngineMessageRecord] = []
+        self._message_history: list[LifeEngineMessageRecord] = []
         self._lock: asyncio.Lock | None = None
 
     def _get_lock(self) -> asyncio.Lock:
@@ -120,6 +129,11 @@ class LifeEngineService(BaseService):
         """判断插件当前是否启用。"""
         cfg = self._cfg()
         return bool(cfg.settings.enabled)
+
+    def _history_limit(self) -> int:
+        """返回滚动历史保留上限。"""
+        cfg = self._cfg()
+        return max(1, int(cfg.settings.context_history_max_messages))
 
     def _build_record(self, message: Message) -> LifeEngineMessageRecord:
         """将核心消息对象转换为中枢记录。"""
@@ -184,6 +198,8 @@ class LifeEngineService(BaseService):
         data["heartbeat_prompt"] = self._cfg().settings.heartbeat_prompt
         data["model_task_name"] = self._cfg().model.task_name
         data["pending_message_count"] = len(self._pending_messages)
+        data["history_message_count"] = len(self._message_history)
+        data["context_history_max_messages"] = self._history_limit()
         data["log_file_path"] = str(get_life_log_file())
         return data
 
@@ -225,11 +241,25 @@ class LifeEngineService(BaseService):
             self._state.pending_message_count = 0
         return pending
 
+    async def _append_history(self, records: list[LifeEngineMessageRecord]) -> None:
+        """将记录追加到滚动历史中，并裁剪到上限。"""
+        if not records:
+            return
+
+        async with self._get_lock():
+            self._message_history.extend(records)
+            limit = self._history_limit()
+            if len(self._message_history) > limit:
+                self._message_history = self._message_history[-limit:]
+            self._state.history_message_count = len(self._message_history)
+
     async def clear_runtime_context(self) -> None:
         """清理当前唤醒上下文。"""
         async with self._get_lock():
             self._pending_messages.clear()
+            self._message_history.clear()
             self._state.pending_message_count = 0
+            self._state.history_message_count = 0
         self._clear_wake_context_reminder()
 
     def _clear_wake_context_reminder(self) -> None:
@@ -239,7 +269,7 @@ class LifeEngineService(BaseService):
         get_system_reminder_store().delete(_TARGET_REMINDER_BUCKET, _TARGET_REMINDER_NAME)
 
     def _build_wake_context_text(self, records: list[LifeEngineMessageRecord]) -> str:
-        """把待处理消息拼成可注入的上下文文本。"""
+        """把滚动历史消息拼成可注入的上下文文本。"""
         if not records:
             return ""
 
@@ -267,7 +297,7 @@ class LifeEngineService(BaseService):
                 ]
             )
 
-        lines.append(f"### 本次收到消息数: {len(records)}")
+        lines.append(f"### 当前滚动上下文消息数: {len(records)}")
 
         for source_label, source_records in grouped.items():
             platform, chat_type, source_detail, stream_id = source_meta[source_label]
@@ -296,33 +326,182 @@ class LifeEngineService(BaseService):
     async def inject_wake_context(self) -> str:
         """把当前待处理消息注入到系统提醒。"""
         records = await self.drain_pending_messages()
-        if not records:
+        if records:
+            await self._append_history(records)
+
+        async with self._get_lock():
+            context_records = list(self._message_history)
+
+        if not context_records:
             self._clear_wake_context_reminder()
             return ""
 
-        content = self._build_wake_context_text(records)
+        content = self._build_wake_context_text(context_records)
         from src.core.prompt import get_system_reminder_store
 
         store = get_system_reminder_store()
         store.set(_TARGET_REMINDER_BUCKET, name=_TARGET_REMINDER_NAME, content=content)
 
         self._state.last_wake_context_at = _now_iso()
-        self._state.last_wake_context_size = len(records)
+        self._state.last_wake_context_size = len(context_records)
         log_wake_context_injected(
             task_name=self._cfg().model.task_name,
             heartbeat_prompt=self._cfg().settings.heartbeat_prompt,
             wake_context_at=self._state.last_wake_context_at,
-            context_message_count=len(records),
-            source_count=len({record.source_label for record in records}),
+            context_message_count=len(context_records),
+            drained_message_count=len(records),
+            history_message_count=len(context_records),
+            source_count=len({record.source_label for record in context_records}),
             content=content,
         )
         logger.info(
-            "life_engine 已注入唤醒上下文: count=%s source_count=%s task=%s",
-            len(records),
-            len({record.source_label for record in records}),
-            self._cfg().model.task_name,
+            "life_engine 已注入唤醒上下文: "
+            f"count={len(context_records)} "
+            f"drained={len(records)} "
+            f"source_count={len({record.source_label for record in context_records})} "
+            f"task={self._cfg().model.task_name}"
         )
         return content
+
+    def _record_model_reply(self, model_reply: str) -> None:
+        """记录心跳模型回复，但不把回复写回历史。"""
+        reply_text = model_reply.strip()
+
+        self._state.last_model_reply_at = _now_iso()
+        self._state.last_model_reply = reply_text
+        self._state.last_model_error = None
+
+        log_heartbeat_model_response(
+            heartbeat_count=self._state.heartbeat_count,
+            heartbeat_at=self._state.last_heartbeat_at,
+            model_task_name=self._cfg().model.task_name,
+            model_reply=reply_text,
+            model_reply_size=len(reply_text),
+        )
+
+        if reply_text:
+            logger.info(
+                "life_engine 心跳模型回复: "
+                f"#{self._state.heartbeat_count} "
+                f"{_shorten_text(reply_text, max_length=240)}"
+            )
+        else:
+            logger.info(
+                f"life_engine 心跳模型回复为空: #{self._state.heartbeat_count}"
+            )
+
+    def _build_heartbeat_model_prompt(self, wake_context: str) -> str:
+        """构造心跳模型输入。"""
+        lines = [
+            "请基于以下心跳信息，输出一段给自己看的内部报文。",
+            "要求：",
+            "- 只输出内部状态总结，不要对外回复用户",
+            "- 保持简短，优先 1 到 4 句",
+            "- 可以包含当前关注点、情绪/状态、下一步倾向",
+            f"- 当前心跳序号: {self._state.heartbeat_count}",
+            f"- 当前时间: {self._state.last_heartbeat_at or _now_iso()}",
+            f"- 当前滚动上下文消息数: {self._state.history_message_count}",
+        ]
+
+        if wake_context.strip():
+            lines.extend(
+                [
+                    "",
+                    "### 最近消息与上下文",
+                    wake_context.strip(),
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "",
+                    "### 最近消息与上下文",
+                    "当前没有新增消息，处于空闲状态。",
+                ]
+            )
+
+        return "\n".join(lines)
+
+    def _build_heartbeat_system_prompt(self) -> str:
+        """构造心跳模型系统提示词。"""
+        cfg = self._cfg()
+        heartbeat_prompt = cfg.settings.heartbeat_prompt.strip()
+
+        personality = None
+        try:
+            personality = get_core_config().personality
+        except Exception:
+            personality = None
+
+        lines = ["# 关于你"]
+        if personality is not None:
+            nickname = getattr(personality, "nickname", "") or ""
+            alias_names = getattr(personality, "alias_names", []) or []
+            personality_core = getattr(personality, "personality_core", "") or ""
+            personality_side = getattr(personality, "personality_side", "") or ""
+            identity = getattr(personality, "identity", "") or ""
+            background_story = getattr(personality, "background_story", "") or ""
+            reply_style = getattr(personality, "reply_style", "") or ""
+            safety_guidelines = getattr(personality, "safety_guidelines", []) or []
+            negative_behaviors = getattr(personality, "negative_behaviors", []) or []
+
+            if nickname:
+                lines.append(f"昵称：{nickname}")
+            if alias_names:
+                lines.append(f"别名：{'、'.join(str(item) for item in alias_names if str(item).strip())}")
+            if personality_core:
+                lines.append(personality_core.strip())
+            if personality_side:
+                lines.append(personality_side.strip())
+            if identity:
+                lines.append(f"身份：{identity.strip()}")
+            if background_story:
+                lines.extend(["", "# 背景故事", background_story.strip()])
+            if reply_style:
+                lines.extend(["", "# 表达风格", reply_style.strip()])
+            if safety_guidelines:
+                lines.extend(["", "# 安全准则", "\n".join(str(item) for item in safety_guidelines if str(item).strip())])
+            if negative_behaviors:
+                lines.extend(["", "# 负面行为", "\n".join(str(item) for item in negative_behaviors if str(item).strip())])
+        else:
+            lines.append("你是一个并行存在的生命中枢原型。")
+
+        lines.extend(
+            [
+                "",
+                "# 心跳任务",
+                heartbeat_prompt or "每次心跳都只输出给自己看的内部报文。",
+            ]
+        )
+
+        return "\n".join(lines)
+
+    async def _run_heartbeat_model(self, wake_context: str) -> str:
+        """调用 life 任务模型生成内部报文。"""
+        cfg = self._cfg()
+        task_name = cfg.model.task_name.strip() or "life"
+        model_set = get_model_set_by_task(task_name)
+        request = create_llm_request(
+            model_set=model_set,
+            request_name="life_engine_heartbeat",
+        )
+        request.add_payload(
+            LLMPayload(
+                ROLE.SYSTEM,
+                Text(self._build_heartbeat_system_prompt()),
+            )
+        )
+        request.add_payload(LLMPayload(ROLE.USER, Text(self._build_heartbeat_model_prompt(wake_context))))
+
+        timeout_seconds = max(10.0, min(60.0, float(self._cfg().settings.heartbeat_interval_seconds)))
+        # send() 返回 LLMResponse 对象，需要 await 它来获取实际文本
+        response = await asyncio.wait_for(
+            request.send(stream=False),
+            timeout=timeout_seconds,
+        )
+        # LLMResponse 实现了 __await__，再次 await 获取文本
+        response_text = await response
+        return str(response_text).strip()
 
     async def start(self) -> None:
         """启动心跳。"""
@@ -344,6 +523,7 @@ class LifeEngineService(BaseService):
         self._state.last_error = None
         self._state.last_wake_context_at = None
         self._state.last_wake_context_size = 0
+        self._state.history_message_count = 0
 
         self._stop_event = asyncio.Event()
         task = get_task_manager().create_task(
@@ -353,10 +533,10 @@ class LifeEngineService(BaseService):
         )
         self._heartbeat_task_id = task.task_id
         logger.info(
-            "life_engine 已启动: interval=%ss task=%s prompt=%s",
-            int(cfg.settings.heartbeat_interval_seconds),
-            cfg.model.task_name,
-            cfg.settings.heartbeat_prompt.strip() if cfg.settings.heartbeat_prompt.strip() else "<empty>",
+            "life_engine 已启动: "
+            f"interval={int(cfg.settings.heartbeat_interval_seconds)}s "
+            f"task={cfg.model.task_name} "
+            f"prompt={cfg.settings.heartbeat_prompt.strip() if cfg.settings.heartbeat_prompt.strip() else '<empty>'}"
         )
         log_lifecycle(
             "started",
@@ -411,10 +591,9 @@ class LifeEngineService(BaseService):
                 if not self._state.running:
                     break
 
-                injected_content = await self.inject_wake_context()
-
                 self._state.heartbeat_count += 1
                 self._state.last_heartbeat_at = _now_iso()
+                injected_content = await self.inject_wake_context()
                 log_heartbeat_event(
                     heartbeat_count=self._state.heartbeat_count,
                     last_heartbeat_at=self._state.last_heartbeat_at,
@@ -422,19 +601,30 @@ class LifeEngineService(BaseService):
                     last_wake_context_at=self._state.last_wake_context_at,
                     last_wake_context_size=self._state.last_wake_context_size,
                 )
+                try:
+                    model_reply = await self._run_heartbeat_model(injected_content)
+                    self._record_model_reply(model_reply)
+                except Exception as exc:  # noqa: BLE001
+                    self._state.last_model_error = str(exc)
+                    log_error(
+                        "heartbeat_model_failed",
+                        str(exc),
+                        heartbeat_count=self._state.heartbeat_count,
+                        heartbeat_at=self._state.last_heartbeat_at,
+                        model_task_name=self._cfg().model.task_name,
+                    )
+                    logger.error(f"life_engine 心跳模型异常: {exc}\n{traceback.format_exc()}")
                 if should_log_heartbeat:
                     if injected_content:
                         logger.info(
-                            "life_engine heartbeat #%s at %s: 已注入 %s 条上下文消息",
-                            self._state.heartbeat_count,
-                            self._state.last_heartbeat_at,
-                            self._state.last_wake_context_size,
+                            f"life_engine heartbeat #{self._state.heartbeat_count} "
+                            f"at {self._state.last_heartbeat_at}: "
+                            f"已注入 {self._state.last_wake_context_size} 条上下文消息"
                         )
                     else:
                         logger.info(
-                            "life_engine heartbeat #%s at %s: 无新上下文",
-                            self._state.heartbeat_count,
-                            self._state.last_heartbeat_at,
+                            f"life_engine heartbeat #{self._state.heartbeat_count} "
+                            f"at {self._state.last_heartbeat_at}: 无新上下文"
                         )
         except asyncio.CancelledError:
             raise

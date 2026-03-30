@@ -131,6 +131,17 @@ def log_heartbeat(**fields: Any) -> None:
     _emit(payload)
 
 
+def log_heartbeat_model_response(**fields: Any) -> None:
+    """记录一次心跳模型回复。"""
+    payload = {
+        "component": "life_engine",
+        "event": "heartbeat_model_response",
+        "kind": "heartbeat_model",
+        **fields,
+    }
+    _emit(payload)
+
+
 def log_error(event: str, error: str, **fields: Any) -> None:
     """记录异常。"""
     payload = {

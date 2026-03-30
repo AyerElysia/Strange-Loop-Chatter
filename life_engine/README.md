@@ -1,11 +1,14 @@
 # life_engine
 
-`life_engine` 是一个并行存在的生命中枢最小原型，目前已经接上三件事：
+`life_engine` 是一个并行存在的生命中枢最小原型，目前已经接上四件事：
 
 - 保持一个独立的后台心跳服务
 - 旁路收集所有聊天流的消息
 - 在心跳时把待处理消息整理成上下文，注入到系统提醒里
+- 在每次心跳时调用 `life` 任务模型，生成一段内部报文并记录日志
 - 同时把中枢相关事件写入 `logs/life_engine/`
+- 系统提示词直接复用 `config/core.toml` 里的 `personality` 配置，和 DFC 保持同一套人设来源
+- 上下文采用滚动保留模式，会保留最近 `context_history_max_messages` 条消息，心跳时会反复带上这段累计上下文
 
 ## 当前已经做了什么
 
@@ -50,8 +53,10 @@ config/plugins/life_engine/config.toml
 [settings]
 enabled = true
 heartbeat_interval_seconds = 30
-heartbeat_prompt = "你是一个并行存在的生命中枢原型。当前阶段只需要记录自己的状态、等待下一次心跳，不要接管正常聊天流程。"
+heartbeat_prompt = "你是一个并行存在的生命中枢原型。每次心跳都只输出给自己看的内部报文，简要总结当前状态、最近消息、关注点与下一步倾向，不要接管正常聊天流程，不要直接对外回复。"
 log_heartbeat = true
+
+context_history_max_messages = 80
 
 [model]
 task_name = "life"
@@ -76,7 +81,7 @@ logs/life_engine/life.log
 
 ## 模型任务
 
-`life_engine` 现在不直接调用 LLM，但已经把任务路由预留好了。你可以在 `config/model.toml` 里维护一个独立的 `life` 任务，让中枢后续的唤醒、整理、回顾、探索都走这条路，而不是和普通聊天的 `actor` 混用。
+`life_engine` 现在会在每次心跳时调用独立的 `life` 任务模型，生成一段只给自己看的内部报文。你可以在 `config/model.toml` 里继续调整 `life` 任务，让中枢后续的唤醒、整理、回顾、探索都走这条路，而不是和普通聊天的 `actor` 混用。
 
 ## 后续扩展方向
 

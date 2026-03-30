@@ -1,6 +1,6 @@
 {
   "name": "life_engine",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "description": "生命中枢最小原型 - 并行存在的后台心跳壳子，并收集聊天流上下文",
   "author": "Neo-MoFox Team",
   "dependencies": {

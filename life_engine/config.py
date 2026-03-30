@@ -30,7 +30,8 @@ class LifeEngineConfig(BaseConfig):
         heartbeat_prompt: str = Field(
             default=(
                 "你是一个并行存在的生命中枢原型。"
-                "当前阶段只需要记录自己的状态、等待下一次心跳，不要接管正常聊天流程。"
+                "每次心跳都只输出给自己看的内部报文，简要总结当前状态、最近消息、关注点与下一步倾向，"
+                "不要接管正常聊天流程，不要直接对外回复。"
             ),
             description="心跳提示词。当前版本只暴露，不直接注入聊天主链路。",
         )
@@ -38,6 +39,12 @@ class LifeEngineConfig(BaseConfig):
         log_heartbeat: bool = Field(
             default=True,
             description="是否在每次心跳时输出日志。",
+        )
+
+        context_history_max_messages: int = Field(
+            default=80,
+            ge=1,
+            description="滚动累计上下文最多保留的消息条数。",
         )
 
     @config_section("model")
