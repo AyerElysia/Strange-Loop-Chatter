@@ -48,6 +48,13 @@ class LifeEngineConfig(BaseConfig):
             description="中枢文件系统操作的工作空间路径。中枢只能在此目录下进行文件操作。",
         )
 
+        max_rounds_per_heartbeat: int = Field(
+            default=3,
+            ge=1,
+            le=10,
+            description="单次心跳内允许模型连续进行工具调用的最大轮数（防止死循环）。",
+        )
+
     @config_section("model")
     class ModelSection(SectionBase):
         """中枢模型任务设置。"""

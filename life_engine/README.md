@@ -142,7 +142,17 @@ task_name = "life"
 | `context_history_max_events` | 中枢能看到的最近事件数量 | 100 |
 | `workspace_path` | 文件系统工作空间 | `data/life_engine_workspace` |
 | `heartbeat_interval_seconds` | 心跳间隔（秒） | 30 |
-| `heartbeat_prompt` | 心跳任务提示词 | （见配置文件） |
+| `model.task_name` | 心跳使用的模型任务 | `life` |
+
+### 系统提示词文件
+
+心跳系统提示词由工作区三个文件共同构成并注入：
+
+- `SOUL.md`：定义“你是谁”（人格与价值观）
+- `MEMORY.md`：存放跨心跳的决策级记忆
+- `TOOL.md`：定义工具使用习惯与调用策略
+
+以上文件位于：`data/life_engine_workspace/`
 
 ## 使用示例
 

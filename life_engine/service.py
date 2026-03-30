@@ -705,12 +705,13 @@ class LifeEngineService(BaseService):
         return "\n".join(lines)
 
     def _build_heartbeat_system_prompt(self) -> str:
-        """构造心跳模型系统提示词，从 SOUL.md 和 MEMORY.md 读取。"""
+        """构造心跳模型系统提示词，从 SOUL.md / MEMORY.md / TOOL.md 读取。"""
         cfg = self._cfg()
         workspace = Path(cfg.settings.workspace_path)
         
         soul_file = workspace / "SOUL.md"
         memory_file = workspace / "MEMORY.md"
+        tool_file = workspace / "TOOL.md"
         
         # 读取 SOUL.md
         soul_content = ""
@@ -731,6 +732,14 @@ class LifeEngineService(BaseService):
                 memory_content = memory_file.read_text(encoding="utf-8").strip()
             except Exception as e:
                 logger.warning(f"无法读取 MEMORY.md: {e}")
+
+        # 读取 TOOL.md
+        tool_content = ""
+        if tool_file.exists():
+            try:
+                tool_content = tool_file.read_text(encoding="utf-8").strip()
+            except Exception as e:
+                logger.warning(f"无法读取 TOOL.md: {e}")
         
         # 组装系统提示词
         parts = [soul_content]
@@ -740,6 +749,12 @@ class LifeEngineService(BaseService):
             parts.append("---- 灵魂文档 `soul.md` 到此结束 ----")
             parts.append("")
             parts.append(memory_content)
+
+        if tool_content:
+            parts.append("")
+            parts.append("---- 记忆文档 `memory.md` 到此结束 ----")
+            parts.append("")
+            parts.append(tool_content)
         
         return "\n".join(parts)
 
@@ -833,7 +848,7 @@ class LifeEngineService(BaseService):
         
         # 支持一次心跳内的“模型 -> tool_call -> tool_result -> follow-up”链路
         response = await asyncio.wait_for(request.send(stream=False), timeout=timeout_seconds)
-        max_rounds = 3
+        max_rounds = max(1, int(self._cfg().settings.max_rounds_per_heartbeat))
         last_text = ""
         tool_event_count = 0
 

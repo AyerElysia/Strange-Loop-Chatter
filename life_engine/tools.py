@@ -9,12 +9,15 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
+from uuid import uuid4
 
 from src.core.components import BaseTool
 from src.app.plugin_system.api import log_api
+from src.core.models.message import Message, MessageType
 
 from .config import LifeEngineConfig
 
@@ -77,6 +80,162 @@ def _format_size(size: int) -> str:
 def _format_time(timestamp: float) -> str:
     """格式化时间戳。"""
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone().isoformat()
+
+
+def _load_life_context_events(plugin: Any) -> list[dict[str, Any]]:
+    """加载 life_engine 持久化上下文中的事件列表。"""
+    workspace = _get_workspace(plugin)
+    context_file = workspace / "life_engine_context.json"
+    if not context_file.exists():
+        return []
+
+    try:
+        data = json.loads(context_file.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"读取 life_engine_context.json 失败: {e}")
+        return []
+
+    if not isinstance(data, dict):
+        return []
+
+    history = data.get("event_history")
+    pending = data.get("pending_events")
+    if not isinstance(history, list):
+        history = []
+    if not isinstance(pending, list):
+        pending = []
+
+    events: list[dict[str, Any]] = []
+    for item in history + pending:
+        if isinstance(item, dict):
+            events.append(item)
+    events.sort(key=lambda e: int(e.get("sequence") or 0))
+    return events
+
+
+def _pick_latest_target_stream_id(plugin: Any) -> str | None:
+    """从事件流中挑选最近可用的目标 stream_id。"""
+    events = _load_life_context_events(plugin)
+    if not events:
+        return None
+
+    # 优先：最近一条外部入站消息
+    for event in reversed(events):
+        if str(event.get("event_type") or "") != "message":
+            continue
+        stream_id = str(event.get("stream_id") or "").strip()
+        if not stream_id:
+            continue
+        source = str(event.get("source") or "")
+        source_detail = str(event.get("source_detail") or "")
+        if source != "life_engine" and "入站" in source_detail:
+            return stream_id
+
+    # 退化：最近一条外部消息（不区分入站/出站）
+    for event in reversed(events):
+        if str(event.get("event_type") or "") != "message":
+            continue
+        stream_id = str(event.get("stream_id") or "").strip()
+        if not stream_id:
+            continue
+        source = str(event.get("source") or "")
+        if source != "life_engine":
+            return stream_id
+
+    return None
+
+
+class LifeEngineWakeDFCTool(BaseTool):
+    """唤醒 DFC 工具。"""
+
+    tool_name: str = "nucleus_wake_dfc"
+    tool_description: str = (
+        "由中枢主动唤醒 DFC 进行对外表达。"
+        "中枢应自行判断是否该唤醒（例如长期安静或有重要发现），"
+        "本工具不做硬编码节流拦截。"
+    )
+    chatter_allow: list[str] = ["life_engine_internal"]
+
+    async def execute(
+        self,
+        message: Annotated[str, "中枢希望 DFC 带出去的话（核心意图）"],
+        reason: Annotated[str, "唤醒原因（可选，如：长期安静/重要发现/想主动问候）"] = "",
+        importance: Annotated[str, "重要度（可选：low/normal/high/critical）"] = "normal",
+        stream_id: Annotated[str, "目标聊天流ID（可选，不填则自动选择最近外部对话流）"] = "",
+    ) -> tuple[bool, str | dict]:
+        text = str(message or "").strip()
+        if not text:
+            return False, "message 不能为空"
+
+        target_stream_id = str(stream_id or "").strip()
+        if not target_stream_id:
+            target_stream_id = _pick_latest_target_stream_id(self.plugin) or ""
+        if not target_stream_id:
+            return False, "没有可用的目标聊天流。请先传入 stream_id 或等待外部会话事件进入中枢事件流。"
+
+        try:
+            from src.core.managers.stream_manager import get_stream_manager
+            from src.core.transport.distribution.stream_loop_manager import get_stream_loop_manager
+        except Exception as e:  # noqa: BLE001
+            return False, f"加载核心管理器失败: {e}"
+
+        stream_manager = get_stream_manager()
+        chat_stream = await stream_manager.get_or_create_stream(stream_id=target_stream_id)
+        if chat_stream is None:
+            return False, f"找不到目标聊天流: {target_stream_id}"
+
+        wake_prompt = (
+            "[中枢唤醒]\n"
+            f"重要度: {importance}\n"
+            f"原因: {reason or '未说明'}\n"
+            f"中枢带话: {text}\n"
+            "请你（DFC）结合当前对话上下文，自然决定如何对外表达。"
+        )
+
+        trigger_message = Message(
+            message_id=f"life_nucleus_wake_{uuid4().hex[:12]}",
+            platform=chat_stream.platform or "unknown",
+            chat_type=chat_stream.chat_type or "private",
+            stream_id=chat_stream.stream_id,
+            sender_id="life_engine_nucleus",
+            sender_name="生命中枢",
+            sender_role="other",
+            message_type=MessageType.TEXT,
+            content=wake_prompt,
+            processed_plain_text=wake_prompt,
+            time=time.time(),
+            is_life_engine_wake=True,
+            life_wake_reason=reason,
+            life_wake_importance=importance,
+            life_wake_message=text,
+        )
+
+        chat_stream.context.add_unread_message(trigger_message)
+
+        # 清除 wait 锁，让 DFC 在下一 tick 可立即处理这个中枢触发
+        loop_mgr = get_stream_loop_manager()
+        removed = loop_mgr._wait_states.pop(chat_stream.stream_id, None)  # noqa: SLF001
+        if loop_mgr.is_running:
+            await loop_mgr.start_stream_loop(chat_stream.stream_id)
+
+        logger.info(
+            "中枢主动唤醒 DFC: "
+            f"stream_id={chat_stream.stream_id} "
+            f"importance={importance} "
+            f"reason={reason or '未说明'} "
+            f"removed_wait_lock={'yes' if removed else 'no'}"
+        )
+
+        return True, {
+            "action": "wake_dfc",
+            "stream_id": chat_stream.stream_id,
+            "platform": chat_stream.platform,
+            "chat_type": chat_stream.chat_type,
+            "importance": importance,
+            "reason": reason,
+            "message": text,
+            "note": "已注入 DFC 未读队列。是否唤醒应由中枢（LLM）自主判断，本工具不做硬编码节流。",
+        }
 
 
 class LifeEngineReadFileTool(BaseTool):
@@ -562,4 +721,5 @@ ALL_TOOLS = [
     LifeEngineListFilesTool,
     LifeEngineFileInfoTool,
     LifeEngineMakeDirectoryTool,
+    LifeEngineWakeDFCTool,
 ]
