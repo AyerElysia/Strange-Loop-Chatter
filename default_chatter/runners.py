@@ -75,13 +75,18 @@ def _require_response(response: LLMConversationState) -> LLMResponseLike:
     raise TypeError("当前会话状态尚未进入响应阶段")
 
 
-def _get_multimodal_settings(chatter: DefaultChatterRuntime) -> tuple[bool, int]:
+def _get_multimodal_settings(chatter: DefaultChatterRuntime) -> tuple[bool, int, int]:
     """读取 default_chatter 的原生多模态配置。"""
     plugin = getattr(chatter, "plugin", None)
     config = getattr(plugin, "config", None)
     if isinstance(config, DefaultChatterConfig):
-        return config.plugin.native_multimodal, max(0, config.plugin.max_images_per_payload)
-    return False, 0
+        enable_video = bool(getattr(config.plugin, "native_video_multimodal", True))
+        return (
+            config.plugin.native_multimodal,
+            max(0, config.plugin.max_images_per_payload),
+            max(0, getattr(config.plugin, "max_videos_per_payload", 1)) if enable_video else 0,
+        )
+    return False, 0, 0
 
 
 def _log_response_debug(chatter: DefaultChatterRuntime, response: LLMConversationState) -> None:
@@ -123,21 +128,31 @@ def _build_multimodal_payload(
     *,
     history_msgs: list[Message] | None = None,
     max_images: int = 0,
-    include_history_images: bool = False,
+    max_videos: int = 0,
+    include_history_media: bool = False,
 ) -> list[object]:
-    """将文本提示和图片组装为原生多模态 content。"""
-    unread_media = extract_media_from_messages(unread_msgs, max_items=max_images)
+    """将文本提示与媒体组装为原生多模态 content。"""
+    unread_media = extract_media_from_messages(
+        unread_msgs,
+        max_images=max_images,
+        max_videos=max_videos,
+    )
     content = build_multimodal_content(prompt_text, unread_media)
 
-    if include_history_images and max_images > len(unread_media):
-        remaining = max_images - len(unread_media)
-        if history_msgs and remaining > 0:
+    unread_image_count = sum(1 for item in unread_media if item.media_type in ("image", "emoji"))
+    unread_video_count = sum(1 for item in unread_media if item.media_type == "video")
+
+    if include_history_media:
+        remaining_images = max(0, max_images - unread_image_count)
+        remaining_videos = max(0, max_videos - unread_video_count)
+        if history_msgs and (remaining_images > 0 or remaining_videos > 0):
             history_media = extract_media_from_messages(
                 list(reversed(history_msgs)),
-                max_items=remaining,
+                max_images=remaining_images,
+                max_videos=remaining_videos,
             )
             if history_media:
-                content.extend(build_multimodal_content("[历史图片参考]", history_media))
+                content.extend(build_multimodal_content("[历史媒体参考]", history_media))
 
     return content
 
@@ -156,6 +171,18 @@ def _transition(
     if callable(debug_fn):
         debug_fn(f"[FSM] {rt.phase.value} -> {to_phase.value}: {reason}")
     rt.phase = to_phase
+
+
+def _append_suspend_if_tool_result_tail(
+    response: LLMConversationState,
+    suspend_text: str,
+    logger: Logger,
+) -> None:
+    """若当前尾部是 TOOL_RESULT，补一条 ASSISTANT 占位，阻止无消息 follow-up 空转。"""
+    payloads = getattr(response, "payloads", None)
+    if payloads and payloads[-1].role == ROLE.TOOL_RESULT:
+        response.add_payload(LLMPayload(ROLE.ASSISTANT, Text(suspend_text)))
+        logger.debug("已注入 SUSPEND 占位符（pass_and_wait 优先结束本轮）")
 
 
 async def run_enhanced(
@@ -178,7 +205,7 @@ async def run_enhanced(
     request.add_payload(LLMPayload(ROLE.SYSTEM, Text(system_prompt_text)))
 
     history_text = chatter._build_enhanced_history_text(chat_stream)
-    native_multimodal, max_images = _get_multimodal_settings(chatter)
+    native_multimodal, max_images, max_videos = _get_multimodal_settings(chatter)
     usable_map = await chatter.inject_usables(request)
 
     rt = _EnhancedWorkflowRuntime(
@@ -229,7 +256,8 @@ async def run_enhanced(
                     unread_msgs,
                     history_msgs=chat_stream.context.history_messages,
                     max_images=max_images,
-                    include_history_images=not rt.history_merged,
+                    max_videos=max_videos,
+                    include_history_media=not rt.history_merged,
                 )
             else:
                 unread_user_content = Text(unread_user_prompt)
@@ -313,6 +341,14 @@ async def run_enhanced(
                 cross_round_seen_signatures=rt.cross_round_seen_signatures,
             )
 
+            # pass_and_wait 具有最高优先级：即使同轮有非 action 工具结果，也直接等待用户。
+            # 为避免下一轮被“尾部 TOOL_RESULT”强制 FOLLOW_UP，这里补一个 ASSISTANT 占位。
+            if call_outcome.should_wait:
+                _append_suspend_if_tool_result_tail(rt.response, suspend_text, logger)
+                yield Wait()
+                _transition(rt=rt, to_phase=_ToolCallWorkflowPhase.WAIT_USER, logger=logger, reason="pass_and_wait priority")
+                continue
+
             if call_outcome.has_pending_tool_results:
                 _transition(rt=rt, to_phase=_ToolCallWorkflowPhase.FOLLOW_UP, logger=logger, reason="pending tool results")
                 continue
@@ -325,8 +361,6 @@ async def run_enhanced(
             )
 
             # 工具链已闭合，可以进入等待或接受新 user。
-            if call_outcome.should_wait:
-                yield Wait()
             _transition(rt=rt, to_phase=_ToolCallWorkflowPhase.WAIT_USER, logger=logger, reason="tool exec done")
             continue
 
@@ -348,8 +382,8 @@ async def run_classical(
         return
 
     usable_map = await chatter.inject_usables(base_request)
-    native_multimodal, max_images = _get_multimodal_settings(chatter)
-    history_images_injected = False
+    native_multimodal, max_images, max_videos = _get_multimodal_settings(chatter)
+    history_media_injected = False
 
     while True:
         _, unread_msgs = await chatter.fetch_unreads()
@@ -393,10 +427,11 @@ async def run_classical(
                 unread_msgs,
                 history_msgs=chat_stream.context.history_messages,
                 max_images=max_images,
-                include_history_images=not history_images_injected,
+                max_videos=max_videos,
+                include_history_media=not history_media_injected,
             )
             request.add_payload(LLMPayload(ROLE.USER, user_content))
-            history_images_injected = True
+            history_media_injected = True
         else:
             request.add_payload(LLMPayload(ROLE.USER, Text(classical_user_text)))
         if usable_map.get_all():
@@ -461,9 +496,11 @@ async def run_classical(
                 return
 
             if call_outcome.should_wait:
-                # 同 enhanced：若同时存在 pending 工具结果，优先 follow-up。
-                if has_pending_tool_results:
-                    continue
+                _append_suspend_if_tool_result_tail(response, suspend_text, logger)
                 await chatter.flush_unreads(unread_msgs)
                 yield Wait()
                 break
+
+            # 未要求等待时，若存在 pending 工具结果则继续 follow-up。
+            if has_pending_tool_results:
+                continue

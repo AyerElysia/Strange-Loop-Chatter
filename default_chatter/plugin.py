@@ -1,8 +1,9 @@
 """DefaultChatter 插件。
 
-提供默认的聊天对话逻辑，包含三个核心 Action：
+提供默认的聊天对话逻辑，包含两个核心 Action 和一个中枢桥接 Tool：
 - send_text: 发送文本消息给用户
 - pass_and_wait: 跳过本次动作，等待新消息
+- message_nucleus: 向生命中枢异步留言，不等待即时回复
 
 使用 personality 配置动态构建系统提示词。
 """
@@ -37,6 +38,7 @@ from src.kernel.llm import LLMPayload, ROLE, Text
 from .config import DefaultChatterConfig
 from .decision_agent import decide_should_respond
 from .multimodal import get_media_list
+from .nucleus_bridge import MessageNucleusTool
 from .prompt_builder import DefaultChatterPromptBuilder
 from .runners import run_classical, run_enhanced
 from .type_defs import LLMConversationState, LLMResponseLike, SubAgentDecision
@@ -469,6 +471,7 @@ class PassAndWaitAction(BaseAction):
 # 控制流标记名称，与 BaseAction.to_schema() 生成的 name 保持一致（含 action- 前缀）
 _PASS_AND_WAIT = "action-pass_and_wait"
 _SEND_TEXT = "action-send_text"
+_MESSAGE_NUCLEUS = "tool-message_nucleus"
 
 # SUSPEND 占位符：当 LLM 本轮全部调用的都是 action 时，注入此占位防止上下文缺少 assistant 轮次
 _SUSPEND_TEXT = "__SUSPEND__"
@@ -773,6 +776,20 @@ class DefaultChatter(BaseChatter):
         trigger_msg: Message | None,
     ) -> tuple[bool, bool]:
         """执行工具调用并将结果写回响应上下文。"""
+        if call.name == _MESSAGE_NUCLEUS and trigger_msg is not None:
+            raw_args = dict(call.args) if isinstance(getattr(call, "args", None), dict) else {}
+            raw_args.setdefault("stream_id", str(getattr(trigger_msg, "stream_id", "") or self.stream_id))
+            raw_args.setdefault("platform", str(getattr(trigger_msg, "platform", "") or ""))
+            raw_args.setdefault("chat_type", str(getattr(trigger_msg, "chat_type", "") or ""))
+            raw_args.setdefault("sender_name", str(getattr(trigger_msg, "sender_name", "") or "DFC"))
+
+            from src.kernel.llm import ToolCall
+
+            call = ToolCall(
+                id=getattr(call, "id", None),
+                name=call.name,
+                args=raw_args,
+            )
         return await super().run_tool_call(call, response, usable_map, trigger_msg)
 
     def _register_vlm_skip(self) -> None:
@@ -904,4 +921,5 @@ class DefaultChatterPlugin(BasePlugin):
             DefaultChatter,
             SendTextAction,
             PassAndWaitAction,
+            MessageNucleusTool,
         ]
