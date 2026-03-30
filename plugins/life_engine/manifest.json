@@ -1,0 +1,32 @@
+{
+  "name": "life_engine",
+  "version": "1.2.0",
+  "description": "生命中枢最小原型 - 并行存在的后台心跳壳子，并收集聊天流上下文",
+  "author": "Neo-MoFox Team",
+  "dependencies": {
+    "plugins": [],
+    "components": []
+  },
+  "include": [
+    {
+      "component_type": "service",
+      "component_name": "life_engine",
+      "dependencies": [],
+      "enabled": true
+    },
+    {
+      "component_type": "event_handler",
+      "component_name": "message_collector",
+      "dependencies": [],
+      "enabled": true
+    }
+  ],
+  "entry_point": "plugin.py",
+  "min_core_version": "1.0.0",
+  "python_dependencies": [],
+  "dependencies_required": true,
+  "config": {
+    "path": "config/plugins/life_engine/config.toml",
+    "reloadable": true
+  }
+}

@@ -1,0 +1,23 @@
+# 基础设置。
+[settings]
+# 是否启用 life_engine。设为 false 时不启动心跳。
+# 值类型：bool, 默认值：true
+enabled = true
+
+# 心跳间隔（秒）。
+# 值类型：int, 默认值：30
+heartbeat_interval_seconds = 30
+
+# 心跳提示词。当前版本只暴露，不直接注入聊天主链路。
+# 值类型：str, 默认值："你是一个并行存在的生命中枢原型。当前阶段只需要记录自己的状态、等待下一次心跳，不要接管正常聊天流程。"
+heartbeat_prompt = "你是一个并行存在的生命中枢原型。当前阶段只需要记录自己的状态、等待下一次心跳，不要接管正常聊天流程，收到消息就 回复一个“好的，收到”"
+
+# 是否在每次心跳时输出日志。
+# 值类型：bool, 默认值：true
+log_heartbeat = true
+
+# 中枢模型任务设置。
+[model]
+# 中枢任务使用的模型任务名称，对应 config/model.toml 中的 [model_tasks.life]。
+# 值类型：str, 默认值："life"
+task_name = "life"

@@ -1,0 +1,2453 @@
+# API 提供商配置节
+# 
+# 定义单个 API 提供商的配置信息。
+[[api_providers]]
+# API提供商名称（如 openai、azure、gemini 等）
+# 值类型：str, 默认值："SiliconFlow"
+name = "SiliconFlow"
+
+# API 基础 URL
+# 值类型：str, 默认值："https://api.siliconflow.cn/v1"
+base_url = "https://api.siliconflow.cn/v1"
+
+# API 密钥，支持单个密钥或密钥列表轮询
+# 值类型：str | list[str], 默认值："your-siliconflow-api-key-here"
+api_key = ["sk-opbtgloyqzpkwpvbwlhckgnszbzlooxmdkrniaenqxczxqgb"]
+
+# 客户端类型（openai/gemini/bedrock等）
+# 值类型：Literal, 默认值："openai"
+client_type = "openai"
+
+# 最大重试次数
+# 值类型：int, 默认值：3
+max_retry = 3
+
+# API 调用超时时长（秒）
+# 值类型：int, 默认值：30
+timeout = 60
+
+# 重试间隔时间（秒）
+# 值类型：int, 默认值：10
+retry_interval = 10
+
+[[api_providers]]
+# API提供商名称（如 openai、azure、gemini 等）
+# 值类型：str, 默认值："SiliconFlow"
+name = "Antigravity"
+
+# API 基础 URL
+# 值类型：str, 默认值："https://api.siliconflow.cn/v1"
+base_url = "http://172.19.144.1:8045/v1"
+
+# API 密钥，支持单个密钥或密钥列表轮询
+# 值类型：str | list[str], 默认值："your-siliconflow-api-key-here"
+api_key = ["sk-c2f638647b9744c39c20afbec1419b6b"]
+
+# 客户端类型（openai/gemini/bedrock等）
+# 值类型：Literal, 默认值："openai"
+client_type = "openai"
+
+# 最大重试次数
+# 值类型：int, 默认值：3
+max_retry = 1
+
+# API 调用超时时长（秒）
+# 值类型：int, 默认值：30
+timeout = 30
+
+# 重试间隔时间（秒）
+# 值类型：int, 默认值：10
+retry_interval = 1
+
+[[api_providers]]
+# API提供商名称（如 openai、azure、gemini 等）
+# 值类型：str, 默认值："SiliconFlow"
+name = "Novai"
+
+# API 基础 URL
+# 值类型：str, 默认值："https://api.siliconflow.cn/v1"
+base_url = "https://once.novai.su/v1"
+
+# API 密钥，支持单个密钥或密钥列表轮询
+# 值类型：str | list[str], 默认值："your-siliconflow-api-key-here"
+api_key = ["sk-FprJsZF73VwtBZ2Pumb9WJvX8Jkgb1lLxK8B34IAOgBqzOMJ"]
+
+# 客户端类型（openai/gemini/bedrock等）
+# 值类型：Literal, 默认值："openai"
+client_type = "openai"
+
+# 最大重试次数
+# 值类型：int, 默认值：3
+max_retry = 1
+
+# API 调用超时时长（秒）
+# 值类型：int, 默认值：30
+timeout = 60
+
+# 重试间隔时间（秒）
+# 值类型：int, 默认值：10
+retry_interval = 10
+
+[[api_providers]]
+# API提供商名称（如 openai、azure、gemini 等）
+# 值类型：str, 默认值："SiliconFlow"
+name = "NovaiG3F"
+
+# API 基础 URL
+# 值类型：str, 默认值："https://api.siliconflow.cn/v1"
+base_url = "https://once.novai.su/v1"
+
+# API 密钥，支持单个密钥或密钥列表轮询
+# 值类型：str | list[str], 默认值："your-siliconflow-api-key-here"
+api_key = ["sk-FprJsZF73VwtBZ2Pumb9WJvX8Jkgb1lLxK8B34IAOgBqzOMJ"]
+
+# 客户端类型（openai/gemini/bedrock等）
+# 值类型：Literal, 默认值："openai"
+client_type = "openai"
+
+# 最大重试次数
+# 值类型：int, 默认值：3
+max_retry = 3
+
+# API 调用超时时长（秒）
+# 值类型：int, 默认值：30
+timeout = 60
+
+# 重试间隔时间（秒）
+# 值类型：int, 默认值：10
+retry_interval = 10
+
+[[api_providers]]
+# API提供商名称（如 openai、azure、gemini 等）
+# 值类型：str, 默认值："SiliconFlow"
+name = "CodexAI02"
+
+# API 基础 URL
+# 值类型：str, 默认值："https://api.siliconflow.cn/v1"
+base_url = "https://codex.ai02.cn/v1"
+
+# API 密钥，支持单个密钥或密钥列表轮询
+# 值类型：str | list[str], 默认值："your-siliconflow-api-key-here"
+api_key = ["sk-hmf47mHM2lZI8qOZX8Pjn8H0QQgRHwJx5FbOVL0fM67HiwAC"]
+
+# 客户端类型（openai/gemini/bedrock等）
+# 值类型：Literal, 默认值："openai"
+client_type = "openai"
+
+# 最大重试次数
+# 值类型：int, 默认值：3
+max_retry = 1
+
+# API 调用超时时长（秒）
+# 值类型：int, 默认值：30
+timeout = 30
+
+# 重试间隔时间（秒）
+# 值类型：int, 默认值：10
+retry_interval = 1
+
+[[api_providers]]
+# API提供商名称（如 openai、azure、gemini 等）
+# 值类型：str, 默认值："SiliconFlow"
+name = "Gemini_Local"
+
+# API 基础 URL
+# 值类型：str, 默认值："https://api.siliconflow.cn/v1"
+base_url = "http://172.19.144.1:8045/v1"
+
+# API 密钥，支持单个密钥或密钥列表轮询
+# 值类型：str | list[str], 默认值："your-siliconflow-api-key-here"
+api_key = ["AIzaSyD9W76oQrTaWpAqjkI-_2y39Y2k2_MR21M"]
+
+# 客户端类型（openai/gemini/bedrock等）
+# 值类型：Literal, 默认值："openai"
+client_type = "openai"
+
+# 最大重试次数
+# 值类型：int, 默认值：3
+max_retry = 3
+
+# API 调用超时时长（秒）
+# 值类型：int, 默认值：30
+timeout = 100
+
+# 重试间隔时间（秒）
+# 值类型：int, 默认值：10
+retry_interval = 5
+
+[[api_providers]]
+# API提供商名称（如 openai、azure、gemini 等）
+# 值类型：str, 默认值："SiliconFlow"
+name = "bailian"
+
+# API 基础 URL
+# 值类型：str, 默认值："https://api.siliconflow.cn/v1"
+base_url = "https://coding.dashscope.aliyuncs.com/v1"
+
+# API 密钥，支持单个密钥或密钥列表轮询
+# 值类型：str | list[str], 默认值："your-siliconflow-api-key-here"
+api_key = ["sk-sp-90d1ea6724c74fe8860101e4e212804b"]
+
+# 客户端类型（openai/gemini/bedrock等）
+# 值类型：Literal, 默认值："openai"
+client_type = "openai"
+
+# 最大重试次数
+# 值类型：int, 默认值：3
+max_retry = 3
+
+# API 调用超时时长（秒）
+# 值类型：int, 默认值：30
+timeout = 60
+
+# 重试间隔时间（秒）
+# 值类型：int, 默认值：10
+retry_interval = 10
+
+[[api_providers]]
+# API提供商名称（如 openai、azure、gemini 等）
+# 值类型：str, 默认值："SiliconFlow"
+name = "gcli2api"
+
+# API 基础 URL
+# 值类型：str, 默认值："https://api.siliconflow.cn/v1"
+base_url = "http://localhost:7861/v1"
+
+# API 密钥，支持单个密钥或密钥列表轮询
+# 值类型：str | list[str], 默认值："your-siliconflow-api-key-here"
+api_key = ["pwd"]
+
+# 客户端类型（openai/gemini/bedrock等）
+# 值类型：Literal, 默认值："openai"
+client_type = "openai"
+
+# 最大重试次数
+# 值类型：int, 默认值：3
+max_retry = 3
+
+# API 调用超时时长（秒）
+# 值类型：int, 默认值：30
+timeout = 100
+
+# 重试间隔时间（秒）
+# 值类型：int, 默认值：10
+retry_interval = 5
+
+[[api_providers]]
+# API提供商名称（如 openai、azure、gemini 等）
+# 值类型：str, 默认值："SiliconFlow"
+name = "Undying"
+
+# API 基础 URL
+# 值类型：str, 默认值："https://api.siliconflow.cn/v1"
+base_url = "https://vip.undyingapi.com/v1"
+
+# API 密钥，支持单个密钥或密钥列表轮询
+# 值类型：str | list[str], 默认值："your-siliconflow-api-key-here"
+api_key = ["sk-cdxdC4l3Ob7XLX37JcJrTTXDrjyePTJ5KXsA9HCv7b8UFGcf"]
+
+# 客户端类型（openai/gemini/bedrock等）
+# 值类型：Literal, 默认值："openai"
+client_type = "openai"
+
+# 最大重试次数
+# 值类型：int, 默认值：3
+max_retry = 1
+
+# API 调用超时时长（秒）
+# 值类型：int, 默认值：30
+timeout = 30
+
+# 重试间隔时间（秒）
+# 值类型：int, 默认值：10
+retry_interval = 1
+
+[[api_providers]]
+# API提供商名称（如 openai、azure、gemini 等）
+# 值类型：str, 默认值："SiliconFlow"
+name = "GitHubCopilotProxy"
+
+# API 基础 URL
+# 值类型：str, 默认值："https://api.siliconflow.cn/v1"
+base_url = "http://localhost:9871/v1"
+
+# API 密钥，支持单个密钥或密钥列表轮询
+# 值类型：str | list[str], 默认值："your-siliconflow-api-key-here"
+api_key = ["dummy"]
+
+# 客户端类型（openai/gemini/bedrock等）
+# 值类型：Literal, 默认值："openai"
+client_type = "openai"
+
+# 最大重试次数
+# 值类型：int, 默认值：3
+max_retry = 3
+
+# API 调用超时时长（秒）
+# 值类型：int, 默认值：30
+timeout = 60
+
+# 重试间隔时间（秒）
+# 值类型：int, 默认值：10
+retry_interval = 10
+
+[[api_providers]]
+# API提供商名称（如 openai、azure、gemini 等）
+# 值类型：str, 默认值："SiliconFlow"
+name = "Gemini"
+
+# API 基础 URL
+# 值类型：str, 默认值："https://api.siliconflow.cn/v1"
+base_url = "https://generativelanguage.googleapis.com/v1"
+
+# API 密钥，支持单个密钥或密钥列表轮询
+# 值类型：str | list[str], 默认值："your-siliconflow-api-key-here"
+api_key = ["AIzaSyD9W76oQrTaWpAqjkI-_2y39Y2k2_MR21M"]
+
+# 客户端类型（openai/gemini/bedrock等）
+# 值类型：Literal, 默认值："openai"
+client_type = "gemini"
+
+# 最大重试次数
+# 值类型：int, 默认值：3
+max_retry = 3
+
+# API 调用超时时长（秒）
+# 值类型：int, 默认值：30
+timeout = 60
+
+# 重试间隔时间（秒）
+# 值类型：int, 默认值：10
+retry_interval = 10
+
+[[api_providers]]
+# API提供商名称（如 openai、azure、gemini 等）
+# 值类型：str, 默认值："SiliconFlow"
+name = "Yuegle"
+
+# API 基础 URL
+# 值类型：str, 默认值："https://api.siliconflow.cn/v1"
+base_url = "https://api.yuegle.com/v1"
+
+# API 密钥，支持单个密钥或密钥列表轮询
+# 值类型：str | list[str], 默认值："your-siliconflow-api-key-here"
+api_key = ["sk-fM2Sf3AkwWbfUdm9CfD45d7979Bb47CeAbDd4eC9357f909a"]
+
+# 客户端类型（openai/gemini/bedrock等）
+# 值类型：Literal, 默认值："openai"
+client_type = "openai"
+
+# 最大重试次数
+# 值类型：int, 默认值：3
+max_retry = 1
+
+# API 调用超时时长（秒）
+# 值类型：int, 默认值：30
+timeout = 30
+
+# 重试间隔时间（秒）
+# 值类型：int, 默认值：10
+retry_interval = 1
+
+[[api_providers]]
+# API提供商名称（如 openai、azure、gemini 等）
+# 值类型：str, 默认值："SiliconFlow"
+name = "volcengine-plan"
+
+# API 基础 URL
+# 值类型：str, 默认值："https://api.siliconflow.cn/v1"
+base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
+
+# API 密钥，支持单个密钥或密钥列表轮询
+# 值类型：str | list[str], 默认值："your-siliconflow-api-key-here"
+api_key = ["68ceb697-ab21-45cc-b220-aa7bf46ecc29"]
+
+# 客户端类型（openai/gemini/bedrock等）
+# 值类型：Literal, 默认值："openai"
+client_type = "openai"
+
+# 最大重试次数
+# 值类型：int, 默认值：3
+max_retry = 3
+
+# API 调用超时时长（秒）
+# 值类型：int, 默认值：30
+timeout = 60
+
+# 重试间隔时间（秒）
+# 值类型：int, 默认值：10
+retry_interval = 10
+
+# 模型信息配置节
+# 
+# 定义单个模型的详细信息。
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "qwen3.5-plus"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "qwen3.5-plus"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "bailian"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false, force_tool_call = true, response_format = { type = "json_object" } }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-3-flash"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "anti-gemini-3-flash"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "Antigravity"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false, force_tool_call = true, response_format = { type = "json_object" } }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "glm-5"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "glm-5"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "bailian"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "kimi-k2.5"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "kimi-k2.5"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "bailian"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "MiniMax-M2.5"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "MiniMax-M2.5"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "bailian"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = true }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gpt-4o"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "gpt-4o"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "GitHubCopilotProxy"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gpt-5-mini"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "gpt-5-mini"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "GitHubCopilotProxy"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gpt-5.4"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "codex-gpt-5.4"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "CodexAI02"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-3-flash-preview"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "copi-g3f"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "GitHubCopilotProxy"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-3-flash-preview"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "GCLI-g3f"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "Gemini_Local"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 0.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = true
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 1048576
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = true
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-2.5-pro"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "GCLI-g2.5p"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "Gemini_Local"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 0.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = true
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 1048576
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = true
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-3.1-flash-lite-preview"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "GCLI-g3.1fl"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "Gemini_Local"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 0.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 1048576
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = true
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-2.5-flash-lite"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "GCLI-g2.5fl"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "Gemini_Local"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 0.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = true
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 1048576
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { temperature = 0.7, top_p = 0.95 }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = true
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "doubao-seed-2.0-pro"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "doubao-seed-2.0-pro"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "volcengine-plan"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "doubao-seed-2.0-lite"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "doubao-seed-2.0-lite"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "volcengine-plan"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "qwen3.5-plus"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "qwen3.5-plus"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "bailian"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-3-flash-preview"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "gemini-3-flash-preview"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "Yuegle"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = true
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-2.5-pro"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "yue-gemini-2.5-pro"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "Yuegle"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = true
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-3-flash-preview"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "novai-g3f"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "NovaiG3F"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.6
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 3.6
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = true
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-3-flash-preview"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "undying-gemini-3-flash-preview"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "Undying"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = true
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-3.1-flash-lite-preview"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "undying-gemini-3.1-flash-lite-preview"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "Undying"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = true
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-3-pro-preview"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "undying-gemini-3-pro-preview"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "Undying"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = true
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-2.5-flash"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "gemini-2.5-flash"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "Undying"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = true
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-2.5-pro"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "gemini-2.5-pro"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "Undying"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = true
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-2.5-flash-lite"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "gemini-2.5-flash-lite"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "Gemini"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.05
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 0.15
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 48576
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = true
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = true
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-1.5-pro"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "gemini-1.5-pro"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "Gemini"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.125
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 0.375
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 48576
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = true
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = true
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "deepseek-ai/DeepSeek-V3.2"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "siliconflow-deepseek-ai/DeepSeek-V3.2"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "Qwen/Qwen3-8B"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "qwen3-8b"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 0.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "Qwen/Qwen2.5-VL-72B-Instruct"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "qwen2.5-vl-72b"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 4.13
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 4.13
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "FunAudioLLM/SenseVoiceSmall"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "sensevoice-small"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 0.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "BAAI/bge-m3"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "bge-m3"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 0.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "Pro/zai-org/GLM-4.7"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "glm-4.7"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 4.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 16.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "Pro/zai-org/GLM-5"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "glm-5"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 18.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 22.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "deepseek-ai/DeepSeek-V3.2"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "deepseek-ai/DeepSeek-V3.2"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 3.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "Pro/deepseek-ai/DeepSeek-V3.2"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "Pro/deepseek-ai/DeepSeek-V3.2"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 3.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "Pro/deepseek-ai/DeepSeek-R1"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "Pro/deepseek-ai/DeepSeek-R1"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 2.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 8.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "deepseek-r1-distill-qwen-32b"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 4.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 16.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "Qwen/Qwen3-14B"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "qwen3-14b"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.5
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 2.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "Qwen/Qwen3-30B-A3B-Instruct-2507"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "qwen3-30b"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.7
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 2.8
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "Qwen/Qwen3-Next-80B-A3B-Thinking"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "qwen3-80b-thinking"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.001
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 0.004
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "Qwen/Qwen3-Next-80B-A3B-Instruct"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "qwen3-80b-instruct"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.001
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 0.004
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "moonshotai/Kimi-K2-Instruct"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "moonshotai-Kimi-K2-Instruct"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "SiliconFlow"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 4.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 16.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 32768
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = {  }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-2.5-pro"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "gcli2-gemini-2.5-pro"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "gcli2api"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 0.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 1000000
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+[[models]]
+# 模型标识符（用于 API 调用）
+# 值类型：str, 默认值：<必填>
+model_identifier = "gemini-3.1-pro-preview"
+
+# 模型名称（用于内部调用）
+# 值类型：str, 默认值：<必填>
+name = "gcli2-gemini-3.1-pro-preview"
+
+# 所属 API 提供商名称
+# 值类型：str, 默认值：<必填>
+api_provider = "gcli2api"
+
+# 每百万 token 输入价格
+# 值类型：float, 默认值：0.0
+price_in = 0.0
+
+# 每百万 token 输出价格
+# 值类型：float, 默认值：0.0
+price_out = 0.0
+
+# 是否强制使用流式输出模式
+# 值类型：bool, 默认值：false
+force_stream_mode = false
+
+# 模型最大输入上下文 token 数
+# 值类型：int, 默认值：32768
+max_context = 1000000
+
+# 是否启用 Tool Call 兼容模式（模型不支持原生工具调用时使用）
+# 值类型：bool, 默认值：false
+tool_call_compat = false
+
+# 额外参数（用于 API 调用时的额外配置）
+# 值类型：dict, 默认值：{  }
+extra_params = { enable_thinking = false }
+
+# 是否启用反截断功能
+# 值类型：bool, 默认值：false
+anti_truncation = false
+
+# 模型任务配置（内嵌类，用于 TOML 节定义）
+[model_tasks]
+
+# 任务配置节
+# 
+# 定义单个任务的模型配置参数。
+[model_tasks.utils]
+# 任务使用的模型列表（模型名称）
+# 值类型：list, 默认值：[]
+model_list = ["qwen3.5-plus", "glm-4.7", "siliconflow-deepseek-ai/DeepSeek-V3.2"]
+
+# 任务最大输出 token 数
+# 值类型：int, 默认值：800
+max_tokens = 800
+
+# 模型温度参数
+# 值类型：float, 默认值：0.7
+temperature = 0.7
+
+# 并发请求数量
+# 值类型：int, 默认值：1
+concurrency_count = 1
+
+# 嵌入模型输出向量维度
+# 值类型：int | None, 默认值：<必填>
+embedding_dimension = 0
+
+# 任务配置节
+# 
+# 定义单个任务的模型配置参数。
+[model_tasks.utils_small]
+# 任务使用的模型列表（模型名称）
+# 值类型：list, 默认值：[]
+model_list = ["qwen3-8b"]
+
+# 任务最大输出 token 数
+# 值类型：int, 默认值：800
+max_tokens = 800
+
+# 模型温度参数
+# 值类型：float, 默认值：0.7
+temperature = 0.7
+
+# 并发请求数量
+# 值类型：int, 默认值：1
+concurrency_count = 1
+
+# 嵌入模型输出向量维度
+# 值类型：int | None, 默认值：<必填>
+embedding_dimension = 0
+
+# 任务配置节
+# 
+# 定义单个任务的模型配置参数。
+[model_tasks.actor]
+# 任务使用的模型列表（模型名称）
+# 值类型：list, 默认值：[]
+model_list = ["novai-g3f", "gemini-3-flash-preview", "anti-gemini-3-flash", "gcli2-gemini-2.5-pro", "gcli2-gemini-3.1-pro-preview", "doubao-seed-2.0-pro", "GCLI-g2.5p", "yue-gemini-2.5-pro", "gemini-2.5-pro", "undying-gemini-3-flash-preview", "undying-gemini-3-pro-preview", "qwen3.5-plus", "codex-gpt-5.4", "undying-gemini-3.1-flash-lite-preview", "GCLI-g3f", "gpt-4o", "GCLI-g2.5fl", "GCLI-g3.1fl", "copi-g3f", "MiniMax-M2.5", "kimi-k2.5", "gemini-2.5-pro", "gpt-5-mini"]
+
+# 任务最大输出 token 数
+# 值类型：int, 默认值：800
+max_tokens = 1000
+
+# 模型温度参数
+# 值类型：float, 默认值：0.7
+temperature = 0.8
+
+# 并发请求数量
+# 值类型：int, 默认值：1
+concurrency_count = 3
+
+# 嵌入模型输出向量维度
+# 值类型：int | None, 默认值：<必填>
+embedding_dimension = 0
+
+# 任务配置节
+# 
+# 定义单个任务的模型配置参数。
+[model_tasks.life]
+# 任务使用的模型列表（模型名称）
+# 值类型：list, 默认值：[]
+model_list = ["siliconflow-deepseek-ai/DeepSeek-V3.2"]
+
+# 任务最大输出 token 数
+# 值类型：int, 默认值：800
+max_tokens = 1200
+
+# 模型温度参数
+# 值类型：float, 默认值：0.7
+temperature = 0.5
+
+# 并发请求数量
+# 值类型：int, 默认值：1
+concurrency_count = 1
+
+# 嵌入模型输出向量维度
+# 值类型：int | None, 默认值：<必填>
+embedding_dimension = 0
+
+# 任务配置节
+# 
+# 定义单个任务的模型配置参数。
+[model_tasks.diary]
+# 任务使用的模型列表（模型名称）
+# 值类型：list, 默认值：[]
+model_list = ["qwen3.5-plus", "codex-gpt-5.4", "MiniMax-M2.5"]
+
+# 任务最大输出 token 数
+# 值类型：int, 默认值：800
+max_tokens = 1000
+
+# 模型温度参数
+# 值类型：float, 默认值：0.7
+temperature = 0.8
+
+# 并发请求数量
+# 值类型：int, 默认值：1
+concurrency_count = 1
+
+# 嵌入模型输出向量维度
+# 值类型：int | None, 默认值：<必填>
+embedding_dimension = 0
+
+# 任务配置节
+# 
+# 定义单个任务的模型配置参数。
+[model_tasks.sub_actor]
+# 任务使用的模型列表（模型名称）
+# 值类型：list, 默认值：[]
+model_list = ["qwen3.5-plus", "glm-4.7", "siliconflow-deepseek-ai/DeepSeek-V3.2"]
+
+# 任务最大输出 token 数
+# 值类型：int, 默认值：800
+max_tokens = 800
+
+# 模型温度参数
+# 值类型：float, 默认值：0.7
+temperature = 0.7
+
+# 并发请求数量
+# 值类型：int, 默认值：1
+concurrency_count = 3
+
+# 嵌入模型输出向量维度
+# 值类型：int | None, 默认值：<必填>
+embedding_dimension = 0
+
+# 任务配置节
+# 
+# 定义单个任务的模型配置参数。
+[model_tasks.vlm]
+# 任务使用的模型列表（模型名称）
+# 值类型：list, 默认值：[]
+model_list = ["qwen3.5-plus"]
+
+# 任务最大输出 token 数
+# 值类型：int, 默认值：800
+max_tokens = 800
+
+# 模型温度参数
+# 值类型：float, 默认值：0.7
+temperature = 0.7
+
+# 并发请求数量
+# 值类型：int, 默认值：1
+concurrency_count = 1
+
+# 嵌入模型输出向量维度
+# 值类型：int | None, 默认值：<必填>
+embedding_dimension = 0
+
+# 任务配置节
+# 
+# 定义单个任务的模型配置参数。
+[model_tasks.voice]
+# 任务使用的模型列表（模型名称）
+# 值类型：list, 默认值：[]
+model_list = ["sensevoice-small"]
+
+# 任务最大输出 token 数
+# 值类型：int, 默认值：800
+max_tokens = 800
+
+# 模型温度参数
+# 值类型：float, 默认值：0.7
+temperature = 0.7
+
+# 并发请求数量
+# 值类型：int, 默认值：1
+concurrency_count = 1
+
+# 嵌入模型输出向量维度
+# 值类型：int | None, 默认值：<必填>
+embedding_dimension = 0
+
+# 任务配置节
+# 
+# 定义单个任务的模型配置参数。
+[model_tasks.video]
+# 任务使用的模型列表（模型名称）
+# 值类型：list, 默认值：[]
+model_list = ["qwen3.5-plus"]
+
+# 任务最大输出 token 数
+# 值类型：int, 默认值：800
+max_tokens = 800
+
+# 模型温度参数
+# 值类型：float, 默认值：0.7
+temperature = 0.7
+
+# 并发请求数量
+# 值类型：int, 默认值：1
+concurrency_count = 1
+
+# 嵌入模型输出向量维度
+# 值类型：int | None, 默认值：<必填>
+embedding_dimension = 0
+
+# 任务配置节
+# 
+# 定义单个任务的模型配置参数。
+[model_tasks.tool_use]
+# 任务使用的模型列表（模型名称）
+# 值类型：list, 默认值：[]
+model_list = ["MiniMax-M2.5", "qwen3.5-plus", "qwen3-8b"]
+
+# 任务最大输出 token 数
+# 值类型：int, 默认值：800
+max_tokens = 800
+
+# 模型温度参数
+# 值类型：float, 默认值：0.7
+temperature = 0.7
+
+# 并发请求数量
+# 值类型：int, 默认值：1
+concurrency_count = 1
+
+# 嵌入模型输出向量维度
+# 值类型：int | None, 默认值：<必填>
+embedding_dimension = 0
+
+# 任务配置节
+# 
+# 定义单个任务的模型配置参数。
+[model_tasks.embedding]
+# 任务使用的模型列表（模型名称）
+# 值类型：list, 默认值：[]
+model_list = ["bge-m3"]
+
+# 任务最大输出 token 数
+# 值类型：int, 默认值：800
+max_tokens = 800
+
+# 模型温度参数
+# 值类型：float, 默认值：0.7
+temperature = 0.7
+
+# 并发请求数量
+# 值类型：int, 默认值：1
+concurrency_count = 1
+
+# 嵌入模型输出向量维度
+# 值类型：int | None, 默认值：<必填>
+embedding_dimension = 1024
