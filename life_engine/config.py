@@ -32,6 +32,16 @@ class LifeEngineConfig(BaseConfig):
             description="心跳间隔（秒）。",
         )
 
+        sleep_time: str = Field(
+            default="",
+            description="睡觉时间，格式 HH:MM（24小时制）。与 wake_time 同时配置后生效。",
+        )
+
+        wake_time: str = Field(
+            default="",
+            description="苏醒时间，格式 HH:MM（24小时制）。与 sleep_time 同时配置后生效。",
+        )
+
         log_heartbeat: bool = Field(
             default=True,
             description="是否在每次心跳时输出日志。",
