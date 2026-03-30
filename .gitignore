@@ -1,0 +1,11 @@
+# Git ignore for Strange-Loop-Chatter
+# Ignore Python cache directories
+__pycache__/
+*/__pycache__/
+# Byte-compiled files
+*.pyc
+# Virtual environments
+.venv/
+venv/
+# Logs
+*.log
