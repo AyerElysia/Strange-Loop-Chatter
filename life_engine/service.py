@@ -59,13 +59,56 @@ def _now_iso() -> str:
 
 
 def _format_time(raw_time: float | int | None) -> str:
-    """格式化消息时间。"""
+    """格式化消息时间为 ISO 字符串（内部存储用）。"""
     if raw_time is None:
         return _now_iso()
     try:
         return datetime.fromtimestamp(float(raw_time), tz=timezone.utc).astimezone().isoformat()
     except Exception:
         return _now_iso()
+
+
+def _format_time_display(iso_time: str | None) -> str:
+    """格式化时间为简洁的显示格式。
+    
+    - 5分钟内："刚才"
+    - 1小时内："X分钟前"
+    - 当日："HH:MM"
+    - 跨日："MM-DD HH:MM"
+    """
+    if not iso_time:
+        return "未知时间"
+    
+    try:
+        dt = datetime.fromisoformat(iso_time)
+        now = datetime.now(dt.tzinfo or timezone.utc)
+        diff = now - dt
+        diff_seconds = diff.total_seconds()
+        
+        if diff_seconds < 0:
+            # 未来时间，直接显示
+            return dt.strftime("%H:%M")
+        elif diff_seconds < 300:  # 5分钟内
+            return "刚才"
+        elif diff_seconds < 3600:  # 1小时内
+            minutes = int(diff_seconds / 60)
+            return f"{minutes}分钟前"
+        elif dt.date() == now.date():  # 当日
+            return dt.strftime("%H:%M")
+        elif (now.date() - dt.date()).days < 7:  # 一周内
+            return dt.strftime("%m-%d %H:%M")
+        else:
+            return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return "未知时间"
+
+
+def _format_current_time() -> str:
+    """格式化当前时间为人类可读格式。"""
+    now = datetime.now(timezone.utc).astimezone()
+    weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    weekday = weekdays[now.weekday()]
+    return f"{now.strftime('%Y-%m-%d')} {weekday} {now.strftime('%H:%M:%S')}"
 
 
 def _shorten_text(text: str, *, max_length: int = 240) -> str:
@@ -155,6 +198,10 @@ class LifeEngineState:
     last_model_reply: str | None = None
     last_model_error: str | None = None
     last_error: str | None = None
+    # 新增：跟踪最后一次外部消息和传话时间
+    last_external_message_at: str | None = None
+    last_tell_dfc_at: str | None = None
+    tell_dfc_count: int = 0  # 本次运行期间传话总次数
 
 
 class LifeEngineService(BaseService):
@@ -245,6 +292,35 @@ class LifeEngineService(BaseService):
         self._state.event_sequence += 1
         return self._state.event_sequence
 
+    def _minutes_since_external_message(self) -> int | None:
+        """计算距离上一条外部消息过去了多少分钟。"""
+        if not self._state.last_external_message_at:
+            return None
+        try:
+            last_time = datetime.fromisoformat(self._state.last_external_message_at)
+            now = datetime.now().astimezone()
+            delta = now - last_time
+            return int(delta.total_seconds() / 60)
+        except Exception:
+            return None
+
+    def _minutes_since_tell_dfc(self) -> int | None:
+        """计算距离上一次传话给 DFC 过去了多少分钟。"""
+        if not self._state.last_tell_dfc_at:
+            return None
+        try:
+            last_time = datetime.fromisoformat(self._state.last_tell_dfc_at)
+            now = datetime.now().astimezone()
+            delta = now - last_time
+            return int(delta.total_seconds() / 60)
+        except Exception:
+            return None
+
+    def record_tell_dfc(self) -> None:
+        """记录一次传话给 DFC 的时间。"""
+        self._state.last_tell_dfc_at = _now_iso()
+        self._state.tell_dfc_count += 1
+
     def _runtime_context_path(self) -> Path:
         """返回运行时上下文持久化文件路径。"""
         workspace = Path(self._cfg().settings.workspace_path).resolve()
@@ -310,6 +386,10 @@ class LifeEngineService(BaseService):
                     "last_model_error": self._state.last_model_error,
                     "last_wake_context_at": self._state.last_wake_context_at,
                     "last_wake_context_size": self._state.last_wake_context_size,
+                    # 新增：跟踪外部消息和传话时间
+                    "last_external_message_at": self._state.last_external_message_at,
+                    "last_tell_dfc_at": self._state.last_tell_dfc_at,
+                    "tell_dfc_count": self._state.tell_dfc_count,
                 },
                 "pending_events": [self._event_to_dict(e) for e in self._pending_events],
                 "event_history": [self._event_to_dict(e) for e in self._event_history],
@@ -368,6 +448,10 @@ class LifeEngineService(BaseService):
             self._state.last_model_error = state_raw.get("last_model_error")
             self._state.last_wake_context_at = state_raw.get("last_wake_context_at")
             self._state.last_wake_context_size = int(state_raw.get("last_wake_context_size") or 0)
+            # 新增：恢复外部消息和传话时间跟踪
+            self._state.last_external_message_at = state_raw.get("last_external_message_at")
+            self._state.last_tell_dfc_at = state_raw.get("last_tell_dfc_at")
+            self._state.tell_dfc_count = int(state_raw.get("tell_dfc_count") or 0)
 
             if self._event_history:
                 max_seq = max(event.sequence for event in self._event_history)
@@ -571,6 +655,9 @@ class LifeEngineService(BaseService):
         async with self._get_lock():
             self._pending_events.append(event)
             self._state.pending_event_count = len(self._pending_events)
+            # 如果是入站消息（非自己发送的），更新 last_external_message_at
+            if direction == "received":
+                self._state.last_external_message_at = event.timestamp
         await self._save_runtime_context()
 
         log_message_received(
@@ -683,17 +770,125 @@ class LifeEngineService(BaseService):
         return pending
 
     async def _append_history(self, events: list[LifeEngineEvent]) -> None:
-        """将事件追加到滚动历史中，并裁剪到上限。"""
+        """将事件追加到滚动历史中，支持压缩。"""
         if not events:
             return
 
         async with self._get_lock():
             self._event_history.extend(events)
             limit = self._history_limit()
-            if len(self._event_history) > limit:
-                self._event_history = self._event_history[-limit:]
+            
+            # 如果超过阈值（80%），触发压缩
+            compress_threshold = int(limit * 0.8)
+            if len(self._event_history) > compress_threshold:
+                self._event_history = self._compress_history(self._event_history, limit)
+            
             self._state.history_event_count = len(self._event_history)
         await self._save_runtime_context()
+
+    def _compress_history(
+        self, 
+        events: list[LifeEngineEvent], 
+        target_count: int,
+    ) -> list[LifeEngineEvent]:
+        """压缩事件历史，保留最近事件，其余总结为摘要。
+        
+        压缩策略（参考 Claude Code）：
+        1. 保留最近 60% 的事件完整
+        2. 将较早的 40% 压缩为一条摘要事件
+        """
+        if len(events) <= target_count:
+            return events
+        
+        # 计算保留数量
+        keep_count = int(target_count * 0.6)
+        compress_count = len(events) - keep_count
+        
+        if compress_count <= 0:
+            return events[-target_count:]
+        
+        # 分割事件
+        old_events = events[:compress_count]
+        recent_events = events[compress_count:]
+        
+        # 生成摘要
+        summary = self._generate_event_summary(old_events)
+        
+        # 创建摘要事件
+        from uuid import uuid4
+        summary_event = LifeEngineEvent(
+            event_id=f"summary_{uuid4().hex[:12]}",
+            sequence=old_events[0].sequence if old_events else 0,
+            timestamp=old_events[0].timestamp if old_events else _now_iso(),
+            event_type=EventType.HEARTBEAT,  # 用心跳类型表示摘要
+            source="system",
+            source_detail="上下文压缩系统",
+            content=summary,
+            heartbeat_index=-1,  # 特殊标记表示这是摘要
+        )
+        
+        # 返回：摘要 + 最近事件
+        result = [summary_event] + recent_events
+        
+        logger.info(
+            f"life_engine 上下文压缩: {len(events)} → {len(result)} "
+            f"(压缩了 {compress_count} 条旧事件)"
+        )
+        
+        return result
+
+    def _generate_event_summary(self, events: list[LifeEngineEvent]) -> str:
+        """生成事件摘要。"""
+        if not events:
+            return "（无历史事件）"
+        
+        # 统计各类事件
+        msg_count = 0
+        heartbeat_count = 0
+        tool_count = 0
+        senders: set[str] = set()
+        topics: list[str] = []
+        
+        for event in events:
+            if event.event_type == EventType.MESSAGE:
+                msg_count += 1
+                if event.sender:
+                    senders.add(event.sender)
+                # 提取关键词作为话题
+                if event.content and len(event.content) > 10:
+                    topics.append(event.content[:30])
+            elif event.event_type == EventType.HEARTBEAT:
+                heartbeat_count += 1
+            elif event.event_type in (EventType.TOOL_CALL, EventType.TOOL_RESULT):
+                tool_count += 1
+        
+        # 时间范围
+        start_time = _format_time_display(events[0].timestamp) if events else "未知"
+        end_time = _format_time_display(events[-1].timestamp) if events else "未知"
+        
+        # 构建摘要
+        parts = [f"📋 **历史摘要** ({start_time} ~ {end_time})"]
+        
+        stats = []
+        if msg_count > 0:
+            sender_str = "、".join(list(senders)[:3])
+            if len(senders) > 3:
+                sender_str += f" 等{len(senders)}人"
+            stats.append(f"{msg_count}条消息（来自 {sender_str}）")
+        if heartbeat_count > 0:
+            stats.append(f"{heartbeat_count}次心跳")
+        if tool_count > 0:
+            stats.append(f"{tool_count}次工具调用")
+        
+        if stats:
+            parts.append("- " + "，".join(stats))
+        
+        # 添加话题提示（最多3个）
+        if topics:
+            topic_hints = topics[:3]
+            parts.append(f"- 话题涉及: {' / '.join(topic_hints)}...")
+        
+        return "\n".join(parts)
 
     async def clear_runtime_context(self) -> None:
         """清理当前事件上下文。"""
@@ -715,52 +910,75 @@ class LifeEngineService(BaseService):
     def _build_wake_context_text(self, events: list[LifeEngineEvent]) -> str:
         """把事件流拼成可注入的上下文文本。
 
-        保持时间连续性，不分开展示不同类型的事件。
+        保持时间连续性，使用简洁的时间格式。
         """
         if not events:
             return ""
 
-        task_name = self._cfg().model.task_name or "life"
-
         # 按时间顺序展示所有事件
         sorted_events = sorted(events, key=lambda e: e.sequence)
 
-        lines: list[str] = [
-            "## 生命中枢事件流",
-            f"中枢任务: {task_name}",
-            f"当前心跳序号: {self._state.heartbeat_count}",
-            f"事件流总数: {len(sorted_events)}",
-            "",
-            "### 最近事件（按时间顺序）",
-        ]
+        lines: list[str] = []
 
         for event in sorted_events:
+            time_display = _format_time_display(event.timestamp)
+            
             # 根据事件类型生成不同格式的行
             if event.event_type == EventType.MESSAGE:
-                # 外部消息
-                line = f"[{event.timestamp}] 📨 {event.source_detail}"
+                # 外部消息：简化 source_detail，去掉冗余信息
+                source = event.source_detail or event.source or "外部"
+                # 提取关键信息：平台和聊天名
+                source_short = self._simplify_source(source)
+                line = f"[{time_display}] 📨 {source_short}"
                 line += f"\n    └─ {event.sender}: {event.content}"
             elif event.event_type == EventType.HEARTBEAT:
                 # 心跳思考
-                line = f"[{event.timestamp}] 💭 心跳#{event.heartbeat_index} 内部思考"
+                line = f"[{time_display}] 💭 心跳#{event.heartbeat_index}"
                 line += f"\n    └─ {event.content}"
             elif event.event_type == EventType.TOOL_CALL:
                 # 工具调用
-                line = f"[{event.timestamp}] 🔧 调用工具: {event.tool_name}"
+                line = f"[{time_display}] 🔧 {event.tool_name}"
                 if event.tool_args:
-                    args_str = ", ".join(f"{k}={v}" for k, v in event.tool_args.items())
-                    line += f"\n    └─ 参数: {args_str}"
+                    # 简化参数显示
+                    args_short = self._simplify_tool_args(event.tool_args)
+                    if args_short:
+                        line += f"({args_short})"
             elif event.event_type == EventType.TOOL_RESULT:
                 # 工具结果
                 status = "✅" if event.tool_success else "❌"
-                line = f"[{event.timestamp}] {status} 工具返回: {event.tool_name}"
-                line += f"\n    └─ {event.content}"
+                result_short = _shorten_text(event.content or "", max_length=100)
+                line = f"[{time_display}] {status} {event.tool_name}: {result_short}"
             else:
-                line = f"[{event.timestamp}] ❓ 未知事件: {event.content}"
+                line = f"[{time_display}] ❓ {event.content}"
 
             lines.append(line)
 
         return "\n".join(lines)
+
+    def _simplify_source(self, source: str) -> str:
+        """简化消息来源显示。"""
+        if not source:
+            return "外部"
+        # 移除常见的冗余前缀
+        source = source.replace("qq | 入站 | ", "").replace("qq | 出站 | ", "")
+        # 如果太长，截断
+        if len(source) > 30:
+            return source[:27] + "..."
+        return source
+
+    def _simplify_tool_args(self, args: dict) -> str:
+        """简化工具参数显示。"""
+        if not args:
+            return ""
+        # 只显示关键参数的简短形式
+        key_params = []
+        for k, v in args.items():
+            if k in ("path", "todo_id", "title", "content", "file_path"):
+                v_str = str(v)
+                if len(v_str) > 20:
+                    v_str = v_str[:17] + "..."
+                key_params.append(f"{k}={v_str}")
+        return ", ".join(key_params[:2])  # 最多显示2个参数
 
     async def inject_wake_context(self) -> str:
         """把当前待处理事件注入到系统提醒。"""
@@ -831,50 +1049,127 @@ class LifeEngineService(BaseService):
             )
 
     def _build_heartbeat_model_prompt(self, wake_context: str) -> str:
-        """构造心跳模型输入。"""
-        lines = [
-            "这是你的心跳时刻。",
-            "",
-            "**要求：必须输出一些内容，可以是：**",
-            "1. 内部思考/心理独白（1-4句话，表达此刻的感受、想法或观察）",
-            "2. 同时可以选择使用工具（记录想法、管理待办、操作文件等）",
-            "",
-            "注意：不要沉默，至少说说你此刻在想什么、感受到什么。",
-            "",
-            f"当前心跳序号: {self._state.heartbeat_count}",
-            f"当前时间: {self._state.last_heartbeat_at or _now_iso()}",
-            f"事件流中有 {self._state.history_event_count} 个事件",
-        ]
-
-        if wake_context.strip():
-            lines.extend(
-                [
-                    "",
-                    "### 最近的事件流",
-                    wake_context.strip(),
-                ]
-            )
+        """构造心跳模型输入。
+        
+        结构：事件流在前，心跳指令在后（符合模型注意力分布）。
+        """
+        # 计算关键的时间信息
+        minutes_since_external = self._minutes_since_external_message()
+        heartbeat_interval = self._cfg().settings.heartbeat_interval_seconds
+        
+        # 根据外部消息间隔判断外界活跃度
+        if minutes_since_external is None:
+            external_activity = "暂无外部消息记录"
+        elif minutes_since_external <= 5:
+            external_activity = f"外界非常活跃（{minutes_since_external}分钟前有消息）"
+        elif minutes_since_external <= 15:
+            external_activity = f"外界较活跃（{minutes_since_external}分钟前有消息）"
+        elif minutes_since_external <= 30:
+            external_activity = f"外界有一段时间安静了（{minutes_since_external}分钟前有消息）"
         else:
-            lines.extend(
-                [
-                    "",
-                    "### 最近的事件流",
-                    "当前没有新事件，一切平静。",
-                ]
-            )
-
+            external_activity = f"外界长时间沉默（{minutes_since_external}分钟无消息）"
+        
+        lines: list[str] = []
+        
+        # === Part 1: 事件流（放在前面）===
+        if wake_context.strip():
+            lines.extend([
+                "## 最近事件流",
+                "",
+                wake_context.strip(),
+                "",
+            ])
+        
+        # === Part 2: 心跳指令（放在最后，确保模型看到）===
+        lines.extend([
+            "---",
+            "",
+            "## 心跳时刻",
+            "",
+            f"**当前时间**: {_format_current_time()}",
+            f"**心跳序号**: #{self._state.heartbeat_count}（每 {heartbeat_interval // 60} 分钟一次）",
+            f"**外界状态**: {external_activity}",
+            "",
+            "### 你现在可以做什么",
+            "",
+            "1. **查看待办** - 用 `nucleus_list_todos` 看看有什么想做的事",
+            "2. **推进待办** - 如果有正在进行的事，继续做；如果有想法但没记录，创建新的",
+            "3. **内心独白** - 输出 1-4 句话，表达此刻的感受或想法",
+            "4. **文件操作** - 读写你的私人空间文件",
+            "",
+            "### 执行约定",
+            "",
+            "- **先看待办**：每次心跳建议先 `nucleus_list_todos` 检查待办状态",
+            "- **TODO 是要做的**：创建的待办不是为了记录，是要去完成的",
+            "- **不为调用而调用**：没有需求时，简单的内心独白就够了",
+            "- **不要使用 nucleus_tell_dfc**：社交态会自动处理外部消息",
+            "",
+        ])
+        
         return "\n".join(lines)
 
-    def _build_heartbeat_system_prompt(self) -> str:
-        """构造心跳模型系统提示词，从 SOUL.md / MEMORY.md / TOOL.md 读取。"""
+    def _build_workspace_tree(self) -> str:
+        """构建工作空间文件树显示。"""
         cfg = self._cfg()
         workspace = Path(cfg.settings.workspace_path)
         
-        soul_file = workspace / "SOUL.md"
-        memory_file = workspace / "MEMORY.md"
-        tool_file = workspace / "TOOL.md"
+        if not workspace.exists():
+            return "（工作空间为空）"
         
-        # 读取 SOUL.md
+        lines = []
+        try:
+            # 只显示顶层和一级子目录
+            items = sorted(workspace.iterdir())
+            for item in items:
+                if item.name.startswith(".") or item.name == "__pycache__":
+                    continue
+                if item.is_dir():
+                    sub_count = len(list(item.iterdir()))
+                    lines.append(f"├── {item.name}/ ({sub_count} 项)")
+                else:
+                    size = item.stat().st_size
+                    size_str = f"{size}B" if size < 1024 else f"{size // 1024}KB"
+                    lines.append(f"├── {item.name} ({size_str})")
+            if lines:
+                lines[-1] = lines[-1].replace("├──", "└──")
+        except Exception as e:
+            logger.warning(f"构建文件树失败: {e}")
+            return "（无法读取文件树）"
+        
+        return "\n".join(lines) if lines else "（工作空间为空）"
+
+    def _build_heartbeat_system_prompt(self) -> str:
+        """构造心跳模型系统提示词。
+        
+        结构：
+        1. 运行时信息（时间、文件树）
+        2. 灵魂文档（SOUL.md）
+        3. 记忆文档（MEMORY.md）
+        4. 工具规范（TOOL.md）
+        """
+        cfg = self._cfg()
+        workspace = Path(cfg.settings.workspace_path)
+        
+        # === Part 1: 运行时信息 ===
+        runtime_parts = [
+            "# 运行时信息",
+            "",
+            f"**当前时间**: {_format_current_time()}",
+            f"**时区**: Asia/Shanghai",
+            "",
+            "## 你的文件系统",
+            "",
+            "```",
+            f"{workspace.name}/",
+            self._build_workspace_tree(),
+            "```",
+            "",
+            "---",
+            "",
+        ]
+        
+        # === Part 2: SOUL.md ===
+        soul_file = workspace / "SOUL.md"
         soul_content = ""
         if soul_file.exists():
             try:
@@ -886,7 +1181,8 @@ class LifeEngineService(BaseService):
             logger.warning("SOUL.md 不存在，使用默认人设")
             soul_content = "你是爱莉希雅，一个并行存在的生命中枢。"
         
-        # 读取 MEMORY.md
+        # === Part 3: MEMORY.md ===
+        memory_file = workspace / "MEMORY.md"
         memory_content = ""
         if memory_file.exists():
             try:
@@ -894,7 +1190,8 @@ class LifeEngineService(BaseService):
             except Exception as e:
                 logger.warning(f"无法读取 MEMORY.md: {e}")
 
-        # 读取 TOOL.md
+        # === Part 4: TOOL.md ===
+        tool_file = workspace / "TOOL.md"
         tool_content = ""
         if tool_file.exists():
             try:
@@ -903,19 +1200,23 @@ class LifeEngineService(BaseService):
                 logger.warning(f"无法读取 TOOL.md: {e}")
         
         # 组装系统提示词
-        parts = [soul_content]
+        parts = runtime_parts + [soul_content]
         
         if memory_content:
-            parts.append("")
-            parts.append("---- 灵魂文档 `soul.md` 到此结束 ----")
-            parts.append("")
-            parts.append(memory_content)
+            parts.extend([
+                "",
+                "---",
+                "",
+                memory_content,
+            ])
 
         if tool_content:
-            parts.append("")
-            parts.append("---- 记忆文档 `memory.md` 到此结束 ----")
-            parts.append("")
-            parts.append(tool_content)
+            parts.extend([
+                "",
+                "---",
+                "",
+                tool_content,
+            ])
         
         return "\n".join(parts)
 
@@ -1212,3 +1513,68 @@ class LifeEngineService(BaseService):
             )
         finally:
             self._state.running = False
+
+    async def trigger_heartbeat_manually(self) -> dict[str, Any]:
+        """手动触发一次心跳（用于测试/调试）。
+        
+        Returns:
+            包含心跳结果的字典
+        """
+        if not self._is_enabled():
+            return {
+                "success": False,
+                "error": "life_engine 未启用",
+            }
+
+        # 检查是否在睡眠窗口
+        in_sleep_window, sleep_window_desc = self._in_sleep_window_now()
+        if in_sleep_window:
+            return {
+                "success": False,
+                "error": f"当前在睡眠时段（{sleep_window_desc}），心跳已暂停",
+            }
+
+        logger.info("life_engine 手动触发心跳")
+        
+        try:
+            self._state.heartbeat_count += 1
+            self._state.last_heartbeat_at = _now_iso()
+            injected_content = await self.inject_wake_context()
+            
+            log_heartbeat_event(
+                heartbeat_count=self._state.heartbeat_count,
+                last_heartbeat_at=self._state.last_heartbeat_at,
+                pending_message_count=self._state.pending_event_count,
+                last_wake_context_at=self._state.last_wake_context_at,
+                last_wake_context_size=self._state.last_wake_context_size,
+            )
+            
+            model_reply = await self._run_heartbeat_model(injected_content)
+            await self._record_model_reply(model_reply)
+            
+            logger.info(
+                f"life_engine 手动心跳完成 #{self._state.heartbeat_count}: "
+                f"{_shorten_text(model_reply, max_length=120)}"
+            )
+            
+            return {
+                "success": True,
+                "heartbeat_count": self._state.heartbeat_count,
+                "heartbeat_at": self._state.last_heartbeat_at,
+                "event_count": self._state.last_wake_context_size,
+                "reply": model_reply,
+            }
+        except Exception as exc:  # noqa: BLE001
+            self._state.last_model_error = str(exc)
+            logger.error(f"life_engine 手动心跳失败: {exc}\n{traceback.format_exc()}")
+            log_error(
+                "manual_heartbeat_failed",
+                str(exc),
+                heartbeat_count=self._state.heartbeat_count,
+                heartbeat_at=self._state.last_heartbeat_at,
+            )
+            return {
+                "success": False,
+                "error": str(exc),
+                "heartbeat_count": self._state.heartbeat_count,
+            }

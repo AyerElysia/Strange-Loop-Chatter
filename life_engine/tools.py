@@ -145,6 +145,23 @@ def _pick_latest_target_stream_id(plugin: Any) -> str | None:
     return None
 
 
+def _get_life_engine_service(plugin: Any):
+    """获取 life_engine 服务实例。"""
+    try:
+        services = getattr(plugin, "_services", None) or []
+        for svc in services:
+            if hasattr(svc, "record_tell_dfc"):
+                return svc
+    except Exception:
+        pass
+    return None
+
+
+# 冷却时间常量（分钟）
+_TELL_DFC_COOLDOWN_MINUTES = 10  # 两次传话之间的最小间隔
+_TELL_DFC_EXTERNAL_ACTIVE_MINUTES = 5  # 外部消息在此时间内视为"活跃"
+
+
 class LifeEngineWakeDFCTool(BaseTool):
     """给并行存在的另一个自己（DFC）传递想法的工具。"""
 
@@ -187,6 +204,32 @@ class LifeEngineWakeDFCTool(BaseTool):
         if not text:
             return False, "message 不能为空"
 
+        # 获取服务实例以检查冷却时间
+        life_service = _get_life_engine_service(self.plugin)
+        if life_service:
+            minutes_since_tell = life_service._minutes_since_tell_dfc()
+            minutes_since_external = life_service._minutes_since_external_message()
+            
+            # 冷却检查：两次传话之间需要间隔
+            if minutes_since_tell is not None and minutes_since_tell < _TELL_DFC_COOLDOWN_MINUTES:
+                # 除非是 critical 级别，否则拒绝
+                if importance != "critical":
+                    return (
+                        False,
+                        f"刚才才传话给 DFC（{minutes_since_tell} 分钟前），请稍后再传。"
+                        f"冷却时间: {_TELL_DFC_COOLDOWN_MINUTES} 分钟。"
+                        "如果真的很紧急，请使用 importance='critical'。"
+                    )
+            
+            # 活跃检查：如果外界很活跃，建议不要打扰
+            if minutes_since_external is not None and minutes_since_external < _TELL_DFC_EXTERNAL_ACTIVE_MINUTES:
+                # 除非是 high 或 critical 级别，否则给出警告但不阻止
+                if importance not in ("high", "critical"):
+                    logger.info(
+                        f"外界正在活跃（{minutes_since_external} 分钟前有消息），"
+                        f"传话可能会打扰 DFC 正常对话，但仍然允许执行。"
+                    )
+
         target_stream_id = str(stream_id or "").strip()
         if not target_stream_id:
             target_stream_id = _pick_latest_target_stream_id(self.plugin) or ""
@@ -206,6 +249,39 @@ class LifeEngineWakeDFCTool(BaseTool):
         chat_stream = await stream_manager.get_or_create_stream(stream_id=target_stream_id)
         if chat_stream is None:
             return False, f"找不到目标聊天流: {target_stream_id}"
+
+        target_extra: dict[str, Any] = {}
+        try:
+            stream_info = await stream_manager.get_stream_info(chat_stream.stream_id)
+        except Exception:
+            stream_info = None
+
+        if str(chat_stream.chat_type or "").lower() == "group":
+            group_id = ""
+            group_name = ""
+            if stream_info:
+                group_id = str(stream_info.get("group_id") or "").strip()
+                group_name = str(stream_info.get("group_name") or "").strip()
+            if group_id:
+                target_extra["target_group_id"] = group_id
+            if group_name:
+                target_extra["target_group_name"] = group_name
+        else:
+            person_id = str(stream_info.get("person_id") or "").strip() if stream_info else ""
+            if person_id:
+                try:
+                    from src.core.utils.user_query_helper import get_user_query_helper
+
+                    person = await get_user_query_helper().person_crud.get_by(
+                        person_id=person_id
+                    )
+                    if person and person.user_id:
+                        target_extra["target_user_id"] = str(person.user_id)
+                    nickname = str(getattr(person, "nickname", "") or "").strip() if person else ""
+                    if nickname:
+                        target_extra["target_user_name"] = nickname
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"life_engine 无法为 DFC 唤醒解析私聊目标: {exc}")
 
         wake_prompt = (
             "[内心想法传递]\n"
@@ -231,6 +307,7 @@ class LifeEngineWakeDFCTool(BaseTool):
             life_wake_reason=reason,
             life_wake_importance=importance,
             life_wake_message=text,
+            **target_extra,
         )
 
         chat_stream.context.add_unread_message(trigger_message)
@@ -240,6 +317,10 @@ class LifeEngineWakeDFCTool(BaseTool):
         removed = loop_mgr._wait_states.pop(chat_stream.stream_id, None)  # noqa: SLF001
         if loop_mgr.is_running:
             await loop_mgr.start_stream_loop(chat_stream.stream_id)
+
+        # 记录传话时间
+        if life_service:
+            life_service.record_tell_dfc()
 
         logger.info(
             "中枢向 DFC 传递想法: "
@@ -734,6 +815,186 @@ class LifeEngineMakeDirectoryTool(BaseTool):
             return False, f"创建目录失败: {e}"
 
 
+class LifeEngineRunTaskTool(BaseTool):
+    """启动子任务执行复杂操作的工具。"""
+
+    tool_name: str = "nucleus_run_task"
+    tool_description: str = (
+        "启动一个子任务来执行复杂的多步骤操作。"
+        "\n\n"
+        "**适用场景：**\n"
+        "- 需要多次文件操作的复杂任务（如整理笔记、批量修改）\n"
+        "- 需要多步推理的分析任务（如总结一段时间的事件）\n"
+        "- 需要专注执行的独立任务（如写一篇日记）\n"
+        "\n"
+        "**注意：** 子任务会获得与你相同的工具权限，但在独立的上下文中执行。"
+    )
+    chatter_allow: list[str] = ["life_engine_internal"]
+
+    async def execute(
+        self,
+        task: Annotated[str, "任务描述：清晰说明要做什么、期望的结果"],
+        context: Annotated[str, "任务上下文：提供必要的背景信息"] = "",
+        tools_hint: Annotated[
+            list[str], 
+            "建议使用的工具（可选）：如 ['nucleus_read_file', 'nucleus_write_file']"
+        ] = None,
+    ) -> tuple[bool, str | dict]:
+        """启动子任务。
+        
+        子任务会在独立上下文中执行，完成后返回结果。
+        适合需要多步操作的复杂任务。
+        
+        Returns:
+            成功返回 (True, {"task": ..., "result": ...})
+            失败返回 (False, error_message)
+        """
+        if not task.strip():
+            return False, "任务描述不能为空"
+        
+        # 构建子任务提示
+        task_prompt_parts = [
+            "# 子任务执行",
+            "",
+            "你被分配了一个具体任务。请专注完成它。",
+            "",
+            f"## 任务",
+            task.strip(),
+        ]
+        
+        if context.strip():
+            task_prompt_parts.extend([
+                "",
+                "## 背景信息",
+                context.strip(),
+            ])
+        
+        if tools_hint:
+            task_prompt_parts.extend([
+                "",
+                "## 建议工具",
+                "- " + "\n- ".join(tools_hint),
+            ])
+        
+        task_prompt_parts.extend([
+            "",
+            "## 执行要求",
+            "1. 直接开始执行任务，不要询问或确认",
+            "2. 使用必要的工具完成任务",
+            "3. 完成后简要总结结果",
+            "4. 如果遇到问题，说明原因并尽可能提供解决方案",
+        ])
+        
+        task_prompt = "\n".join(task_prompt_parts)
+        
+        try:
+            # 获取服务和模型配置
+            from .config import LifeEngineConfig
+            config = getattr(self.plugin, "config", None)
+            if not isinstance(config, LifeEngineConfig):
+                return False, "无法获取配置"
+            
+            # 使用与主心跳相同的模型
+            from src.app.plugin_system.api.llm_api import create_llm_request, get_model_set_by_task
+            from src.kernel.llm import LLMPayload, ROLE, Text, ToolRegistry
+            
+            task_name = config.model.task_name or "life"
+            model_set = get_model_set_by_task(task_name)
+            if not model_set:
+                return False, f"找不到模型配置: {task_name}"
+            
+            # 获取工具
+            from .tools import ALL_TOOLS
+            from .todo_tools import TODO_TOOLS
+            
+            registry = ToolRegistry()
+            for tool_cls in ALL_TOOLS + TODO_TOOLS:
+                # 排除自己和 tell_dfc
+                if tool_cls.tool_name in ("nucleus_run_task", "nucleus_tell_dfc"):
+                    continue
+                registry.register(tool_cls(plugin=self.plugin))
+            
+            # 构建系统提示
+            workspace = Path(config.settings.workspace_path)
+            system_prompt = (
+                "你是一个执行子任务的助手。专注完成分配的任务，使用提供的工具。\n"
+                f"工作空间: {workspace}\n"
+                "完成任务后，简要总结结果。"
+            )
+            
+            # 创建请求
+            request = create_llm_request(model_set, registry)
+            request.add_payload(LLMPayload(ROLE.SYSTEM, Text(system_prompt)))
+            request.add_payload(LLMPayload(ROLE.USER, Text(task_prompt)))
+            
+            # 执行（最多3轮工具调用）
+            max_rounds = 3
+            final_result = ""
+            
+            for round_num in range(max_rounds):
+                response = await request.execute()
+                
+                # 获取回复文本
+                reply_text = ""
+                for payload in response.payloads:
+                    if payload.role == ROLE.ASSISTANT:
+                        for content in payload.contents:
+                            if isinstance(content, Text):
+                                reply_text += content.text
+                
+                # 检查是否有工具调用
+                tool_calls = list(response.pending_tool_calls)
+                if not tool_calls:
+                    final_result = reply_text
+                    break
+                
+                # 执行工具调用
+                for call in tool_calls:
+                    tool_name = getattr(call, "name", "") or ""
+                    raw_args = getattr(call, "args", {}) or {}
+                    args = dict(raw_args) if isinstance(raw_args, dict) else {}
+                    args.pop("reason", None)
+                    
+                    tool_cls = registry.get(tool_name)
+                    if tool_cls:
+                        try:
+                            tool_instance = tool_cls(plugin=self.plugin) if isinstance(tool_cls, type) else tool_cls
+                            success, result = await tool_instance.execute(**args)
+                            result_text = str(result) if success else f"失败: {result}"
+                        except Exception as e:
+                            result_text = f"异常: {e}"
+                    else:
+                        result_text = f"未知工具: {tool_name}"
+                    
+                    # 添加工具结果
+                    from src.kernel.llm import ToolResult
+                    call_id = getattr(call, "id", None)
+                    response.add_payload(LLMPayload(
+                        ROLE.TOOL_RESULT,
+                        ToolResult(
+                            tool_call_id=call_id,
+                            tool_name=tool_name,
+                            content=result_text,
+                        ),
+                    ))
+                
+                # 继续下一轮
+                request = response
+            else:
+                final_result = f"子任务在 {max_rounds} 轮内未完成，最后状态: {reply_text[:200]}..."
+            
+            return True, {
+                "action": "run_task",
+                "task": task,
+                "result": final_result,
+                "rounds": round_num + 1,
+            }
+            
+        except Exception as e:
+            logger.error(f"执行子任务失败: {e}", exc_info=True)
+            return False, f"执行失败: {e}"
+
+
 # 导出所有工具类
 ALL_TOOLS = [
     LifeEngineReadFileTool,
@@ -745,4 +1006,5 @@ ALL_TOOLS = [
     LifeEngineFileInfoTool,
     LifeEngineMakeDirectoryTool,
     LifeEngineWakeDFCTool,
+    LifeEngineRunTaskTool,
 ]

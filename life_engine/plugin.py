@@ -11,6 +11,7 @@ from .audit import (
     setup_life_audit_logger,
     teardown_life_audit_logger,
 )
+from .command_handler import LifeEngineCommandHandler
 from .config import LifeEngineConfig
 from .event_handler import LifeEngineMessageCollectorHandler
 from .service import LifeEngineService
@@ -55,7 +56,13 @@ class LifeEnginePlugin(BasePlugin):
 
     def get_components(self) -> list[type]:
         """返回插件提供的组件。"""
-        return [LifeEngineService, LifeEngineMessageCollectorHandler, *ALL_TOOLS, *TODO_TOOLS]
+        return [
+            LifeEngineService,
+            LifeEngineMessageCollectorHandler,
+            LifeEngineCommandHandler,
+            *ALL_TOOLS,
+            *TODO_TOOLS,
+        ]
 
     async def on_plugin_loaded(self) -> None:
         """插件加载后启动心跳。"""
