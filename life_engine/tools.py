@@ -925,6 +925,7 @@ class LifeEngineRunTaskTool(BaseTool):
             # 创建请求
             request = create_llm_request(model_set, registry)
             request.add_payload(LLMPayload(ROLE.SYSTEM, Text(system_prompt)))
+            request.add_payload(LLMPayload(ROLE.TOOL, list(registry.get_all().values())))
             request.add_payload(LLMPayload(ROLE.USER, Text(task_prompt)))
             
             # 执行（最多3轮工具调用）
@@ -932,24 +933,19 @@ class LifeEngineRunTaskTool(BaseTool):
             final_result = ""
             
             for round_num in range(max_rounds):
-                response = await request.execute()
-                
-                # 获取回复文本
-                reply_text = ""
-                for payload in response.payloads:
-                    if payload.role == ROLE.ASSISTANT:
-                        for content in payload.contents:
-                            if isinstance(content, Text):
-                                reply_text += content.text
+                # 发送请求
+                response_future = await request.send(stream=False)
+                response_text = await response_future
+                reply_text = str(response_text or "").strip()
                 
                 # 检查是否有工具调用
-                tool_calls = list(response.pending_tool_calls)
-                if not tool_calls:
+                call_list = list(getattr(response_future, "call_list", []) or [])
+                if not call_list:
                     final_result = reply_text
                     break
                 
                 # 执行工具调用
-                for call in tool_calls:
+                for call in call_list:
                     tool_name = getattr(call, "name", "") or ""
                     raw_args = getattr(call, "args", {}) or {}
                     args = dict(raw_args) if isinstance(raw_args, dict) else {}
@@ -969,7 +965,7 @@ class LifeEngineRunTaskTool(BaseTool):
                     # 添加工具结果
                     from src.kernel.llm import ToolResult
                     call_id = getattr(call, "id", None)
-                    response.add_payload(LLMPayload(
+                    response_future.add_payload(LLMPayload(
                         ROLE.TOOL_RESULT,
                         ToolResult(
                             tool_call_id=call_id,
@@ -979,7 +975,7 @@ class LifeEngineRunTaskTool(BaseTool):
                     ))
                 
                 # 继续下一轮
-                request = response
+                request = response_future
             else:
                 final_result = f"子任务在 {max_rounds} 轮内未完成，最后状态: {reply_text[:200]}..."
             
