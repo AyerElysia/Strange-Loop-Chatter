@@ -54,6 +54,10 @@ nucleus_search_memory(query="我之前想学什么乐器")
 - 经常一起被检索到的记忆，它们之间的关联会自动增强
 - 长期不访问的记忆会逐渐被遗忘（激活强度降低）
 """
+    chatter_allow: list[str] = ["life_engine_internal"]
+
+    def __init__(self, plugin):
+        super().__init__(plugin)
 
     async def _get_service(self) -> LifeMemoryService:
         """获取记忆服务实例。"""
@@ -157,6 +161,10 @@ nucleus_relate_file(
 - 关联会随着共同检索而自动增强
 - 长期不用的关联会自动衰减
 """
+    chatter_allow: list[str] = ["life_engine_internal"]
+
+    def __init__(self, plugin):
+        super().__init__(plugin)
 
     async def _get_service(self) -> LifeMemoryService:
         """获取记忆服务实例。"""
@@ -259,6 +267,10 @@ nucleus_view_relations(file_path="diaries/2026-03-30.md")
 → 显示这篇日记与哪些文件有关联
 ```
 """
+    chatter_allow: list[str] = ["life_engine_internal"]
+
+    def __init__(self, plugin):
+        super().__init__(plugin)
 
     async def _get_service(self) -> LifeMemoryService:
         """获取记忆服务实例。"""
@@ -335,6 +347,10 @@ nucleus_forget_relation(
 - delete 模式会完全删除关联
 - 自动建立的 ASSOCIATES 类型关联会随时间自动衰减，通常无需手动删除
 """
+    chatter_allow: list[str] = ["life_engine_internal"]
+
+    def __init__(self, plugin):
+        super().__init__(plugin)
 
     async def _get_service(self) -> LifeMemoryService:
         """获取记忆服务实例。"""
@@ -431,6 +447,10 @@ class LifeEngineMemoryStatsTool(BaseTool):
 
 用于了解记忆系统的整体状态。
 """
+    chatter_allow: list[str] = ["life_engine_internal"]
+
+    def __init__(self, plugin):
+        super().__init__(plugin)
 
     async def _get_service(self) -> LifeMemoryService:
         """获取记忆服务实例。"""
