@@ -158,11 +158,6 @@ nucleus_relate_file(
 - 长期不用的关联会自动衰减
 """
 
-    def __init__(self, plugin: Any):
-        super().__init__()
-        self.plugin = plugin
-        self._memory_service: Optional[LifeMemoryService] = None
-
     async def _get_service(self) -> LifeMemoryService:
         """获取记忆服务实例。"""
         from .service import LifeEngineService
@@ -265,11 +260,6 @@ nucleus_view_relations(file_path="diaries/2026-03-30.md")
 ```
 """
 
-    def __init__(self, plugin: Any):
-        super().__init__()
-        self.plugin = plugin
-        self._memory_service: Optional[LifeMemoryService] = None
-
     async def _get_service(self) -> LifeMemoryService:
         """获取记忆服务实例。"""
         from .service import LifeEngineService
@@ -345,11 +335,6 @@ nucleus_forget_relation(
 - delete 模式会完全删除关联
 - 自动建立的 ASSOCIATES 类型关联会随时间自动衰减，通常无需手动删除
 """
-
-    def __init__(self, plugin: Any):
-        super().__init__()
-        self.plugin = plugin
-        self._memory_service: Optional[LifeMemoryService] = None
 
     async def _get_service(self) -> LifeMemoryService:
         """获取记忆服务实例。"""
@@ -446,11 +431,6 @@ class LifeEngineMemoryStatsTool(BaseTool):
 
 用于了解记忆系统的整体状态。
 """
-
-    def __init__(self, plugin: Any):
-        super().__init__()
-        self.plugin = plugin
-        self._memory_service: Optional[LifeMemoryService] = None
 
     async def _get_service(self) -> LifeMemoryService:
         """获取记忆服务实例。"""
