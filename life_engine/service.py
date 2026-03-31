@@ -8,7 +8,8 @@
 1. 事件流：所有交互（消息、心跳、工具调用）统一为 Event，保持时间连续性
 2. 心跳循环：定期唤醒，处理堆积的事件
 3. 上下文管理：维护滚动的事件流历史
-4. 未来扩展：工具调用、主动与 DFC 通信、记忆/反思/探索等
+4. 仿生记忆系统：语义检索、联想、遗忘机制
+5. 未来扩展：工具调用、主动与 DFC 通信、记忆/反思/探索等
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from dataclasses import dataclass, asdict, field
 from datetime import datetime, time as dtime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from src.app.plugin_system.api.llm_api import create_llm_request, get_model_set_by_task
 from src.app.plugin_system.api.log_api import get_logger
@@ -40,6 +41,9 @@ from .audit import (
     log_wake_context_injected,
 )
 from .config import LifeEngineConfig
+
+if TYPE_CHECKING:
+    from .memory_service import LifeMemoryService
 
 
 logger = get_logger("life_engine", display="life_engine")
@@ -204,6 +208,10 @@ class LifeEngineState:
     tell_dfc_count: int = 0  # 本次运行期间传话总次数
 
 
+# 全局单例引用，用于工具访问服务
+_service_instance: "LifeEngineService | None" = None
+
+
 class LifeEngineService(BaseService):
     """life_engine 心跳服务。
 
@@ -213,7 +221,12 @@ class LifeEngineService(BaseService):
 
     service_name: str = "life_engine"
     service_description: str = "生命中枢服务，维持并行心跳与事件流上下文"
-    version: str = "3.0.0"
+    version: str = "3.1.0"
+
+    @classmethod
+    def get_instance(cls) -> "LifeEngineService | None":
+        """获取服务单例（供工具使用）。"""
+        return _service_instance
 
     def __init__(self, plugin) -> None:
         super().__init__(plugin)
@@ -224,6 +237,8 @@ class LifeEngineService(BaseService):
         self._event_history: list[LifeEngineEvent] = []
         self._lock: asyncio.Lock | None = None
         self._sleep_state_active: bool = False
+        self._memory_service: "LifeMemoryService | None" = None
+        self._last_decay_date: str | None = None  # 上次衰减任务日期
 
     def _get_lock(self) -> asyncio.Lock:
         """获取懒加载锁。"""
@@ -1361,6 +1376,8 @@ class LifeEngineService(BaseService):
 
     async def start(self) -> None:
         """启动心跳。"""
+        global _service_instance
+        
         if self._state.running:
             return
 
@@ -1378,12 +1395,18 @@ class LifeEngineService(BaseService):
                 "请使用 HH:MM 格式，且 sleep_time 与 wake_time 不可相同。"
             )
 
+        # 初始化记忆服务
+        await self._init_memory_service()
+
         self._state.running = True
         self._state.started_at = _now_iso()
         self._state.last_heartbeat_at = self._state.last_heartbeat_at or self._state.started_at
         self._state.last_error = None
         self._state.history_event_count = len(self._event_history)
         self._state.pending_event_count = len(self._pending_events)
+        
+        # 设置全局单例
+        _service_instance = self
 
         self._stop_event = asyncio.Event()
         task = get_task_manager().create_task(
@@ -1410,6 +1433,8 @@ class LifeEngineService(BaseService):
 
     async def stop(self) -> None:
         """停止心跳。"""
+        global _service_instance
+        
         pending_before_stop = len(self._pending_events)
         self._state.running = False
 
@@ -1424,6 +1449,7 @@ class LifeEngineService(BaseService):
 
         self._heartbeat_task_id = None
         self._stop_event = None
+        _service_instance = None  # 清理全局单例
         await self._save_runtime_context()
         logger.info("life_engine 已停止")
         log_lifecycle(
@@ -1474,6 +1500,10 @@ class LifeEngineService(BaseService):
 
                 self._state.heartbeat_count += 1
                 self._state.last_heartbeat_at = _now_iso()
+                
+                # 每日运行一次记忆衰减任务
+                await self._maybe_run_daily_decay()
+                
                 injected_content = await self.inject_wake_context()
                 log_heartbeat_event(
                     heartbeat_count=self._state.heartbeat_count,
@@ -1585,3 +1615,37 @@ class LifeEngineService(BaseService):
                 "error": str(exc),
                 "heartbeat_count": self._state.heartbeat_count,
             }
+
+    async def _init_memory_service(self) -> None:
+        """初始化仿生记忆服务。"""
+        try:
+            from .memory_service import LifeMemoryService
+
+            cfg = self._cfg()
+            workspace = Path(cfg.settings.workspace_path)
+            self._memory_service = LifeMemoryService(workspace)
+            await self._memory_service.initialize()
+            logger.info("life_engine 仿生记忆服务已初始化")
+        except Exception as e:
+            logger.error(f"记忆服务初始化失败: {e}", exc_info=True)
+            self._memory_service = None
+
+    async def _maybe_run_daily_decay(self) -> None:
+        """每日运行一次记忆衰减任务。"""
+        if not self._memory_service:
+            return
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self._last_decay_date == today:
+            return
+
+        try:
+            update_count = await self._memory_service.apply_decay()
+            self._last_decay_date = today
+            if update_count > 0:
+                logger.info(
+                    f"life_engine 记忆衰减完成: "
+                    f"更新节点={update_count}"
+                )
+        except Exception as e:
+            logger.error(f"记忆衰减任务失败: {e}", exc_info=True)

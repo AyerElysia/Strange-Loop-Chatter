@@ -428,6 +428,10 @@ class LifeEngineWriteFileTool(BaseTool):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding=encoding)
             stat = target.stat()
+            
+            # 触发记忆系统同步 embedding
+            await self._sync_memory_embedding(path, content)
+            
             return True, {
                 "action": "write_file",
                 "path": path,
@@ -440,6 +444,17 @@ class LifeEngineWriteFileTool(BaseTool):
         except Exception as e:
             logger.error(f"写入文件失败 {path}: {e}", exc_info=True)
             return False, f"写入文件失败: {e}"
+
+    async def _sync_memory_embedding(self, path: str, content: str) -> None:
+        """同步文件内容到记忆系统。"""
+        try:
+            from .service import LifeEngineService
+
+            service = LifeEngineService.get_instance()
+            if service and service._memory_service:
+                await service._memory_service.sync_file_embedding(path, content)
+        except Exception as e:
+            logger.warning(f"同步记忆 embedding 失败 {path}: {e}")
 
 
 class LifeEngineEditFileTool(BaseTool):
@@ -489,6 +504,9 @@ class LifeEngineEditFileTool(BaseTool):
             target.write_text(new_content, encoding=encoding)
             stat = target.stat()
 
+            # 触发记忆系统同步 embedding
+            await self._sync_memory_embedding(path, new_content)
+
             return True, {
                 "action": "edit_file",
                 "path": path,
@@ -503,6 +521,17 @@ class LifeEngineEditFileTool(BaseTool):
         except Exception as e:
             logger.error(f"编辑文件失败 {path}: {e}", exc_info=True)
             return False, f"编辑文件失败: {e}"
+
+    async def _sync_memory_embedding(self, path: str, content: str) -> None:
+        """同步文件内容到记忆系统。"""
+        try:
+            from .service import LifeEngineService
+
+            service = LifeEngineService.get_instance()
+            if service and service._memory_service:
+                await service._memory_service.sync_file_embedding(path, content)
+        except Exception as e:
+            logger.warning(f"同步记忆 embedding 失败 {path}: {e}")
 
 
 class LifeEngineMoveFileTool(BaseTool):
