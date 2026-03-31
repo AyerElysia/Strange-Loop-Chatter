@@ -855,14 +855,23 @@ class OpenAIChatClient:
             params["temperature"] = float(temperature)
 
         # 允许每模型注入额外参数（如 top_p/response_format/tool_choice 等）
-        # 注意：tool_choice 的默认策略会在 tools 分支中补齐。
         params.update(extra_params)
+
+        # 判定是否开启了思考模式（兼容：SiliconFlow/DashScope 等参数名）
+        # 思考模式通常与 tool_choice="required" 冲突。
+        enable_thinking = extra_params.get("enable_thinking")
+        thinking_enabled = bool(enable_thinking) if enable_thinking is not None else False
+
         if openai_tools and not tool_call_compat:
             params["tools"] = openai_tools
             if "tool_choice" not in params:
-                # 默认策略：统一使用 required。
-                # 如果无法支持请在 model_set.extra_params 显式传入 tool_choice="auto"。
-                params["tool_choice"] = "required"
+                # 如果开启了思考模式，默认使用 auto 而非 required，避免 API 报错。
+                if thinking_enabled:
+                    params["tool_choice"] = "auto"
+                else:
+                    # 默认策略：统一使用 required。
+                    # 如果无法支持请在 model_set.extra_params 显式传入 tool_choice="auto"。
+                    params["tool_choice"] = "required"
         else:
             params.pop("tool_choice", None)
 

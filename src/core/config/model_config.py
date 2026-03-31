@@ -27,6 +27,7 @@
     ```
 """
 
+import random
 from threading import Lock as ThreadLock
 from typing import Any, Literal, cast
 
@@ -187,6 +188,12 @@ class TaskConfigSection(SectionBase):
     concurrency_count: int = Field(
         default=1,
         description="并发请求数量",
+    )
+    secondary_pick_prob: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="当任务模型列表至少有两个模型时，首选第二个模型的概率",
     )
     embedding_dimension: int | None = Field(
         default=None,
@@ -476,6 +483,20 @@ class ModelConfig(ConfigBase):
         """
         # 获取任务配置
         task_config = self.model_tasks.get_task(task_name)
+
+        model_names = list(task_config.model_list)
+        if len(model_names) >= 2:
+            try:
+                secondary_pick_prob = float(task_config.secondary_pick_prob)
+            except Exception:
+                secondary_pick_prob = 0.0
+            if secondary_pick_prob < 0.0:
+                secondary_pick_prob = 0.0
+            elif secondary_pick_prob > 1.0:
+                secondary_pick_prob = 1.0
+
+            if secondary_pick_prob > 0.0 and random.random() < secondary_pick_prob:
+                model_names[0], model_names[1] = model_names[1], model_names[0]
         
         # 构建 ModelSet
         model_set: list[dict[str, Any]] = []
@@ -492,7 +513,7 @@ class ModelConfig(ConfigBase):
         except Exception:
             global_extra_params = {}
         
-        for model_name in task_config.model_list:
+        for model_name in model_names:
             # 获取模型信息
             model_info = self.get_model(model_name)
             
