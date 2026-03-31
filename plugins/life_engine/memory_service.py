@@ -540,7 +540,7 @@ class LifeMemoryService:
             request = create_embedding_request(
                 model_set=model_set,
                 request_name="life_memory_embedding",
-                texts=[text]
+                inputs=[text]
             )
             response = await request.send(stream=False)
             embeddings = getattr(response, "embeddings", None) or []
