@@ -452,7 +452,7 @@ class LifeEngineWriteFileTool(BaseTool):
 
             service = LifeEngineService.get_instance()
             if service and service._memory_service:
-                await service._memory_service.sync_file_embedding(path, content)
+                await service._memory_service.sync_embedding(path, content)
         except Exception as e:
             logger.warning(f"同步记忆 embedding 失败 {path}: {e}")
 
@@ -529,7 +529,7 @@ class LifeEngineEditFileTool(BaseTool):
 
             service = LifeEngineService.get_instance()
             if service and service._memory_service:
-                await service._memory_service.sync_file_embedding(path, content)
+                await service._memory_service.sync_embedding(path, content)
         except Exception as e:
             logger.warning(f"同步记忆 embedding 失败 {path}: {e}")
 

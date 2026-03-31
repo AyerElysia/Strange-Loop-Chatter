@@ -1246,8 +1246,9 @@ class LifeEngineService(BaseService):
         """获取中枢可用的工具类列表。"""
         from .tools import ALL_TOOLS
         from .todo_tools import TODO_TOOLS
+        from .memory_tools import MEMORY_TOOLS
         
-        return ALL_TOOLS + TODO_TOOLS
+        return ALL_TOOLS + TODO_TOOLS + MEMORY_TOOLS
 
     async def _execute_heartbeat_tool_call(
         self,
