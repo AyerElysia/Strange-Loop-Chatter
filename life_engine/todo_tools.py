@@ -102,6 +102,7 @@ class LifeTodo:
     created_at: str = ""
     updated_at: str = ""
     target_time: str | None = None  # 希望什么时候做（不是截止时间）
+    deadline: str | None = None  # 截止时间（YYYY-MM-DD 格式）
 
     # 额外信息
     tags: list[str] = field(default_factory=list)
@@ -113,6 +114,30 @@ class LifeTodo:
             self.created_at = _now_iso()
         if not self.updated_at:
             self.updated_at = _now_iso()
+    
+    def days_until_deadline(self) -> int | None:
+        """计算距离截止时间还有几天。
+        
+        Returns:
+            正数：还有 N 天
+            0：今天截止
+            负数：逾期 N 天
+            None：没有截止时间
+        """
+        if not self.deadline:
+            return None
+        
+        try:
+            from datetime import datetime, timezone
+            deadline_dt = datetime.fromisoformat(self.deadline)
+            now = datetime.now(timezone.utc).astimezone()
+            # 只比较日期，忽略时间
+            deadline_date = deadline_dt.date()
+            now_date = now.date()
+            delta = (deadline_date - now_date).days
+            return delta
+        except Exception:
+            return None
 
 
 class TodoStorage:
@@ -218,11 +243,17 @@ class LifeEngineCreateTodoTool(BaseTool):
         tags: Annotated[list[str], "相关标签"] = None,
         notes: Annotated[str, "关于这件事的想法和感受"] = "",
         target_time: Annotated[str, "希望什么时候做（不是截止时间，只是期望）"] = None,
+        deadline: Annotated[str, "截止时间（YYYY-MM-DD 格式，如 2026-04-15）。不要总说'等合适的时机'，给自己一个期限吧"] = None,
     ) -> tuple[bool, str | dict]:
         """创建一个新的 TODO。
 
         这不是工作任务，而是生活中想做的事情 - 可能是想尝试的事、
         想探索的领域、想体验的感受、想学习的知识等。
+        
+        **关于截止时间：**
+        - 有些事情需要在特定时间前完成（如节日惊喜、生日礼物）
+        - 给自己一个期限，避免无限拖延
+        - 超过截止时间未完成的 TODO 应该考虑删除或重新评估
 
         Returns:
             成功返回 (True, {"id": ..., "title": ..., ...})
@@ -241,6 +272,7 @@ class LifeEngineCreateTodoTool(BaseTool):
                 tags=tags or [],
                 notes=notes,
                 target_time=target_time,
+                deadline=deadline,
             )
 
             storage.add(todo)
@@ -273,6 +305,7 @@ class LifeEngineEditTodoTool(BaseTool):
         tags: Annotated[list[str], "新标签列表（完全替换）"] = None,
         notes: Annotated[str, "更新想法和感受"] = None,
         target_time: Annotated[str, "更新期望时间"] = None,
+        deadline: Annotated[str, "更新截止时间（YYYY-MM-DD 格式）"] = None,
         completion_feeling: Annotated[str, "完成后的感受（仅completed/cherished状态时填写）"] = None,
     ) -> tuple[bool, str | dict]:
         """编辑已有的 TODO。
@@ -298,6 +331,7 @@ class LifeEngineEditTodoTool(BaseTool):
                 ("tags", tags),
                 ("notes", notes),
                 ("target_time", target_time),
+                ("deadline", deadline),
                 ("completion_feeling", completion_feeling),
             ]:
                 if value is not None:
@@ -379,21 +413,46 @@ class LifeEngineListTodosTool(BaseTool):
 
                 filtered.append(todo)
 
-            # 按想做程度和意义排序
+            # 按截止时间紧急程度和想做程度排序
             desire_order = {"dreaming": 0, "curious": 1, "wanting": 2, "eager": 3, "passionate": 4}
             meaning_order = {"casual": 0, "enriching": 1, "growing": 2, "meaningful": 3, "transforming": 4}
-            filtered.sort(
-                key=lambda t: (
-                    -desire_order.get(t.desire, 0),
-                    -meaning_order.get(t.meaning, 0),
-                ),
-            )
+            
+            def sort_key(t):
+                # 计算截止时间优先级（越紧急越优先）
+                days_left = t.days_until_deadline()
+                if days_left is None:
+                    deadline_priority = 9999  # 没有截止时间，优先级最低
+                elif days_left < 0:
+                    deadline_priority = -1000 + days_left  # 已逾期，最高优先级
+                else:
+                    deadline_priority = days_left  # 按剩余天数排序
+                
+                return (
+                    deadline_priority,  # 首先按截止时间紧急程度
+                    -desire_order.get(t.desire, 0),  # 其次按想做程度
+                    -meaning_order.get(t.meaning, 0),  # 最后按意义
+                )
+            
+            filtered.sort(key=sort_key)
+            
+            # 统计截止时间情况
+            overdue_count = 0
+            urgent_count = 0  # 3天内截止
+            for todo in filtered:
+                days_left = todo.days_until_deadline()
+                if days_left is not None:
+                    if days_left < 0:
+                        overdue_count += 1
+                    elif days_left <= 3:
+                        urgent_count += 1
 
             return True, {
                 "action": "list_todos",
                 "todos": [asdict(t) for t in filtered],
                 "total": len(filtered),
                 "all_count": len(all_todos),
+                "overdue_count": overdue_count,
+                "urgent_count": urgent_count,
                 "filters_applied": {
                     "status": status,
                     "desire_min": desire_min,
