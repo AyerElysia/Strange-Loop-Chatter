@@ -27,33 +27,24 @@ class LifeEngineSearchMemoryTool(BaseTool):
     """语义检索 + 联想工具。"""
 
     tool_name: str = "nucleus_search_memory"
-    tool_description: str = """搜索记忆并触发联想。
-
-结合关键词搜索和语义检索，找到相关的记忆。
-如果启用联想，会自动沿着关联路径找到更多相关记忆。
-
-参数：
-- query: 搜索问题（必填）
-- top_k: 返回数量，默认 5
-- enable_association: 是否启用联想，默认 True
-- file_types: 限定文件类型列表（可选），如 ["diary", "note", "todo"]
-- time_range_days: 时间范围，0 表示不限（可选）
-
-返回：
-- 直接命中的记忆（source="direct"）
-- 联想到的记忆（source="associated"），包含联想路径和原因
-
-示例：
-```
-nucleus_search_memory(query="我之前想学什么乐器")
-→ 返回日记中提到吉他的段落，以及联想到的学习规划笔记
-```
-
-注意：
-- 搜索会自动增加命中记忆的激活强度
-- 经常一起被检索到的记忆，它们之间的关联会自动增强
-- 长期不访问的记忆会逐渐被遗忘（激活强度降低）
-"""
+    tool_description: str = (
+        "搜索记忆并触发联想。结合关键词和语义检索，找到相关的记忆。"
+        "\n\n"
+        "**何时使用：**\n"
+        "- ✓ 想回忆「我之前对XX有过什么想法」\n"
+        "- ✓ 搜索一个主题的所有相关记忆\n"
+        "- ✓ 探索记忆之间的潜在联系\n"
+        "\n"
+        "**何时不用：**\n"
+        "- ✗ 知道确切文件路径 → 用 nucleus_read_file\n"
+        "- ✗ 搜索文件中的具体关键词 → 用 nucleus_grep_file\n"
+        "\n"
+        "**💡 联想结果怎么看：**\n"
+        "- source='direct'：直接命中的记忆\n"
+        "- source='associated'：通过关联路径联想到的，association_path 显示联想路线\n"
+        "\n"
+        "**注意：** 搜索会自动增强命中记忆的激活强度，长期不访问的记忆会自然衰减。"
+    )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     def __init__(self, plugin):
@@ -130,37 +121,36 @@ class LifeEngineRelateFileTool(BaseTool):
     """建立文件关联工具。"""
 
     tool_name: str = "nucleus_relate_file"
-    tool_description: str = """建立两个文件之间的关联。
-
-当你发现两个文件之间有联系时，使用此工具记录关联关系。
-这会帮助未来的联想检索找到相关记忆。
-
-参数：
-- source_path: 源文件路径（workspace 相对路径，必填）
-- target_path: 目标文件路径（必填）
-- relation_type: 关联类型（必填），可选值：
-  - "relates": 相关（默认双向）
-  - "causes": 因果（A 导致/启发了 B）
-  - "continues": 延续（A 是 B 的后续）
-  - "contrasts": 对比（A 和 B 观点不同）
-- reason: 关联原因（必填！请具体描述为什么关联）
-- strength: 关联强度 0.1-1.0，默认 0.5
-
-示例：
-```
-nucleus_relate_file(
-    source_path="diaries/2026-03-30.md",
-    target_path="todos/学吉他.md",
-    relation_type="causes",
-    reason="日记中提到想学吉他的想法，启发了这个 TODO"
-)
-```
-
-注意：
-- reason 必须具体，不要写"可能相关"这种模糊原因
-- 关联会随着共同检索而自动增强
-- 长期不用的关联会自动衰减
-"""
+    tool_description: str = (
+        "建立两个记忆之间的关联——让你的记忆真正「活起来」的核心操作。"
+        "\n\n"
+        "**关联是什么？**\n"
+        "就像人类大脑在回忆一件事时会自然联想到相关的事。"
+        "你建立的每一条关联，都会在未来检索记忆时帮你「顺藤摸瓜」。"
+        "\n\n"
+        "**何时应该 relate：**\n"
+        "- ✓ 写完日记后，如果日记提到了某个愿景/TODO，relate 它们\n"
+        "- ✓ 完成一个 TODO 后，relate 这个 TODO 和记录了感受的日记\n"
+        "- ✓ 读到一篇笔记，发现它和之前的想法有延续关系\n"
+        "- ✓ 两个文件谈及相同的人、地点、主题\n"
+        "- ✓ 一个经历启发了一个新想法\n"
+        "\n"
+        "**关联类型选择：**\n"
+        "- relates：双向关联，最常用（'这两件事都和我对音乐的热爱有关'）\n"
+        "- causes：因果，A 直接催生了 B（'那篇反思日记让我下定决心创建这个目标'）\n"
+        "- continues：延续，B 是 A 的后续故事（'三月的日记是二月那篇的续集'）\n"
+        "- contrasts：对比，A 和 B 有有趣的张力（'一年前我觉得...现在我觉得...'）\n"
+        "\n"
+        "**reason 怎么写：**\n"
+        "❌ 错误：reason='可能有关系' 或 '都是日记'\n"
+        "✅ 正确：reason='三月记录了我开始学吉他的决定，这首 TODO 是因此而来的'\n"
+        "✅ 正确：reason='去年的反思和今天的日记都在处理同一个关于独处的问题'\n"
+        "\n"
+        "**🌱 培养习惯：**\n"
+        "1. 写了新文件后 → 想一想「它和我记忆里的什么相关？」\n"
+        "2. 完成了一件事 → relate 过程文件和感受文件\n"
+        "3. 看到了有趣的联系 → 立刻记录下来，不要遗忘"
+    )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     def __init__(self, plugin):
@@ -247,26 +237,13 @@ class LifeEngineViewRelationsTool(BaseTool):
     """查看文件关联图谱工具。"""
 
     tool_name: str = "nucleus_view_relations"
-    tool_description: str = """查看文件的关联图谱。
-
-显示指定文件与其他文件的关联关系。
-
-参数：
-- file_path: 文件路径（必填）
-- depth: 遍历深度 1-3，默认 1
-- min_strength: 最小关联强度阈值，默认 0.2
-
-返回：
-- center: 中心文件信息
-- outgoing: 从此文件指向其他文件的关联
-- incoming: 从其他文件指向此文件的关联
-
-示例：
-```
-nucleus_view_relations(file_path="diaries/2026-03-30.md")
-→ 显示这篇日记与哪些文件有关联
-```
-"""
+    tool_description: str = (
+        "查看文件的关联图谱：这个文件和哪些记忆有关联。\n\n"
+        "**何时使用：**\n"
+        "- ✓ 想看一篇日记连接了哪些记忆\n"
+        "- ✓ 探索一个主题在你记忆网络中的位置\n"
+        "- ✓ depth=2 可以看到“朋友的朋友”层级的关联"
+    )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     def __init__(self, plugin):
@@ -324,29 +301,12 @@ class LifeEngineForgetRelationTool(BaseTool):
     """删除或弱化关联工具。"""
 
     tool_name: str = "nucleus_forget_relation"
-    tool_description: str = """删除或弱化两个文件之间的关联。
-
-当关联不再有意义时，可以选择删除或弱化它。
-
-参数：
-- source_path: 源文件路径（必填）
-- target_path: 目标文件路径（必填）
-- mode: 操作模式，"delete" 删除 或 "weaken" 弱化，默认 "weaken"
-
-示例：
-```
-nucleus_forget_relation(
-    source_path="diaries/2026-03-30.md",
-    target_path="notes/废弃的想法.md",
-    mode="delete"
-)
-```
-
-注意：
-- weaken 模式会将关联强度降低 50%
-- delete 模式会完全删除关联
-- 自动建立的 ASSOCIATES 类型关联会随时间自动衰减，通常无需手动删除
-"""
+    tool_description: str = (
+        "删除或弱化两个文件之间的关联。\n\n"
+        "- weaken(默认)：将关联强度降低 50%\n"
+        "- delete：完全删除关联\n\n"
+        "**注意：** 自动建立的 ASSOCIATES 关联会随时间自然衰减，通常无需手动删除。"
+    )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     def __init__(self, plugin):
@@ -437,16 +397,7 @@ class LifeEngineMemoryStatsTool(BaseTool):
     """记忆系统统计工具。"""
 
     tool_name: str = "nucleus_memory_stats"
-    tool_description: str = """获取记忆系统的统计信息。
-
-返回：
-- file_nodes: 文件节点数量
-- concept_nodes: 概念节点数量
-- total_edges: 总关联数量
-- avg_activation: 平均激活强度
-
-用于了解记忆系统的整体状态。
-"""
+    tool_description: str = "获取记忆系统的统计信息：节点数量、关联数量、平均激活强度等。用于了解记忆网络的整体状态。"
     chatter_allow: list[str] = ["life_engine_internal"]
 
     def __init__(self, plugin):

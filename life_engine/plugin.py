@@ -18,6 +18,7 @@ from .service import LifeEngineService
 from .tools import ALL_TOOLS
 from .todo_tools import TODO_TOOLS
 from .memory_tools import MEMORY_TOOLS
+from .grep_tools import GREP_TOOLS
 
 
 logger = get_logger("life_engine", display="life_engine")
@@ -33,14 +34,16 @@ class LifeEnginePlugin(BasePlugin):
     特性：
     - 统一事件流：所有交互都是事件，按时间顺序展示
     - 文件系统操作：提供限定在 workspace 内的文件操作工具
-    - TODO 系统：为数字生命设计的待办事项系统
+    - Grep 搜索：在私人文件系统中搜索内容
+    - TODO 系统：为数字生命设计的生活愿望系统
     - 仿生记忆系统：语义检索、联想、遗忘机制
+    - 子代理系统：启动独立代理处理复杂任务
     - 可配置可见事件数：通过 context_history_max_events 控制
     """
 
     plugin_name: str = "life_engine"
     plugin_description: str = "生命中枢，维护并行心跳与统一事件流上下文"
-    plugin_version: str = "3.1.0"
+    plugin_version: str = "3.2.0"
 
     configs: list[type] = [LifeEngineConfig]
     dependent_components: list[str] = []
@@ -65,6 +68,7 @@ class LifeEnginePlugin(BasePlugin):
             *ALL_TOOLS,
             *TODO_TOOLS,
             *MEMORY_TOOLS,
+            *GREP_TOOLS,
         ]
 
     async def on_plugin_loaded(self) -> None:

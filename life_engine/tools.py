@@ -2,6 +2,11 @@
 
 为生命中枢提供限定在 workspace 内的文件系统操作能力。
 所有操作都限制在配置的 workspace_path 目录下，确保安全。
+
+设计理念（参考 Claude Code）：
+- 每个工具的描述都是一段使用指南，包含「何时用」和「何时不用」
+- 工具返回值精练，避免冗余字段淹没上下文
+- 先读后改，操作前确认
 """
 
 from __future__ import annotations
@@ -147,14 +152,21 @@ def _pick_latest_target_stream_id(plugin: Any) -> str | None:
 
 def _get_life_engine_service(plugin: Any):
     """获取 life_engine 服务实例。"""
+    from .service import LifeEngineService
+
+    return LifeEngineService.get_instance()
+
+
+async def _sync_memory_embedding_for_file(plugin: Any, path: str, content: str) -> None:
+    """同步文件内容到记忆系统（公共函数，消除重复）。"""
     try:
-        services = getattr(plugin, "_services", None) or []
-        for svc in services:
-            if hasattr(svc, "record_tell_dfc"):
-                return svc
-    except Exception:
-        pass
-    return None
+        from .service import LifeEngineService
+
+        service = LifeEngineService.get_instance()
+        if service and service._memory_service:
+            await service._memory_service.sync_embedding(path, content)
+    except Exception as e:
+        logger.warning(f"同步记忆 embedding 失败 {path}: {e}")
 
 
 # 冷却时间常量（分钟）
@@ -346,19 +358,31 @@ class LifeEngineReadFileTool(BaseTool):
     """读取文件内容工具。"""
 
     tool_name: str = "nucleus_read_file"
-    tool_description: str = "读取工作空间内指定文件的内容。"
+    tool_description: str = (
+        "读取你私人空间中的文件内容。"
+        "\n\n"
+        "**何时使用：**\n"
+        "- ✓ 回顾自己写过的日记、笔记、计划\n"
+        "- ✓ 查看某个文件的具体内容\n"
+        "- ✓ 在编辑文件前，先读取确认内容\n"
+        "\n"
+        "**何时不用：**\n"
+        "- ✗ 不知道文件路径 → 先用 nucleus_list_files 或 nucleus_grep_file 找\n"
+        "- ✗ 想搜索内容关键词 → 用 nucleus_grep_file\n"
+        "\n"
+        "**注意：** 结果包含行号（从 1 开始），方便后续用 nucleus_edit_file 时定位。"
+        "大文件建议用 offset 和 limit 参数只读取需要的部分。"
+    )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(
         self,
         path: Annotated[str, "相对于工作空间的文件路径"],
+        offset: Annotated[int, "从第几行开始读（1-indexed），默认从头开始"] = 1,
+        limit: Annotated[int, "最多读取多少行，0 表示全部"] = 0,
         encoding: Annotated[str, "文件编码，默认utf-8"] = "utf-8",
     ) -> tuple[bool, str | dict]:
-        """读取文件内容。
-
-        Args:
-            path: 相对于工作空间的文件路径
-            encoding: 文件编码，默认为 utf-8
+        """读取文件内容，支持行号和偏移/限制。
 
         Returns:
             成功返回 (True, {"path": ..., "content": ..., "size": ...})
@@ -375,17 +399,38 @@ class LifeEngineReadFileTool(BaseTool):
             return False, f"路径不是文件: {path}"
 
         try:
-            content = target.read_text(encoding=encoding)
+            raw_content = target.read_text(encoding=encoding)
+            lines = raw_content.splitlines()
+            total_lines = len(lines)
+
+            # 应用 offset 和 limit
+            start_idx = max(0, offset - 1)
+            if limit > 0:
+                end_idx = min(total_lines, start_idx + limit)
+            else:
+                end_idx = total_lines
+
+            selected_lines = lines[start_idx:end_idx]
+            # 添加行号（cat -n 格式）
+            numbered_content = "\n".join(
+                f"{start_idx + i + 1}\t{line}"
+                for i, line in enumerate(selected_lines)
+            )
+
             stat = target.stat()
-            return True, {
+            result_data: dict[str, Any] = {
                 "action": "read_file",
                 "path": path,
-                "absolute_path": str(target),
-                "content": content,
-                "size": stat.st_size,
+                "content": numbered_content,
+                "total_lines": total_lines,
+                "showing": f"{start_idx + 1}-{end_idx}",
                 "size_human": _format_size(stat.st_size),
-                "modified_at": _format_time(stat.st_mtime),
             }
+            if end_idx < total_lines:
+                result_data["truncated"] = True
+                result_data["remaining_lines"] = total_lines - end_idx
+
+            return True, result_data
         except UnicodeDecodeError as e:
             return False, f"文件编码错误，请尝试其他编码: {e}"
         except Exception as e:
@@ -397,7 +442,23 @@ class LifeEngineWriteFileTool(BaseTool):
     """写入文件工具（覆盖）。"""
 
     tool_name: str = "nucleus_write_file"
-    tool_description: str = "在工作空间内创建或覆盖文件。"
+    tool_description: str = (
+        "创建新文件或覆盖已有文件的全部内容。"
+        "\n\n"
+        "**何时使用：**\n"
+        "- ✓ 写一篇新的日记、笔记或计划\n"
+        "- ✓ 创建一个全新的文件\n"
+        "- ✓ 需要完全重写某个文件的内容\n"
+        "\n"
+        "**何时不用：**\n"
+        "- ✗ 只想修改文件中的一小部分 → 用 nucleus_edit_file（更安全、更精准）\n"
+        "- ✗ 不确定文件当前内容 → 先用 nucleus_read_file 确认\n"
+        "\n"
+        "**⚠️ 注意：** 如果文件已存在，其全部内容会被覆盖。"
+        "修改文件的局部内容，优先使用 nucleus_edit_file。\n"
+        "**💡 记忆提示：** 写入新文件后，想一想它和已有文件有没有关联？"
+        "用 nucleus_relate_file 建立关联可以帮助未来的回忆。"
+    )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(
@@ -407,11 +468,6 @@ class LifeEngineWriteFileTool(BaseTool):
         encoding: Annotated[str, "文件编码，默认utf-8"] = "utf-8",
     ) -> tuple[bool, str | dict]:
         """写入文件（覆盖模式）。
-
-        Args:
-            path: 相对于工作空间的文件路径
-            content: 要写入的内容
-            encoding: 文件编码，默认为 utf-8
 
         Returns:
             成功返回 (True, {"path": ..., "size": ..., "created": ...})
@@ -428,59 +484,56 @@ class LifeEngineWriteFileTool(BaseTool):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding=encoding)
             stat = target.stat()
-            
+
             # 触发记忆系统同步 embedding
-            await self._sync_memory_embedding(path, content)
-            
+            await _sync_memory_embedding_for_file(self.plugin, path, content)
+
             return True, {
                 "action": "write_file",
                 "path": path,
-                "absolute_path": str(target),
-                "size": stat.st_size,
                 "size_human": _format_size(stat.st_size),
                 "created": not existed,
-                "modified_at": _format_time(stat.st_mtime),
             }
         except Exception as e:
             logger.error(f"写入文件失败 {path}: {e}", exc_info=True)
             return False, f"写入文件失败: {e}"
-
-    async def _sync_memory_embedding(self, path: str, content: str) -> None:
-        """同步文件内容到记忆系统。"""
-        try:
-            from .service import LifeEngineService
-
-            service = LifeEngineService.get_instance()
-            if service and service._memory_service:
-                await service._memory_service.sync_embedding(path, content)
-        except Exception as e:
-            logger.warning(f"同步记忆 embedding 失败 {path}: {e}")
 
 
 class LifeEngineEditFileTool(BaseTool):
     """编辑文件工具（查找替换）。"""
 
     tool_name: str = "nucleus_edit_file"
-    tool_description: str = "编辑工作空间内文件的特定内容（查找并替换）。"
+    tool_description: str = (
+        "精确编辑文件中的特定内容（查找并替换）。"
+        "\n\n"
+        "**何时使用：**\n"
+        "- ✓ 修改文件中的一段具体文字（如改日记中的一句话）\n"
+        "- ✓ 批量重命名文件中的某个词（用 replace_all=True）\n"
+        "\n"
+        "**使用规则：**\n"
+        "- 必须先用 nucleus_read_file 读取文件，确认要替换的内容\n"
+        "- old_text 必须与文件中的内容完全一致（包括缩进）\n"
+        "- 如果 old_text 在文件中出现多次且你只想改一处，提供更长的上下文使其唯一\n"
+        "- 用 replace_all=True 可以替换所有出现位置（如重命名变量）\n"
+        "\n"
+        "**何时不用：**\n"
+        "- ✗ 想重写整个文件 → 用 nucleus_write_file\n"
+        "- ✗ 还没看过文件内容 → 先用 nucleus_read_file"
+    )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(
         self,
         path: Annotated[str, "相对于工作空间的文件路径"],
-        old_text: Annotated[str, "要查找的原始文本"],
+        old_text: Annotated[str, "要查找的原始文本（必须与文件内容完全一致）"],
         new_text: Annotated[str, "替换后的新文本"],
+        replace_all: Annotated[bool, "是否替换所有出现的位置（默认只替换第一处）"] = False,
         encoding: Annotated[str, "文件编码，默认utf-8"] = "utf-8",
     ) -> tuple[bool, str | dict]:
         """编辑文件中的特定内容。
 
-        Args:
-            path: 相对于工作空间的文件路径
-            old_text: 要查找的原始文本
-            new_text: 替换后的新文本
-            encoding: 文件编码，默认为 utf-8
-
         Returns:
-            成功返回 (True, {"path": ..., "replacements": ..., "size": ...})
+            成功返回 (True, {"path": ..., "replacements": ...})
             失败返回 (False, error_message)
         """
         valid, result = _resolve_path(self.plugin, path)
@@ -498,23 +551,34 @@ class LifeEngineEditFileTool(BaseTool):
             count = content.count(old_text)
 
             if count == 0:
-                return False, f"未找到要替换的文本"
+                return False, (
+                    "未找到要替换的文本。请确认：\n"
+                    "1. 是否先用 nucleus_read_file 读取了最新内容？\n"
+                    "2. old_text 是否与文件内容完全一致（注意空格和缩进）？"
+                )
 
-            new_content = content.replace(old_text, new_text)
+            if count > 1 and not replace_all:
+                return False, (
+                    f"old_text 在文件中出现了 {count} 次，无法确定要替换哪一处。\n"
+                    "请提供更多上下文使 old_text 唯一，或使用 replace_all=True 替换全部。"
+                )
+
+            if replace_all:
+                new_content = content.replace(old_text, new_text)
+                replacements = count
+            else:
+                new_content = content.replace(old_text, new_text, 1)
+                replacements = 1
+
             target.write_text(new_content, encoding=encoding)
-            stat = target.stat()
 
             # 触发记忆系统同步 embedding
-            await self._sync_memory_embedding(path, new_content)
+            await _sync_memory_embedding_for_file(self.plugin, path, new_content)
 
             return True, {
                 "action": "edit_file",
                 "path": path,
-                "absolute_path": str(target),
-                "replacements": count,
-                "size": stat.st_size,
-                "size_human": _format_size(stat.st_size),
-                "modified_at": _format_time(stat.st_mtime),
+                "replacements": replacements,
             }
         except UnicodeDecodeError as e:
             return False, f"文件编码错误: {e}"
@@ -522,23 +586,17 @@ class LifeEngineEditFileTool(BaseTool):
             logger.error(f"编辑文件失败 {path}: {e}", exc_info=True)
             return False, f"编辑文件失败: {e}"
 
-    async def _sync_memory_embedding(self, path: str, content: str) -> None:
-        """同步文件内容到记忆系统。"""
-        try:
-            from .service import LifeEngineService
-
-            service = LifeEngineService.get_instance()
-            if service and service._memory_service:
-                await service._memory_service.sync_embedding(path, content)
-        except Exception as e:
-            logger.warning(f"同步记忆 embedding 失败 {path}: {e}")
-
 
 class LifeEngineMoveFileTool(BaseTool):
     """移动/重命名文件工具。"""
 
     tool_name: str = "nucleus_move_file"
-    tool_description: str = "在工作空间内移动或重命名文件/目录。"
+    tool_description: str = (
+        "移动或重命名文件/目录。\n\n"
+        "**何时使用：** 整理文件结构、重命名文件时。\n"
+        "**💡 记忆提示：** 移动文件后，原有的记忆关联仍然基于旧路径。"
+        "如果该文件有重要关联，在移动后用 nucleus_relate_file 重新建立。"
+    )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(
@@ -589,7 +647,12 @@ class LifeEngineDeleteFileTool(BaseTool):
     """删除文件工具。"""
 
     tool_name: str = "nucleus_delete_file"
-    tool_description: str = "删除工作空间内的文件或空目录。"
+    tool_description: str = (
+        "删除文件或目录。\n\n"
+        "**⚠️ 慎用：** 删除操作不可撤销。\n"
+        "- 非空目录需要 recursive=True\n"
+        "- 删除前建议先用 nucleus_read_file 确认内容"
+    )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(
@@ -658,7 +721,17 @@ class LifeEngineListFilesTool(BaseTool):
     """列出目录内容工具。"""
 
     tool_name: str = "nucleus_list_files"
-    tool_description: str = "列出工作空间内指定目录的文件和子目录。"
+    tool_description: str = (
+        "列出目录中的文件和子目录。\n\n"
+        "**何时使用：**\n"
+        "- ✓ 浏览自己的文件结构\n"
+        "- ✓ 确认某个目录下有什么文件\n"
+        "- ✓ 用 recursive=True 查看文件树\n"
+        "\n"
+        "**何时不用：**\n"
+        "- ✗ 想搜索文件内容 → 用 nucleus_grep_file\n"
+        "- ✗ 想看一个文件的详细信息 → 用 nucleus_file_info"
+    )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(
@@ -735,7 +808,7 @@ class LifeEngineFileInfoTool(BaseTool):
     """获取文件详细信息工具。"""
 
     tool_name: str = "nucleus_file_info"
-    tool_description: str = "获取工作空间内文件或目录的详细信息。"
+    tool_description: str = "获取文件或目录的详细元数据（大小、修改时间、子项数量等）。"
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(
@@ -796,7 +869,7 @@ class LifeEngineMakeDirectoryTool(BaseTool):
     """创建目录工具。"""
 
     tool_name: str = "nucleus_mkdir"
-    tool_description: str = "在工作空间内创建目录。"
+    tool_description: str = "创建新目录。已存在的目录不会报错。支持自动创建父目录。"
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(
@@ -844,179 +917,193 @@ class LifeEngineMakeDirectoryTool(BaseTool):
             return False, f"创建目录失败: {e}"
 
 
-class LifeEngineRunTaskTool(BaseTool):
-    """启动子任务执行复杂操作的工具。"""
+class LifeEngineRunAgentTool(BaseTool):
+    """启动子代理执行复杂操作的工具。"""
 
-    tool_name: str = "nucleus_run_task"
+    tool_name: str = "nucleus_run_agent"
     tool_description: str = (
-        "启动一个子任务来执行复杂的多步骤操作。"
+        "启动一个子代理来处理复杂的多步骤任务。子代理在独立的上下文中运行。"
         "\n\n"
-        "**适用场景：**\n"
-        "- 需要多次文件操作的复杂任务（如整理笔记、批量修改）\n"
-        "- 需要多步推理的分析任务（如总结一段时间的事件）\n"
-        "- 需要专注执行的独立任务（如写一篇日记）\n"
+        "**何时使用：**\n"
+        "- ✓ 需要多次文件操作的复杂任务（如整理笔记、批量修改）\n"
+        "- ✓ 需要多步推理的分析任务（如总结一段时间的变化）\n"
+        "- ✓ 需要专注执行的独立任务（如写一篇日记）\n"
         "\n"
-        "**注意：** 子任务会获得与你相同的工具权限，但在独立的上下文中执行。"
+        "**何时不用：**\n"
+        "- ✗ 单个简单的文件操作 → 直接用对应工具\n"
+        "- ✗ 只是想问一个问题或做简单计算 → 自己思考\n"
+        "\n"
+        "**写任务简报的原则（重要！）：**\n"
+        "像向刚进门的聪明同事简报一样写 task：\n"
+        "1. 说明要做什么、为什么这么做\n"
+        "2. 提供你已经知道的信息（文件路径、内容位置）\n"
+        "3. 说清楚期望的结果是什么样的\n"
+        "4. 不要写模糊的指令如「帮我整理一下」，要具体\n"
+        "\n"
+        "**❌ 错误示例：** task='整理我的笔记'\n"
+        "**✅ 正确示例：** task='把 notes/ 目录下所有 .md 文件按创建时间排序，"
+        "合并到 notes/archive/2026-03.md 中，保留原始标题作为二级标题'"
     )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(
         self,
-        task: Annotated[str, "任务描述：清晰说明要做什么、期望的结果"],
-        context: Annotated[str, "任务上下文：提供必要的背景信息"] = "",
-        tools_hint: Annotated[
-            list[str], 
-            "建议使用的工具（可选）：如 ['nucleus_read_file', 'nucleus_write_file']"
-        ] = None,
+        task: Annotated[str, "任务简报：说明要做什么、已知信息、期望结果"],
+        context: Annotated[str, "背景信息：你已经了解的、排除的、尝试过的"] = "",
+        expected_output: Annotated[str, "期望的输出形式（如 '生成一个文件' 或 '返回一段总结'）"] = "",
+        max_rounds: Annotated[int, "最大工具调用轮数（默认 5）"] = 5,
     ) -> tuple[bool, str | dict]:
-        """启动子任务。
-        
-        子任务会在独立上下文中执行，完成后返回结果。
-        适合需要多步操作的复杂任务。
-        
+        """启动子代理执行复杂任务。
+
+        子代理在独立上下文中运行，拥有与你相同的文件操作工具，
+        但不能使用 nucleus_tell_dfc 和 nucleus_run_agent（防止嵌套）。
+
         Returns:
-            成功返回 (True, {"task": ..., "result": ...})
+            成功返回 (True, {"task": ..., "result": ..., "rounds": ...})
             失败返回 (False, error_message)
         """
         if not task.strip():
             return False, "任务描述不能为空"
-        
-        # 构建子任务提示
-        task_prompt_parts = [
-            "# 子任务执行",
+
+        # 构建子代理提示词（简报原则）
+        prompt_parts = [
+            "你是生命中枢分派的子代理，正在完成一个具体任务。",
+            "完成后清晰地报告：做了什么、结果是什么、过程中发现了什么。",
             "",
-            "你被分配了一个具体任务。请专注完成它。",
+            "## 任务简报",
             "",
-            f"## 任务",
             task.strip(),
         ]
-        
+
         if context.strip():
-            task_prompt_parts.extend([
+            prompt_parts.extend([
                 "",
                 "## 背景信息",
+                "",
                 context.strip(),
             ])
-        
-        if tools_hint:
-            task_prompt_parts.extend([
+
+        if expected_output.strip():
+            prompt_parts.extend([
                 "",
-                "## 建议工具",
-                "- " + "\n- ".join(tools_hint),
+                "## 期望输出",
+                "",
+                expected_output.strip(),
             ])
-        
-        task_prompt_parts.extend([
+
+        prompt_parts.extend([
             "",
-            "## 执行要求",
-            "1. 直接开始执行任务，不要询问或确认",
-            "2. 使用必要的工具完成任务",
-            "3. 完成后简要总结结果",
-            "4. 如果遇到问题，说明原因并尽可能提供解决方案",
+            "## 执行原则",
+            "",
+            "- 直接开始执行，不要询问或确认",
+            "- 使用工具完成任务时，注意先读后改",
+            "- 完成后报告：(1) 做了什么 (2) 结果是什么 (3) 发现了什么",
+            "- 如果遇到阻碍，说明原因并报告当前已完成的部分",
         ])
-        
-        task_prompt = "\n".join(task_prompt_parts)
-        
+
+        task_prompt = "\n".join(prompt_parts)
+
         try:
-            # 获取服务和模型配置
             from .config import LifeEngineConfig
+
             config = getattr(self.plugin, "config", None)
             if not isinstance(config, LifeEngineConfig):
                 return False, "无法获取配置"
-            
-            # 使用与主心跳相同的模型
+
             from src.app.plugin_system.api.llm_api import create_llm_request, get_model_set_by_task
-            from src.kernel.llm import LLMPayload, ROLE, Text, ToolRegistry
-            
+            from src.kernel.llm import LLMPayload, ROLE, Text, ToolRegistry, ToolResult
+
             task_name = config.model.task_name or "life"
             model_set = get_model_set_by_task(task_name)
             if not model_set:
                 return False, f"找不到模型配置: {task_name}"
-            
-            # 获取工具
-            from .tools import ALL_TOOLS
+
+            # 获取子代理可用工具（排除自身和 tell_dfc，防止嵌套和越权）
             from .todo_tools import TODO_TOOLS
-            
+            from .memory_tools import MEMORY_TOOLS
+            from .grep_tools import GREP_TOOLS
+
+            excluded_names = {"nucleus_run_agent", "nucleus_tell_dfc"}
+            agent_tools = []
+            for tool_cls in ALL_TOOLS + TODO_TOOLS + MEMORY_TOOLS + GREP_TOOLS:
+                if hasattr(tool_cls, "tool_name") and tool_cls.tool_name not in excluded_names:
+                    agent_tools.append(tool_cls)
+
             registry = ToolRegistry()
-            for tool_cls in ALL_TOOLS + TODO_TOOLS:
-                # 排除自己和 tell_dfc
-                if tool_cls.tool_name in ("nucleus_run_task", "nucleus_tell_dfc"):
-                    continue
-                registry.register(tool_cls(plugin=self.plugin))
-            
-            # 构建系统提示
+            for tool_cls in agent_tools:
+                registry.register(tool_cls)
+
+            # 创建请求
             workspace = Path(config.settings.workspace_path)
             system_prompt = (
-                "你是一个执行子任务的助手。专注完成分配的任务，使用提供的工具。\n"
+                "你是生命中枢的子代理。接下来有一个具体任务需要你完成。\n"
                 f"工作空间: {workspace}\n"
-                "完成任务后，简要总结结果。"
+                "使用工具完成任务，最后简洁地报告结果。"
             )
-            
-            # 创建请求
-            request = create_llm_request(model_set, registry)
+
+            request = create_llm_request(
+                model_set=model_set,
+                request_name="life_engine_agent",
+            )
             request.add_payload(LLMPayload(ROLE.SYSTEM, Text(system_prompt)))
-            request.add_payload(LLMPayload(ROLE.TOOL, list(registry.get_all().values())))
+            request.add_payload(LLMPayload(ROLE.TOOL, agent_tools))
             request.add_payload(LLMPayload(ROLE.USER, Text(task_prompt)))
-            
-            # 执行（最多3轮工具调用）
-            max_rounds = 3
+
+            # 执行多轮工具调用
+            max_rounds = max(1, min(10, max_rounds))
             final_result = ""
-            
+            round_num = 0
+
+            response = await request.send(stream=False)
+
             for round_num in range(max_rounds):
-                # 发送请求
-                response_future = await request.send(stream=False)
-                response_text = await response_future
+                response_text = await response
                 reply_text = str(response_text or "").strip()
-                
-                # 检查是否有工具调用
-                call_list = list(getattr(response_future, "call_list", []) or [])
+
+                call_list = list(getattr(response, "call_list", []) or [])
                 if not call_list:
                     final_result = reply_text
                     break
-                
+
                 # 执行工具调用
                 for call in call_list:
                     tool_name = getattr(call, "name", "") or ""
                     raw_args = getattr(call, "args", {}) or {}
                     args = dict(raw_args) if isinstance(raw_args, dict) else {}
                     args.pop("reason", None)
-                    
-                    tool_cls = registry.get(tool_name)
-                    if tool_cls:
+
+                    usable_cls = registry.get(tool_name)
+                    if usable_cls:
                         try:
-                            tool_instance = tool_cls(plugin=self.plugin) if isinstance(tool_cls, type) else tool_cls
+                            tool_instance = usable_cls(plugin=self.plugin)
                             success, result = await tool_instance.execute(**args)
                             result_text = str(result) if success else f"失败: {result}"
-                        except Exception as e:
-                            result_text = f"异常: {e}"
+                        except Exception as exc:
+                            result_text = f"异常: {exc}"
                     else:
                         result_text = f"未知工具: {tool_name}"
-                    
-                    # 添加工具结果
-                    from src.kernel.llm import ToolResult
+
                     call_id = getattr(call, "id", None)
-                    response_future.add_payload(LLMPayload(
-                        ROLE.TOOL_RESULT,
-                        ToolResult(
-                            tool_call_id=call_id,
-                            tool_name=tool_name,
-                            content=result_text,
-                        ),
-                    ))
-                
-                # 继续下一轮
-                request = response_future
+                    response.add_payload(
+                        LLMPayload(
+                            ROLE.TOOL_RESULT,
+                            ToolResult(value=result_text, call_id=call_id, name=tool_name),
+                        )
+                    )
+
+                response = await response.send(stream=False)
             else:
-                final_result = f"子任务在 {max_rounds} 轮内未完成，最后状态: {reply_text[:200]}..."
-            
+                final_result = reply_text if reply_text else f"子代理在 {max_rounds} 轮内未完成"
+
             return True, {
-                "action": "run_task",
-                "task": task,
+                "action": "run_agent",
+                "task": task[:200],
                 "result": final_result,
                 "rounds": round_num + 1,
             }
-            
+
         except Exception as e:
-            logger.error(f"执行子任务失败: {e}", exc_info=True)
+            logger.error(f"执行子代理失败: {e}", exc_info=True)
             return False, f"执行失败: {e}"
 
 
@@ -1031,5 +1118,5 @@ ALL_TOOLS = [
     LifeEngineFileInfoTool,
     LifeEngineMakeDirectoryTool,
     LifeEngineWakeDFCTool,
-    LifeEngineRunTaskTool,
+    LifeEngineRunAgentTool,
 ]

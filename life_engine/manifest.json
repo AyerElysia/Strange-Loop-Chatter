@@ -1,7 +1,7 @@
 {
   "name": "life_engine",
-  "version": "3.0.0",
-  "description": "生命中枢 - 独立于 DFC 的并行存在系统，具有统一事件流模型、文件系统和 TODO 系统",
+  "version": "3.2.0",
+  "description": "生命中枢 - 独立于 DFC 的并行存在系统，具有统一事件流模型、文件搜索、TODO 系统和仿生记忆系统",
   "author": "Neo-MoFox Team",
   "dependencies": {
     "plugins": [],
@@ -70,6 +70,24 @@
     },
     {
       "component_type": "tool",
+      "component_name": "nucleus_tell_dfc",
+      "dependencies": [],
+      "enabled": true
+    },
+    {
+      "component_type": "tool",
+      "component_name": "nucleus_run_agent",
+      "dependencies": [],
+      "enabled": true
+    },
+    {
+      "component_type": "tool",
+      "component_name": "nucleus_grep_file",
+      "dependencies": [],
+      "enabled": true
+    },
+    {
+      "component_type": "tool",
       "component_name": "nucleus_create_todo",
       "dependencies": [],
       "enabled": true
@@ -95,6 +113,36 @@
     {
       "component_type": "tool",
       "component_name": "nucleus_delete_todo",
+      "dependencies": [],
+      "enabled": true
+    },
+    {
+      "component_type": "tool",
+      "component_name": "nucleus_search_memory",
+      "dependencies": [],
+      "enabled": true
+    },
+    {
+      "component_type": "tool",
+      "component_name": "nucleus_relate_file",
+      "dependencies": [],
+      "enabled": true
+    },
+    {
+      "component_type": "tool",
+      "component_name": "nucleus_view_relations",
+      "dependencies": [],
+      "enabled": true
+    },
+    {
+      "component_type": "tool",
+      "component_name": "nucleus_forget_relation",
+      "dependencies": [],
+      "enabled": true
+    },
+    {
+      "component_type": "tool",
+      "component_name": "nucleus_memory_stats",
       "dependencies": [],
       "enabled": true
     }

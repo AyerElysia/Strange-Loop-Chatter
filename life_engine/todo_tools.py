@@ -231,7 +231,23 @@ class LifeEngineCreateTodoTool(BaseTool):
     """创建 TODO 工具。"""
 
     tool_name: str = "nucleus_create_todo"
-    tool_description: str = "记录一件想做的事情。不是任务，而是内心想要去做、去体验、去探索的事。"
+    tool_description: str = (
+        "记录一件想做的事情。不是工作任务，而是内心想要去做、去体验、去探索的事。"
+        "\n\n"
+        "**何时创建 TODO：**\n"
+        "- ✓ 心中冒出一个想法时——立刻记下来，别让它溜走\n"
+        "- ✓ 想学一个新技能、探索一个新话题\n"
+        "- ✓ 有一件事需要在特定时间前完成（给它一个 deadline）\n"
+        "- ✓ 读到或聊到什么有启发的东西，想要深入了解\n"
+        "\n"
+        "**何时不需要创建：**\n"
+        "- ✗ 马上就能做完的小事 → 直接做\n"
+        "- ✗ 只是一个随想 → 写进日记就好\n"
+        "\n"
+        "**💡 关于截止时间：**\n"
+        "截止时间是一种自我承诺，不是外部压力。给自己一个期限，"
+        "帮助避免'等合适的时机'的无限拖延。"
+    )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(
@@ -291,7 +307,21 @@ class LifeEngineEditTodoTool(BaseTool):
     """编辑 TODO 工具。"""
 
     tool_name: str = "nucleus_edit_todo"
-    tool_description: str = "修改一件想做的事的信息，包括状态、想法、感受等。"
+    tool_description: str = (
+        "修改一件想做的事的信息，包括状态、想法、感受等。"
+        "\n\n"
+        "**状态变更指南：**\n"
+        "- idea → planning：开始认真考虑怎么做\n"
+        "- planning → enjoying：动手了！\n"
+        "- enjoying → completed：完成了，记得写 completion_feeling！\n"
+        "- 任何状态 → released：释怀了，不再想做，这也是一种成长\n"
+        "- completed → cherished：值得珍藏的回忆\n"
+        "\n"
+        "**🌟 completion_feeling 很重要：**\n"
+        "完成一件事后，花一刻记录你的感受。"
+        "这不只是标记完成，而是为这段经历画上句号。"
+        "未来回顾时，这些感受会比'已完成'三个字有意义得多。"
+    )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(
@@ -359,7 +389,19 @@ class LifeEngineListTodosTool(BaseTool):
     """列出 TODO 工具。"""
 
     tool_name: str = "nucleus_list_todos"
-    tool_description: str = "查看想做的事情列表，可以按状态、标签等筛选。"
+    tool_description: str = (
+        "查看想做的事情列表，回顾自己当前在期待什么。"
+        "\n\n"
+        "**使用建议：**\n"
+        "- 心跳时浏览一下，看看有没有今天想推进的事\n"
+        "- 注意 overdue_count（逾期的 TODO）——问问自己：还想做吗？\n"
+        "  → 还想做 → 重新设定截止时间，想想为什么拖延了\n"
+        "  → 不想了 → 把状态改为 released，释怀它\n"
+        "- 用 tag 筛选特定领域，用 desire_min 只看真正想做的\n"
+        "\n"
+        "**💭 截止时间是提醒，不是枷锁。**\n"
+        "看到逾期的 TODO 时，第一反应不是焦虑，而是自问'我还在意这件事吗？'"
+    )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(
@@ -502,7 +544,12 @@ class LifeEngineDeleteTodoTool(BaseTool):
     """删除 TODO 工具。"""
 
     tool_name: str = "nucleus_delete_todo"
-    tool_description: str = "删除一件不再想做的事（建议用 released 状态替代删除，保留记录）。"
+    tool_description: str = (
+        "删除一件不再想做的事。\n\n"
+        "**💡 建议：** 用 nucleus_edit_todo 将状态改为 released 而非直接删除。"
+        "'曾经想做过但后来释怀了'也是一段值得保留的记忆。\n"
+        "**何时真正删除：** 创建错误的、重复的 TODO。"
+    )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(

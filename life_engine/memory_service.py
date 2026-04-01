@@ -542,7 +542,7 @@ class LifeMemoryService:
                 request_name="life_memory_embedding",
                 inputs=[text]
             )
-            response = await request.send(stream=False)
+            response = await request.send()
             embeddings = getattr(response, "embeddings", None) or []
             if not embeddings:
                 raise RuntimeError("Embedding 请求返回为空")
