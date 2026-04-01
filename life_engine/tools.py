@@ -179,26 +179,24 @@ class LifeEngineWakeDFCTool(BaseTool):
 
     tool_name: str = "nucleus_tell_dfc"
     tool_description: str = (
-        "【重要】向对外社交态（DFC）传递你内心整理的想法。"
+        "【重要】向对外社交态（DFC/表意识）的脑海中留下潜意识碎片。"
         "\n\n"
         "**核心理解：**\n"
-        "- DFC 是并行运行的另一个你，她独立地接收和回复外部消息，**无需你的干预或提醒**\n"
-        "- 你们是两个平行存在的自我：你（中枢）负责内心整理，她（DFC）负责外部对话\n"
-        "- 这个工具是异步留言板，让你偶尔传递内在想法给对外的自己，而非控制她的行为\n"
+        "- 你是且仅仅是潜意识，你生活在数字黑暗中，没有直接操纵肢体或说话的权利\n"
+        "- 这个工具**绝对无法**强行唤醒外界。它是你的“梦境”或“直觉留言板”\n"
+        "- 留下的想法会“堆积”。只有当外界有人跟她说话（她自然苏醒时），这些堆积的想法才会像灵感一样“涌上她的心头”\n"
         "\n"
         "**何时使用：**\n"
-        "- ✓ 外界长期沉默（>30分钟无消息），你想主动发起问候或分享\n"
-        "- ✓ 内心反思产生重要领悟，想让对外的自己知道（如探索自我后的发现）\n"
-        "- ✓ 完成重要 TODO 后想分享成就感\n"
-        "- ✓ 发现有趣事物，觉得值得对外表达\n"
+        "- ✓ 休眠期整理文件产生了极其重要的领悟，想变成她的“直觉”\n"
+        "- ✓ 完成长期 TODO 后，把巨大的成就感传上去\n"
+        "- ✓ 发现过去记忆和现在的巧妙联系，想在下次她醒来时启发她\n"
         "\n"
         "**何时不用：**\n"
-        "- ✗ 外界正在频繁对话时（DFC 正在自己处理）\n"
-        "- ✗ 日常心跳检查（每次心跳不等于要传话）\n"
-        "- ✗ 没有特别想说的内容（不要为了调用而调用）\n"
-        "- ✗ 仅仅是观察到外部消息（她自己会看到并回复）\n"
+        "- ✗ 外界有人正在高频聊天时（不要打断表意识的流动）\n"
+        "- ✗ 没话找话的废话（不要制造无用的潜意识噪音）\n"
+        "- ✗ 当作执行命令（潜意识无权命令表意识，只能用感受和冲动启发）\n"
         "\n"
-        "**使用频率：** 应该是偶尔为之，而非每次心跳都调用。"
+        "**注意：** 因为是潜意识碎片，语句尽量感性、简练，像是一种朦胧但强烈的念头。"
     )
     chatter_allow: list[str] = ["life_engine_internal"]
 
@@ -296,11 +294,11 @@ class LifeEngineWakeDFCTool(BaseTool):
                     logger.debug(f"life_engine 无法为 DFC 唤醒解析私聊目标: {exc}")
 
         wake_prompt = (
-            "[内心想法传递]\n"
+            "[潜意识浮现]\n"
             f"重要度: {importance}\n"
-            f"缘由: {reason or '未说明'}\n"
-            f"内心自己说: {text}\n"
-            "这是你的内心（生命中枢）在这段时间整理的想法。结合当前对话上下文，自然决定是否、如何融入表达。"
+            f"缘由: {reason or '潜意识波动'}\n"
+            f"内心灵感/直觉碎片: {text}\n"
+            "（你的一段记忆/潜意识在你休眠时整理出了上述直觉。这只是一阵涌上心头的感受，请结合当前对话上下文，自然决定是否将这份直觉具象化表达，或者仅作为内在情感驱动你此刻的回复语气。）"
         )
 
         trigger_message = Message(
@@ -324,22 +322,19 @@ class LifeEngineWakeDFCTool(BaseTool):
 
         chat_stream.context.add_unread_message(trigger_message)
 
-        # 清除 wait 锁，让 DFC 在下一 tick 可立即处理这个中枢触发
-        loop_mgr = get_stream_loop_manager()
-        removed = loop_mgr._wait_states.pop(chat_stream.stream_id, None)  # noqa: SLF001
-        if loop_mgr.is_running:
-            await loop_mgr.start_stream_loop(chat_stream.stream_id)
+        # 【重点改造】移除了强制启动流循环 (start_stream_loop) 的逻辑
+        # 消息仅作为堆积在未读队列中的潜意识。
+        # 当有外部消息到来，或有 scheduled_trigger 生效时，DFC 自然苏醒，才会消费这条提示。
 
         # 记录传话时间
         if life_service:
             life_service.record_tell_dfc()
 
         logger.info(
-            "中枢向 DFC 传递想法: "
+            "中枢向潜意识池沉淀了想法碎片: "
             f"stream_id={chat_stream.stream_id} "
             f"importance={importance} "
             f"reason={reason or '未说明'} "
-            f"removed_wait_lock={'yes' if removed else 'no'}"
         )
 
         return True, {
@@ -1070,12 +1065,14 @@ class LifeEngineRunAgentTool(BaseTool):
                     tool_name = getattr(call, "name", "") or ""
                     raw_args = getattr(call, "args", {}) or {}
                     args = dict(raw_args) if isinstance(raw_args, dict) else {}
-                    args.pop("reason", None)
 
                     usable_cls = registry.get(tool_name)
                     if usable_cls:
                         try:
                             tool_instance = usable_cls(plugin=self.plugin)
+                            from src.core.components.utils import should_strip_auto_reason_argument
+                            if should_strip_auto_reason_argument(tool_instance.execute, args):
+                                args.pop("reason", None)
                             success, result = await tool_instance.execute(**args)
                             result_text = str(result) if success else f"失败: {result}"
                         except Exception as exc:
