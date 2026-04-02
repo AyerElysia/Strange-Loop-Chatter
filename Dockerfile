@@ -25,9 +25,6 @@ RUN uv sync --frozen --no-dev --no-install-project
 # ----- 最终运行镜像 -----
 FROM python:3.12.9-slim
 
-# 复制 uv（运行时插件依赖安装需要）
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-
 WORKDIR /app
 
 # 设置运行环境变量
@@ -35,10 +32,11 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH"
 
-# 安装运行时必要的系统库
+# 安装运行时必要的系统库，并安装 uv（插件依赖安装需要）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv
 
 # 从构建阶段复制虚环境
 COPY --from=builder /app/.venv /app/.venv
