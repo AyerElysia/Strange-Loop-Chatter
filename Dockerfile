@@ -25,6 +25,9 @@ RUN uv sync --frozen --no-dev --no-install-project
 # ----- 最终运行镜像 -----
 FROM python:3.12.9-slim
 
+# 复制 uv（运行时插件依赖安装需要）
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
 WORKDIR /app
 
 # 设置运行环境变量
