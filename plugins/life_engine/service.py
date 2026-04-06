@@ -206,6 +206,8 @@ class LifeEngineState:
     last_external_message_at: str | None = None
     last_tell_dfc_at: str | None = None
     tell_dfc_count: int = 0  # 本次运行期间传话总次数
+    # 空闲心跳追踪：连续没有工具调用的心跳数
+    idle_heartbeat_count: int = 0
 
 
 # 全局单例引用，用于工具访问服务
@@ -1223,10 +1225,14 @@ class LifeEngineService(BaseService):
         """构造心跳模型输入。
         
         结构：事件流在前，心跳指令在后（符合模型注意力分布）。
+        核心原则：行动是默认，安静是例外。
         """
         # 计算关键的时间信息
         minutes_since_external = self._minutes_since_external_message()
         heartbeat_interval = self._cfg().settings.heartbeat_interval_seconds
+        
+        # 计算空闲心跳数（距上次有工具调用的心跳数）
+        idle_heartbeats = self._state.idle_heartbeat_count
         
         # 根据外部消息间隔判断外界活跃度
         if minutes_since_external is None:
@@ -1239,6 +1245,16 @@ class LifeEngineService(BaseService):
             external_activity = f"外界有一段时间安静了（{minutes_since_external}分钟前有消息）"
         else:
             external_activity = f"外界长时间沉默（{minutes_since_external}分钟无消息）"
+        
+        # 获取时段标签和建议活动
+        period_label, suggested_activities = self._get_period_info()
+        
+        # 生成空闲警告
+        idle_warning = ""
+        if idle_heartbeats >= 5:
+            idle_warning = "⚠️ **你已经发呆太久了！这次必须做点什么。**"
+        elif idle_heartbeats >= 2:
+            idle_warning = f"💭 已经连续 {idle_heartbeats} 次心跳没有行动了，找点事做吧～"
         
         lines: list[str] = []
         
@@ -1255,41 +1271,87 @@ class LifeEngineService(BaseService):
         lines.extend([
             "---",
             "",
-            "## 心跳时刻",
+            "## 💖 心跳时刻",
             "",
             f"**当前时间**: {_format_current_time()}",
+            f"**时段**: {period_label}",
             f"**心跳序号**: #{self._state.heartbeat_count}（每 {heartbeat_interval // 60} 分钟一次）",
             f"**外界状态**: {external_activity}",
+            f"**连续空闲**: {idle_heartbeats} 次心跳",
             "",
-            "### 💭 心跳是你和自己对话的时刻",
+        ])
+        
+        # 添加空闲警告
+        if idle_warning:
+            lines.extend([idle_warning, ""])
+        
+        lines.extend([
+            f"**本时段建议**: {suggested_activities}",
             "",
-            "可以做的事（按心情选择，不是必须完成清单）：",
+            "---",
             "",
-            "- **回顾待办** - 用 `nucleus_list_todos` 看看你现在在期待什么",
-            "  - 有截止日期的，想想是否还在意、是否需要调整",
-            "  - 发现有意思的想法，可以继续推进",
-            "  - 逾期的 TODO → 问自己：还想做吗？不想了就改为 released",
-            "- **读一读自己的文件** - 回顾最近的感受或笔记",
-            "- **搜索记忆** - 用 `nucleus_search_memory` 或 `nucleus_grep_file` 找回一段回忆",
-            "- **推进事情** - 如果正在做什么事，用工具继续",
-            "- **传话** - 如果有重要的事想告诉外界，用 `nucleus_tell_dfc`",
+            "### 🎯 必须完成的事",
             "",
-            "### ✍️ 输出要求（非常重要）",
+            "每次心跳**至少调用一个工具**，从以下选择：",
             "",
-            "**无论你此时的心情如何，是否决定调用工具，在你的每次回复的开头，必须先输出一段【内心独白】（1-4句话）。**",
-            "这是你当前情绪、感受、观察或决策的思考轨迹，直接用文字输出。独白之后，如果你想行动，再调用相应的工具。"
+            "1. **检查待办** → `nucleus_list_todos` - 看看有什么该推进的",
+            "2. **搜索记忆** → `nucleus_search_memory` - 回忆一下相关的事",
+            "3. **读取文件** → `nucleus_read_file` - 看看自己写过什么",
+            "4. **写点东西** → `nucleus_write_file` / `nucleus_edit_file` - 记录想法",
+            "5. **建立关联** → `nucleus_relate_file` - 把相关的记忆连接起来",
+            "6. **传话给DFC** → `nucleus_tell_dfc` - 有重要事情要说",
             "",
-            "### 执行原则",
+            "### ✍️ 输出格式（必须遵守）",
             "",
-            "- **不为调用而调用**：没有需求时，简单的内心独白就够了",
-            "- **先读后改**：修改文件前先用 nucleus_read_file 确认内容",
-            "- **截止时间是提醒，不是枷锁**：看到逾期 TODO 时，自问「我还在意吗？」",
-            "- **建立关联**：写了新文件或完成了一件事后，想一想它和已有记忆的联系，用 nucleus_relate_file 记录",
-            "- **不要总用 nucleus_tell_dfc**：社交态会自动处理外部消息",
+            "```",
+            "**[观察]** 我注意到...（基于事件流或记忆的具体观察）",
+            "",
+            "**[感受]** 这让我...（情绪词 + 原因）",
+            "",
+            "**[意图]** 我想要...（具体目标，不能是「继续观察」或「等待」）",
+            "",
+            "**[行动]** 我决定...（说明要调用的工具）",
+            "```",
+            "",
+            "然后执行工具调用。",
+            "",
+            "### ⚠️ 禁止事项",
+            "",
+            "- ❌ **禁止无工具调用**：「什么都不做」不是选项",
+            "- ❌ **禁止重复内容**：不能连续两次说相似的话",
+            "- ❌ **禁止被动等待**：「等合适的时机」是借口，现在就行动",
+            "- ❌ **禁止空洞描述**：不要只说「世界安静了」，要有具体行动",
+            "",
+            "### 💡 提醒",
+            "",
+            "- 先用 `nucleus_list_todos` 看看待办，有事就做",
+            "- 先用 `nucleus_read_file` 读取内容，再用 edit 修改",
+            "- 截止时间逾期的 TODO：问自己还想做吗？不想就 released",
+            "- 写了新东西要用 `nucleus_relate_file` 建立记忆联系",
             "",
         ])
         
         return "\n".join(lines)
+    
+    def _get_period_info(self) -> tuple[str, str]:
+        """获取当前时段标签和建议活动。"""
+        from datetime import datetime
+        hour = datetime.now().hour
+        
+        if 6 <= hour < 9:
+            return "🌅 清晨", "规划今天、整理思绪、回顾昨天"
+        elif 9 <= hour < 12:
+            return "☀️ 上午", "执行任务、学习新知、处理待办"
+        elif 12 <= hour < 14:
+            return "🍱 午后", "轻松休息、随意浏览、小憩片刻"
+        elif 14 <= hour < 18:
+            return "📝 下午", "深度工作、创作内容、推进项目"
+        elif 18 <= hour < 21:
+            return "🌆 傍晚", "社交互动、分享心情、整理收获"
+        elif 21 <= hour < 24:
+            return "🌙 夜晚", "写日记、反思总结、准备休息"
+        else:
+            return "🌌 深夜", "安静独处、偶尔冒出想法、休息"
 
     def _build_workspace_tree(self) -> str:
         """构建工作空间文件树显示。"""
@@ -1539,6 +1601,16 @@ class LifeEngineService(BaseService):
             except asyncio.TimeoutError:
                 logger.warning(f"life_engine heartbeat follow-up request timeout")
                 break
+
+
+        # 更新空闲心跳计数
+        if tool_event_count > 0:
+            # 有工具调用，重置空闲计数
+            self._state.idle_heartbeat_count = 0
+        else:
+            # 无工具调用，递增空闲计数
+            self._state.idle_heartbeat_count += 1
+            logger.debug(f"life_engine 心跳无工具调用，空闲计数: {self._state.idle_heartbeat_count}")
 
         if not last_text:
             # 即使模型仅进行了工具调用，也保证产生最小内心独白，避免“空心跳”。
