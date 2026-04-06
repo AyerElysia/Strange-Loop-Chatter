@@ -530,7 +530,9 @@ class LifeMemoryService:
         
         vector_db_path = self._get_vector_db_path()
         vector_service = get_vector_db_service(vector_db_path)
-        self._chroma_collection = vector_service.get_or_create_collection("life_memory")
+        self._chroma_collection = await vector_service.get_or_create_collection(
+            "life_memory"
+        )
         return self._chroma_collection
     
     async def _embed_text(self, text: str) -> List[float]:
