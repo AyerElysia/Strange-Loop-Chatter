@@ -530,8 +530,7 @@ class LifeMemoryService:
         
         vector_db_path = self._get_vector_db_path()
         vector_service = get_vector_db_service(vector_db_path)
-        # 修复：核心漏写的 await，导致 collection 变成了协程对象
-        self._chroma_collection = await vector_service.get_or_create_collection("life_memory")
+        self._chroma_collection = vector_service.get_or_create_collection("life_memory")
         return self._chroma_collection
     
     async def _embed_text(self, text: str) -> List[float]:
@@ -562,10 +561,7 @@ class LifeMemoryService:
             embedding = await self._embed_text(content[:3000])  # 限制长度
             collection = await self._get_chroma_collection()
             
-            # 推荐做法：将同步的数据库 IO 放进线程池，避免阻塞心跳
-            import asyncio
-            await asyncio.to_thread(
-                collection.upsert,
+            collection.upsert(
                 ids=[node.node_id],
                 embeddings=[embedding],
                 documents=[content[:500]],
@@ -593,9 +589,7 @@ class LifeMemoryService:
             query_embedding = await self._embed_text(query)
             collection = await self._get_chroma_collection()
             
-            import asyncio
-            results = await asyncio.to_thread(
-                collection.query,
+            results = collection.query(
                 query_embeddings=[query_embedding],
                 n_results=top_k,
                 include=["distances"]

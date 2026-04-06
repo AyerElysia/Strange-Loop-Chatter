@@ -1065,14 +1065,12 @@ class LifeEngineRunAgentTool(BaseTool):
                     tool_name = getattr(call, "name", "") or ""
                     raw_args = getattr(call, "args", {}) or {}
                     args = dict(raw_args) if isinstance(raw_args, dict) else {}
+                    args.pop("reason", None)
 
                     usable_cls = registry.get(tool_name)
                     if usable_cls:
                         try:
                             tool_instance = usable_cls(plugin=self.plugin)
-                            from src.core.components.utils import should_strip_auto_reason_argument
-                            if should_strip_auto_reason_argument(tool_instance.execute, args):
-                                args.pop("reason", None)
                             success, result = await tool_instance.execute(**args)
                             result_text = str(result) if success else f"失败: {result}"
                         except Exception as exc:

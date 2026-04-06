@@ -1421,6 +1421,7 @@ class LifeEngineService(BaseService):
         tool_name = getattr(call, "name", "") or ""
         raw_args = getattr(call, "args", {}) or {}
         args = dict(raw_args) if isinstance(raw_args, dict) else {}
+        args.pop("reason", None)
 
         await self.record_tool_call(tool_name or "<unknown>", args)
 
@@ -1431,9 +1432,6 @@ class LifeEngineService(BaseService):
         else:
             try:
                 tool_instance = usable_cls(plugin=self.plugin)
-                from src.core.components.utils import should_strip_auto_reason_argument
-                if should_strip_auto_reason_argument(tool_instance.execute, args):
-                    args.pop("reason", None)
                 success, result = await tool_instance.execute(**args)
                 result_text = str(result) if success else f"执行失败: {result}"
             except Exception as exc:  # noqa: BLE001
@@ -1528,7 +1526,7 @@ class LifeEngineService(BaseService):
             )
             for call in call_list:
                 args = dict(call.args) if isinstance(getattr(call, "args", None), dict) else {}
-                reason = args.get("reason", "未提供原因")
+                reason = args.pop("reason", "未提供原因")
                 logger.info(
                     f"life_engine 心跳#{self._state.heartbeat_count} "
                     f"LLM 调用 {getattr(call, 'name', '<unknown>')}，原因: {reason}，参数: {args}"
