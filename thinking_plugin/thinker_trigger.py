@@ -1,7 +1,7 @@
 """思考触发器 - 事件处理器。
 
 订阅对话事件，在每次 LLM 生成回复前注入醒目的"先思考"提醒，
-并在 think 工具被调用后立即移除，实现"用完即删"。
+并在 think action 被调用后立即移除，实现"用完即删"。
 """
 
 from __future__ import annotations
@@ -22,14 +22,10 @@ from src.app.plugin_system.api.prompt_api import (
 logger = get_logger("thinking_plugin")
 
 # 醒目的思考触发器提醒内容
-THINK_TRIGGER_REMINDER = """
-╔═══════════════════════════════════════════════════════╗
-║  ⚠️  爱莉希雅，请先调用 think 工具思考一下！           ║
-║                                                       ║
-║  这是强制规则 —— 不 要 直 接 回 复！                     ║
-║  先 思 考，再 行 动。                                    ║
-╚═══════════════════════════════════════════════════════╝
-""".strip()
+THINK_TRIGGER_REMINDER = (
+    "本轮如果要调用 `action-send_text` 回复用户，必须先调用 `action-think`，"
+    "并且两者必须同轮出现，think 在前。不要直接发送正文。"
+)
 
 # 临时提醒的唯一标识名称
 TRIGGER_REMINDER_NAME = "think_trigger_temp"
@@ -39,7 +35,7 @@ class ThinkerTrigger(BaseEventHandler):
     """思考触发器
 
     在每次 LLM 生成回复前注入醒目的思考提醒，
-    当 think 工具被调用后立即移除，实现"用完即删"。
+    当 think action 被调用后立即移除，实现"用完即删"。
     """
 
     handler_name: str = "thinking_thinker_trigger"
@@ -63,13 +59,13 @@ class ThinkerTrigger(BaseEventHandler):
     ) -> tuple[EventDecision, dict[str, Any]]:
         """执行触发器
 
-        在 LLM 生成回复前注入提醒，在 think 工具执行后移除提醒。
+        在 LLM 生成回复前注入提醒，在 think action 执行后移除提醒。
         """
         try:
             # 检查配置是否启用
             config = getattr(self.plugin, "config", None)
             if config and hasattr(config, "settings"):
-                # 检查思考工具总开关
+                # 检查思考动作总开关
                 if not getattr(config.settings, "enabled", True):
                     return EventDecision.SUCCESS, params
                 # 检查触发器提醒开关
@@ -106,7 +102,7 @@ class ThinkerTrigger(BaseEventHandler):
             logger.warning(f"注入思考触发器失败：{e}")
 
     def remove_reminder(self) -> None:
-        """移除思考触发器提醒（由 think 工具调用时触发）"""
+        """移除思考触发器提醒（由 think action 调用时触发）"""
         try:
             store = _get_system_reminder_store()
             store.delete(bucket="actor", name=TRIGGER_REMINDER_NAME)

@@ -1,8 +1,8 @@
-"""Thinking Plugin - 思考工具插件。
+"""Thinking Plugin - 思考动作插件。
 
-提供 think 工具，让爱莉希雅能够展现思考过程，实现多步连续行动。
+提供 think action，让爱莉希雅在发送回复前展现思考动作。
 """
 
-from .tools.think_tool import ThinkTool
+from .actions.think_action import ThinkAction
 
-__all__ = ["ThinkTool"]
+__all__ = ["ThinkAction"]

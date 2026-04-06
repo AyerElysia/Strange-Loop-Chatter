@@ -1,7 +1,7 @@
 {
   "name": "thinking_plugin",
   "version": "1.0.0",
-  "description": "思考工具插件 - 让爱莉希雅展现内心活动，实现多步连续行动",
+  "description": "思考动作插件 - 让爱莉希雅在发送回复前展现内心活动",
   "author": "Neo-MoFox Team",
   "dependencies": {
     "plugins": [],
@@ -9,7 +9,7 @@
   },
   "include": [
     {
-      "component_type": "tool",
+      "component_type": "action",
       "component_name": "think",
       "dependencies": [],
       "enabled": true

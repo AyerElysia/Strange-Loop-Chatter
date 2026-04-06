@@ -1,17 +1,17 @@
-# Thinking Plugin - 思考工具插件
+# Thinking Plugin - 思考动作插件
 
 **版本：** 1.0.0
 **作者：** Neo-MoFox Team
 
 ## 功能介绍
 
-思考工具插件为 Elysia 提供"思考"能力，让她能够在回复用户之前展现思考过程，实现多步连续行动。
+思考插件为 Elysia 提供一个 `action-think`，让她在发送回复前先补一段内心动作。
 
 ### 核心能力
 
 - **展现思考过程**：让爱莉希雅的回复更有"人情味"
-- **多步连续行动**：思考 → 查询 → 再思考 → 回复
-- **自然终止**：当想清楚后，自动进入回复阶段
+- **发送前强制思考**：准备发送文本前，必须同轮先调用 `action-think`
+- **同轮组合约束**：`action-think` 必须与 `action-send_text` 同时使用，且顺序在前
 
 ## 使用场景
 
@@ -22,11 +22,8 @@
 
 爱莉希雅：
 "嗯…'那件事'具体指什么呢？让我想想…"
-（调用 think 工具记录思考）
-"我需要查查日记看看之前聊过什么…"
-（调用 read_diary 工具）
-"啊，找到了！你上次说的是工作调动的事情对吧？"
-（调用 send_text 回复）
+（先查日记）
+（真正回复时，同轮调用 action-think + action-send_text）
 ```
 
 ### 2. 信息查询问题
@@ -36,11 +33,8 @@
 
 爱莉希雅：
 "让我先整理一下思路…"
-（调用 think）
-"我需要先看看相关文件…"
-（调用 read_file）
-"根据文件内容，我的分析是…"
-（调用 send_text）
+（先查看文件）
+（真正回复时，同轮调用 action-think + action-send_text）
 ```
 
 ### 3. 复杂决策问题
@@ -49,12 +43,8 @@
 用户：这件事你怎么看？
 
 爱莉希雅：
-"这个问题有点复杂，让我好好想想…"
-（调用 think，记录分析过程）
-"从一方面来看…"
-（继续调用 think，深入分析）
-"综合考虑，我认为…"
-（调用 send_text 回复）
+"这个问题有点复杂，让我组织一下说法…"
+（同轮调用 action-think + action-send_text）
 ```
 
 ## 安装配置
@@ -70,7 +60,7 @@ plugins = ["thinking_plugin"]
 
 ### 2. 配置提示词（可选）
 
-思考工具的引导提示词可以在配置文件中自定义：
+思考动作的引导提示词可以在配置文件中自定义：
 
 **文件位置：** `config/plugins/thinking_plugin/config.toml`
 
@@ -92,26 +82,16 @@ python -m src.app.main
 
 ## 技术原理
 
-### FOLLOW_UP 机制
+### 当前设计
 
-`think` 是一个 **Tool**（不是 Action），调用后会触发 FOLLOW_UP 机制：
-
-```
-LLM 调用 think → 执行 → TOOL_RESULT 写回上下文
-    ↓
-FOLLOW_UP → LLM 再次调用（上下文包含思考内容）
-    ↓
-LLM 决定：继续思考 / 查询信息 / 回复用户
-```
-
-### 为什么是 Tool 不是 Action？
+`think` 现在是一个 **Action**（不是 Tool）：
 
 | 类型 | 返回值 | FOLLOW_UP | 用途 |
 |------|--------|-----------|------|
 | Tool | dict | ✅ 触发 | 查询信息 |
 | Action | str | ❌ 不触发 | 主动响应 |
 
-我们需要 LLM 看到思考结果后**继续决策**，所以必须是 Tool。
+因此 `action-think` 不再负责“思考后继续查资料”，而是负责“发送回复前，先记录一段思考动作”。
 
 ## 技术原理
 
@@ -120,31 +100,25 @@ plugins/thinking_plugin/
 ├── manifest.json          # 插件清单
 ├── __init__.py            # 包入口
 ├── plugin.py              # 插件主类
-├── tools/
+├── actions/
 │   ├── __init__.py
-│   └── think_tool.py      # 思考工具定义
+│   └── think_action.py    # 思考动作定义
 └── README.md              # 本文档
 ```
 
-## 工具接口
+## Action 接口
 
-### think 工具
+### think action
 
-**工具名称：** `think`
+**动作名称：** `action-think`
 
-**功能描述：** 在内心思考一下当前情况
+**功能描述：** 在发送回复前记录一段内心思考动作
 
 **参数：**
 - `thought` (str, 必填): 你的心理活动，写下你此刻的想法和分析过程
 
 **返回值：**
-```json
-{
-    "thought_recorded": true,
-    "thought_content": "你的思考内容",
-    "reminder": "思考已记录。现在你可以继续思考、查询信息或回复用户"
-}
-```
+`"思考动作已记录。请在同一轮内继续调用 action-send_text 发送最终回复。"`
 
 ## 最佳实践
 
@@ -152,63 +126,49 @@ plugins/thinking_plugin/
 
 ✅ 具体、真诚：
 ```
-think(thought="用户问'那件事'，但没具体说是什么。
-             可能是上次聊的工作调动，也可能是他说的烦恼。
-             我需要先查查日记看看之前聊过什么。")
+action-think(thought="我已经查到上下文了，现在要把意思说清楚，不要答得太硬。")
 ```
 
 ✅ 有分析过程：
 ```
-think(thought="这个问题涉及两个方面：
-             一是技术可行性，二是用户实际需求。
-             我需要先确认用户的具体场景…")
+action-think(thought="重点要先给结论，再补两句理由，不然会显得拖沓。")
 ```
 
 ### 不好的思考示例
 
 ❌ 敷衍、空洞：
 ```
-think(thought="嗯…")
+action-think(thought="嗯…")
 ```
 
 ❌ 没有实质内容：
 ```
-think(thought="我在思考")
+action-think(thought="我在思考")
 ```
 
 ## 故障排除
 
-### 问题：爱莉希雅不使用 think 工具
+### 问题：爱莉希雅没有同时调用 `action-think`
 
-**可能原因：** LLM 没有"想到"要先思考
+**可能原因：** 模型试图直接 `action-send_text`
 
 **解决方法：**
 1. 检查插件是否已加载（查看启动日志）
-2. 在提示词中强调思考习惯
-3. 等待模型自适应（多次对话后可能改善）
-
-### 问题：无限思考循环
-
-**现象：** 爱莉希雅一直调用 think，不回复
-
-**可能原因：** LLM 陷入"再想想"的循环
-
-**解决方法：**
-1. 当前版本依赖 LLM 自我终止
-2. 如频繁发生，可联系开发者加入最大迭代次数限制
+2. 检查 `default_chatter` 是否已更新到带有 think/send_text 同轮校验的版本
+3. 检查是否有其他系统提示词覆盖了该约束
 
 ## 版本历史
 
 ### 1.0.0 (2026-03-18)
 
 - 初始版本
-- 提供 think 工具
-- 支持 FOLLOW_UP 多轮对话
+- 提供 think action
+- 强制与 `action-send_text` 同轮使用
 
 ## 代码结构
 
 ## 相关文件
 
 - 方案文档：`report/thinking_plugin_proposal.md`
-- Tool 基类：`src/core/components/base/tool.py`
-- FOLLOW_UP 机制：`plugins/default_chatter/runners.py`
+- Action 基类：`src/core/components/base/action.py`
+- 调用流校验：`plugins/default_chatter/runners.py`

@@ -1,6 +1,6 @@
 """Thinking Plugin 配置。
 
-配置思考工具的提示词引导内容和启用状态，允许用户自定义思考习惯的引导方式。
+配置思考动作的提示词引导内容和启用状态，允许用户自定义思考习惯的引导方式。
 """
 
 from typing import ClassVar
@@ -17,7 +17,7 @@ class ThinkingConfig(BaseConfig):
     """
 
     config_name: ClassVar[str] = "config"
-    config_description: ClassVar[str] = "思考工具插件配置"
+    config_description: ClassVar[str] = "思考动作插件配置"
 
     @config_section("settings")
     class SettingsSection(SectionBase):
@@ -25,16 +25,16 @@ class ThinkingConfig(BaseConfig):
 
         enabled: bool = Field(
             default=True,
-            description="是否启用思考工具。设为 false 可临时禁用思考功能，无需从 core.toml 移除插件。",
+            description="是否启用思考动作。设为 false 可临时禁用思考功能，无需从 core.toml 移除插件。",
         )
         enable_trigger_reminder: bool = Field(
             default=True,
-            description="是否启用思考触发器提醒。设为 false 可禁用每次回复前的醒目提醒，但仍保留 think 工具。",
+            description="是否启用思考触发器提醒。设为 false 可禁用每次回复前的醒目提醒，但仍保留 think action。",
         )
 
     @config_section("fields")
     class FieldsSection(SectionBase):
-        """思考字段开关配置项。控制 think 工具返回的字段内容。"""
+        """思考字段开关配置项。控制 think action 的字段要求。"""
 
         enable_mood: bool = Field(
             default=False,
