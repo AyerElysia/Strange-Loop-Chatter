@@ -9,6 +9,12 @@
   },
   "include": [
     {
+      "component_type": "action",
+      "component_name": "schedule_followup_message",
+      "dependencies": [],
+      "enabled": true
+    },
+    {
       "component_type": "tool",
       "component_name": "wait_longer",
       "dependencies": [],

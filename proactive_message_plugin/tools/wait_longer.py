@@ -16,12 +16,13 @@ class WaitLongerTool(BaseTool):
     # 允许在默认聊天器（default_chatter）和主动消息插件的流程中使用
     chatter_allow: list[str] = ["proactive_message_plugin", "default_chatter"]
 
-    async def execute(self, wait_minutes: int, thought: str) -> str:
+    async def execute(self, wait_minutes: int, thought: str) -> tuple[bool, str]:
         """执行等待逻辑。
 
         Args:
             wait_minutes: 想要等待的时长（分钟）
             thought: 你的内心想法，为什么选择继续等待
         """
-        # 实际调度由插件处理，这里只返回确认信息
-        return f"好的，我会再等{wait_minutes}分钟。你的想法：{thought}"
+        # 实际调度由插件处理，这里只返回确认信息。
+        # Tool 协议必须返回 (success, result) 二元组。
+        return True, f"好的，我会再等{wait_minutes}分钟。你的想法：{thought}"

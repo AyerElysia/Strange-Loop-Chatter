@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from src.app.plugin_system.api import llm_api
+from src.core.components.base import BaseTool
 from src.core.components.base.chatter import BaseChatter
 from src.core.components.types import ChatType
 from src.core.config import get_core_config
@@ -17,7 +18,6 @@ from src.kernel.logger import get_logger
 from src.kernel.llm import LLMPayload, ROLE, Text
 
 from default_chatter.prompt_builder import DefaultChatterPromptBuilder
-from thinking_plugin.tools.think_tool import ThinkTool
 from emoji_sender.action import SendEmojiMemeAction
 from .tools.wait_longer import WaitLongerTool
 from default_chatter.plugin import SendTextAction
@@ -29,13 +29,42 @@ if TYPE_CHECKING:
 logger = get_logger("proactive_inner_monologue", display="内心独白")
 
 
+class ProactiveInnerMonologueThinkTool(BaseTool):
+    """主动独白专用 think schema。
+
+    这里只是为主动消息插件的私有 LLM 请求提供一个“记录内心独白”的 schema，
+    不依赖 thinking_plugin 的具体实现，也不会真的执行工具逻辑。
+    """
+
+    tool_name = "think"
+    tool_description = (
+        "在决定继续等待前，先记录一段内心独白。"
+        "这个工具只用于主动消息插件的私有独白流程，"
+        "用来表达你此刻的心理活动、情绪和接下来的打算。"
+    )
+
+    async def execute(
+        self,
+        thought: str,
+        mood: str,
+        decision: str,
+        expected_response: str,
+    ) -> tuple[bool, str]:
+        """返回一个占位结果，实际不会在该流程中执行。"""
+        return True, (
+            "内心独白已记录。"
+            f"thought={thought}; mood={mood}; decision={decision}; "
+            f"expected_response={expected_response}"
+        )
+
+
 @dataclass
 class InnerMonologueResult:
     """内心独白结果"""
 
     decision: str  # "send_message" 或 "wait_longer"
     thought: str  # 内心想法
-    content: str | None = None  # 如果要发消息，消息内容
+    content: str | list[str] | None = None  # 如果要发消息，消息内容
     wait_minutes: float | None = None  # 如果要等待，等待时长
 
 
@@ -73,11 +102,56 @@ INNER_MONOLOGUE_PROMPT = """# 关于你
 请将你的内心独白控制在 50~100 字左右，避免长篇大论。"""
 
 
+def _resolve_theme_guide(chat_stream: "ChatStream") -> str:
+    """根据聊天类型解析场景引导。"""
+    chat_type_raw = str(getattr(chat_stream, "chat_type", "") or "").lower()
+    try:
+        dc_plugin = get_plugin_manager().get_plugin("default_chatter")
+        dc_cfg = getattr(dc_plugin, "config", None)
+        theme_cfg = getattr(getattr(dc_cfg, "plugin", None), "theme_guide", None)
+        theme_private = getattr(theme_cfg, "private", "") if theme_cfg else ""
+        theme_group = getattr(theme_cfg, "group", "") if theme_cfg else ""
+    except Exception:
+        theme_private = ""
+        theme_group = ""
+
+    if chat_type_raw == ChatType.PRIVATE.value:
+        return theme_private
+    if chat_type_raw == ChatType.GROUP.value:
+        return theme_group
+    return ""
+
+
+async def _build_default_chatter_prompt(
+    chat_stream: "ChatStream",
+    prompt_text: str,
+) -> tuple[str | None, str]:
+    """复用 default_chatter 的 system/user prompt 结构。"""
+    default_chatter_plugin = get_plugin_manager().get_plugin("default_chatter")
+    default_chatter_config = getattr(default_chatter_plugin, "config", None)
+
+    system_prompt = await DefaultChatterPromptBuilder.build_system_prompt(
+        default_chatter_config,
+        chat_stream,
+    )
+    history_text = DefaultChatterPromptBuilder.build_enhanced_history_text(
+        chat_stream,
+        BaseChatter.format_message_line,
+    )
+    user_prompt = await DefaultChatterPromptBuilder.build_user_prompt(
+        chat_stream,
+        history_text=history_text,
+        unread_lines=prompt_text,
+        extra="",
+    )
+    return system_prompt, user_prompt
+
+
 async def generate_inner_monologue(
     chat_stream: "ChatStream",
     elapsed_minutes: float,
     user_name: str,
-    model_set: str = "actor",
+    model_set: str = "life",
 ) -> InnerMonologueResult | None:
     """生成内心独白并获取决策。
 
@@ -99,24 +173,7 @@ async def generate_inner_monologue(
     personality_core = core_config.personality.personality_core
     personality_side = core_config.personality.personality_side
 
-    # 获取场景引导（优先使用 default_chatter 配置）
-    chat_type_raw = str(getattr(chat_stream, "chat_type", "") or "").lower()
-    try:
-        dc_plugin = get_plugin_manager().get_plugin("default_chatter")
-        dc_cfg = getattr(dc_plugin, "config", None)
-        theme_cfg = getattr(getattr(dc_cfg, "plugin", None), "theme_guide", None)
-        theme_private = getattr(theme_cfg, "private", "") if theme_cfg else ""
-        theme_group = getattr(theme_cfg, "group", "") if theme_cfg else ""
-    except Exception:
-        theme_private = ""
-        theme_group = ""
-
-    if chat_type_raw == ChatType.PRIVATE.value:
-        theme_guide = theme_private
-    elif chat_type_raw == ChatType.GROUP.value:
-        theme_guide = theme_group
-    else:
-        theme_guide = ""
+    theme_guide = _resolve_theme_guide(chat_stream)
 
     # 构建 prompt
     conversation_history = extract_conversation_history(
@@ -157,29 +214,21 @@ async def generate_inner_monologue(
             request_name=f"inner_monologue_{stream_id}",
         )
 
-        default_chatter_plugin = get_plugin_manager().get_plugin("default_chatter")
-        default_chatter_config = getattr(default_chatter_plugin, "config", None)
-
-        system_prompt = await DefaultChatterPromptBuilder.build_system_prompt(
-            default_chatter_config,
+        system_prompt, user_prompt = await _build_default_chatter_prompt(
             chat_stream,
-        )
-        history_text = DefaultChatterPromptBuilder.build_enhanced_history_text(
-            chat_stream,
-            BaseChatter.format_message_line,
-        )
-        user_prompt = await DefaultChatterPromptBuilder.build_user_prompt(
-            chat_stream,
-            history_text=history_text,
-            unread_lines=prompt_text,
-            extra="",
+            prompt_text,
         )
 
         if system_prompt:
             llm_request.add_payload(LLMPayload(ROLE.SYSTEM, [Text(system_prompt)]))
 
         tool_registry = llm_api.create_tool_registry(
-            [ThinkTool, SendTextAction, SendEmojiMemeAction, WaitLongerTool]
+            [
+                ProactiveInnerMonologueThinkTool,
+                SendTextAction,
+                SendEmojiMemeAction,
+                WaitLongerTool,
+            ]
         )
         llm_request.add_payload(LLMPayload(ROLE.TOOL, tool_registry.get_all()))
         llm_request.add_payload(LLMPayload(ROLE.USER, [Text(user_prompt)]))
@@ -194,7 +243,7 @@ async def generate_inner_monologue(
 
         # 提取所有工具的 thought
         for call in call_list:
-            if call.name in {"think", "tool-think"} and isinstance(call.args, dict):
+            if call.name in {"think", "tool-think", "action-think"} and isinstance(call.args, dict):
                 thought_from_think = str(call.args.get("thought", "") or "").strip()
 
         # 检查工具调用获取决策

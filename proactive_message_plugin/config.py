@@ -51,6 +51,31 @@ class ProactiveMessageConfig(BaseConfig):
             description="主动发送后若无人回复，再次触发内心独白前的等待时间（分钟）",
         )
 
+        followup_enabled: bool = Field(
+            default=True,
+            description="是否启用延迟续话能力。启用后，模型可在发完消息后登记一条稍后补充的话。",
+        )
+
+        followup_min_delay_seconds: float = Field(
+            default=20.0,
+            description="延迟续话的最短等待秒数",
+        )
+
+        followup_max_delay_seconds: float = Field(
+            default=90.0,
+            description="延迟续话的最长等待秒数",
+        )
+
+        followup_max_chain_count: int = Field(
+            default=2,
+            description="同一轮延迟续话链允许的最大补充次数",
+        )
+
+        followup_cooldown_minutes: float = Field(
+            default=10.0,
+            description="延迟续话链结束后进入冷却的分钟数",
+        )
+
         monologue_history_limit: int = Field(
             default=5,
             description="内心独白提示中携带的历史独白条数",
