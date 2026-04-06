@@ -56,6 +56,7 @@ class _EnhancedWorkflowRuntime:
     cross_round_seen_signatures: set[str]
     unread_msgs_to_flush: list[Message]
     plain_text_retry_count: int = 0
+    last_continuous_memory_updated_at: str = ""
 
     def has_tool_result_tail(self) -> bool:
         """当前上下文尾部是否为 TOOL_RESULT。"""
@@ -185,6 +186,154 @@ def _append_suspend_if_tool_result_tail(
         logger.debug("已注入 SUSPEND 占位符（pass_and_wait 优先结束本轮）")
 
 
+def _inject_runtime_assistant_payloads(
+    rt: _EnhancedWorkflowRuntime,
+    chat_stream: ChatStream,
+    logger: Logger,
+) -> None:
+    """将外部插件注入的运行时 assistant 文本写入当前上下文。"""
+    payloads = getattr(rt.response, "payloads", None)
+    if not isinstance(payloads, list) or not payloads:
+        return
+
+    # 对话不能以 assistant 开始，必须已有 user 才可注入。
+    has_user = any(payload.role == ROLE.USER for payload in payloads)
+    if not has_user:
+        return
+
+    try:
+        from default_chatter import plugin as default_chatter_plugin_module
+
+        consume_runtime_assistant_injections = getattr(
+            default_chatter_plugin_module,
+            "consume_runtime_assistant_injections",
+            None,
+        )
+        if not callable(consume_runtime_assistant_injections):
+            return
+
+        texts = consume_runtime_assistant_injections(
+            chat_stream.stream_id,
+            max_items=8,
+        )
+        if not texts:
+            return
+
+        injected_count = 0
+        for text in texts:
+            normalized = str(text or "").strip()
+            if not normalized:
+                continue
+            rt.response.add_payload(LLMPayload(ROLE.ASSISTANT, Text(normalized)))
+            injected_count += 1
+
+        if injected_count > 0:
+            logger.info(f"[payload] 已注入运行时 assistant 上下文 {injected_count} 条")
+    except Exception as exc:
+        logger.debug(f"注入运行时 assistant 上下文失败：{exc}")
+
+
+def _drop_oldest_conversation_payloads(
+    response: LLMConversationState,
+    max_drop_count: int,
+) -> int:
+    """按会话顺序裁剪最旧对话 payload，保留 SYSTEM/TOOL 前缀。"""
+    if max_drop_count <= 0:
+        return 0
+
+    payloads = getattr(response, "payloads", None)
+    if not isinstance(payloads, list) or not payloads:
+        return 0
+
+    pinned_roles = {ROLE.SYSTEM, ROLE.TOOL}
+    pinned = [p for p in payloads if p.role in pinned_roles]
+    convo = [p for p in payloads if p.role not in pinned_roles]
+    if not convo:
+        return 0
+
+    groups: list[list[LLMPayload]] = []
+    current: list[LLMPayload] = []
+    for payload in convo:
+        if payload.role == ROLE.USER:
+            if current:
+                groups.append(current)
+            current = [payload]
+            continue
+        if not current:
+            groups.append([payload])
+            continue
+        current.append(payload)
+    if current:
+        groups.append(current)
+
+    # 至少保留一段最近上下文（按 max_drop_count 作为保留基线），
+    # 避免裁剪后会话内容被清空。
+    removable = max(0, len(convo) - max_drop_count)
+    if removable <= 0:
+        return 0
+
+    target_drop = min(max_drop_count, removable)
+    dropped = 0
+    while groups and dropped < target_drop:
+        dropped += len(groups.pop(0))
+
+    remaining = [payload for group in groups for payload in group]
+    while remaining and remaining[0].role != ROLE.USER:
+        remaining.pop(0)
+        dropped += 1
+
+    response.payloads = pinned + remaining
+    return dropped
+
+
+def _trim_payloads_if_continuous_memory_updated(
+    chatter: DefaultChatterRuntime,
+    chat_stream: ChatStream,
+    rt: _EnhancedWorkflowRuntime,
+    logger: Logger,
+) -> None:
+    """连续记忆更新后，裁剪当前请求中的最旧对话 payload。"""
+    try:
+        # 避免干扰 tool 调用闭环阶段。
+        if rt.phase != _ToolCallWorkflowPhase.WAIT_USER:
+            return
+
+        from src.app.plugin_system.api.service_api import get_service
+
+        service = get_service("diary_plugin:service:diary_service")
+        if service is None or not hasattr(service, "get_continuous_memory_summary"):
+            return
+
+        summary = service.get_continuous_memory_summary(  # type: ignore[attr-defined]
+            chat_stream.stream_id,
+            chat_stream.chat_type,
+        )
+        updated_at = str(summary.get("updated_at", "") or "").strip()
+        if not updated_at or updated_at == rt.last_continuous_memory_updated_at:
+            return
+        rt.last_continuous_memory_updated_at = updated_at
+
+        trim_count = 0
+        cfg = getattr(getattr(service, "plugin", None), "config", None)
+        if cfg is not None:
+            cm_cfg = getattr(cfg, "continuous_memory", None)
+            trim_count = int(
+                getattr(cm_cfg, "payload_history_trim_count_on_update", 0) or 0
+            )
+        if trim_count <= 0:
+            return
+
+        dropped = _drop_oldest_conversation_payloads(rt.response, trim_count)
+        if dropped > 0:
+            # 下一次采纳用户消息时重新带一次历史块，避免“历史区看起来空了”。
+            rt.history_merged = False
+            logger.info(
+                f"[cache] 检测到连续记忆更新，已裁剪最旧 payloads：{dropped} 条"
+            )
+    except Exception as exc:
+        logger.debug(f"连续记忆更新触发 payloads 裁剪失败：{exc}")
+
+
 async def run_enhanced(
     chatter: DefaultChatterRuntime,
     chat_stream: ChatStream,
@@ -219,6 +368,7 @@ async def run_enhanced(
 
     while True:
         _, unread_msgs = await chatter.fetch_unreads()
+        _trim_payloads_if_continuous_memory_updated(chatter, chat_stream, rt, logger)
 
         # 安全兜底：若上下文尾部为 TOOL_RESULT，必须进入 FOLLOW_UP
         if rt.phase == _ToolCallWorkflowPhase.WAIT_USER and rt.has_tool_result_tail():
@@ -228,6 +378,10 @@ async def run_enhanced(
                 logger=logger,
                 reason="context tail is TOOL_RESULT; must follow-up before new USER",
             )
+
+        # 在 WAIT_USER 且链路闭合时，消费外部运行时 assistant 注入。
+        if rt.phase == _ToolCallWorkflowPhase.WAIT_USER and not rt.has_tool_result_tail():
+            _inject_runtime_assistant_payloads(rt, chat_stream, logger)
 
         # FSM 驱动：每次循环只推进一个相位（或 yield）
         if rt.phase == _ToolCallWorkflowPhase.WAIT_USER:

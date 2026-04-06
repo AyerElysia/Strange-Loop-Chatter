@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random
 from collections.abc import Callable
 
 from src.core.components.types import ChatType
@@ -16,22 +15,6 @@ from .config import DefaultChatterConfig
 
 class DefaultChatterPromptBuilder:
     """Default Chatter 提示词构建器。"""
-
-    @staticmethod
-    def _clamp_probability(probability: float) -> float:
-        if probability < 0:
-            return 0.0
-        if probability > 1:
-            return 1.0
-        return probability
-
-    @staticmethod
-    def _should_include_persona_field(enabled: bool, probability: float) -> bool:
-        if not enabled:
-            return True
-        return random.random() < DefaultChatterPromptBuilder._clamp_probability(
-            probability
-        )
 
     @staticmethod
     def get_mode(plugin_config: DefaultChatterConfig | None) -> str:
@@ -95,58 +78,17 @@ class DefaultChatterPromptBuilder:
         identity = ""
         background_story = ""
 
-        probability_enabled = (
-            plugin_config is not None
-            and plugin_config.plugin.probabilistic_persona_injection_enabled
-        )
-
         try:
             personality = get_core_config().personality
         except Exception:
             personality = None
 
         if personality is not None:
-            if plugin_config is None:
-                personality_core = getattr(personality, "personality_core", "") or ""
-                personality_side = getattr(personality, "personality_side", "") or ""
-                reply_style = getattr(personality, "reply_style", "") or ""
-                identity = getattr(personality, "identity", "") or ""
-                background_story = (
-                    getattr(personality, "background_story", "") or ""
-                )
-            else:
-                settings = plugin_config.plugin
-                if DefaultChatterPromptBuilder._should_include_persona_field(
-                    probability_enabled,
-                    settings.personality_core_injection_probability,
-                ):
-                    personality_core = (
-                        getattr(personality, "personality_core", "") or ""
-                    )
-                if DefaultChatterPromptBuilder._should_include_persona_field(
-                    probability_enabled,
-                    settings.personality_side_injection_probability,
-                ):
-                    personality_side = (
-                        getattr(personality, "personality_side", "") or ""
-                    )
-                if DefaultChatterPromptBuilder._should_include_persona_field(
-                    probability_enabled,
-                    settings.reply_style_injection_probability,
-                ):
-                    reply_style = getattr(personality, "reply_style", "") or ""
-                if DefaultChatterPromptBuilder._should_include_persona_field(
-                    probability_enabled,
-                    settings.identity_injection_probability,
-                ):
-                    identity = getattr(personality, "identity", "") or ""
-                if DefaultChatterPromptBuilder._should_include_persona_field(
-                    probability_enabled,
-                    settings.background_story_injection_probability,
-                ):
-                    background_story = (
-                        getattr(personality, "background_story", "") or ""
-                    )
+            personality_core = getattr(personality, "personality_core", "") or ""
+            personality_side = getattr(personality, "personality_side", "") or ""
+            reply_style = getattr(personality, "reply_style", "") or ""
+            identity = getattr(personality, "identity", "") or ""
+            background_story = getattr(personality, "background_story", "") or ""
 
         return await (
             tmpl.set("platform", chat_stream.platform)
@@ -180,11 +122,12 @@ class DefaultChatterPromptBuilder:
         return await (
             tmpl
             .set("stream_name", stream_name)
+            .set("continuous_memory", "")
             .set("history", history_text)
             .set("unreads", unread_lines)
             .set("extra", extra)
-            # stream_id 不在模板占位符中，仅作为元数据随 on_prompt_build 事件 values 传递，
-            # 供 notice_injector 等插件按会话区分并注入内容
+            # stream_id 不在模板正文中，仅作为元数据随 on_prompt_build 事件 values 传递，
+            # 供连续记忆/notice 等插件按会话区分并注入内容
             .set("stream_id", chat_stream.stream_id or "")
             .build()
         )

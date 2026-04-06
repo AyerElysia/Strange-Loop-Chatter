@@ -7,7 +7,7 @@
 
 这版 `default_chatter` 的关键价值可以概括为 7 点：
 
-1. 人设随机注入：系统提示词的人设字段支持按概率独立采样注入，降低“每轮固定模板化复读”。
+1. 稳定人设注入：系统提示词始终注入完整人设字段，降低行为漂移与调参复杂度。
 2. 双执行模式：`enhanced`（FSM 连续回合）与 `classical`（单轮更克制）。
 3. 工具调用控制流：同轮/跨轮去重、`pass_and_wait` 分支、`action-only` 自动补 `__SUSPEND__`。
 4. 子代理决策：群聊先判定“要不要回”，私聊直接放行。
@@ -23,10 +23,10 @@ default_chatter/
 ├── runners.py                # enhanced/classical 两套执行器
 ├── tool_flow.py              # 工具调用处理、去重、SUSPEND 注入
 ├── decision_agent.py         # 子代理判定与 token 预算裁剪
-├── prompt_builder.py         # system/user prompt 组装与人设概率注入
+├── prompt_builder.py         # system/user prompt 组装
 ├── multimodal.py             # 图片/表情包/视频提取与 content 组装
 ├── nucleus_bridge.py         # DFC -> 生命中枢 的异步留言工具
-├── config.py                 # 配置模型定义（模式、调试、多模态、人设注入等）
+├── config.py                 # 配置模型定义（模式、调试、多模态等）
 ├── type_defs.py              # 运行时协议与类型约束
 ├── debug/
 │   ├── __init__.py
@@ -156,28 +156,17 @@ default_chatter/
 3. 场景引导：按聊天类型选择 `theme_guide.private` 或 `theme_guide.group`。
 4. 安全准则与负面行为：来自核心 personality 配置。
 
-### 概率人设注入（你这版最关键能力之一）
+### 人设注入策略
 
-当 `probabilistic_persona_injection_enabled=true` 时，各人设字段按独立概率注入：
+系统提示词会稳定注入完整人设字段：
 
-- `personality_core_injection_probability`
-- `personality_side_injection_probability`
-- `reply_style_injection_probability`
-- `identity_injection_probability`
-- `background_story_injection_probability`
+- `personality_core`
+- `personality_side`
+- `reply_style`
+- `identity`
+- `background_story`
 
-生效机制（对应 `prompt_builder.py`）：
-
-1. 每个字段单独做一次随机判定（`random.random() < probability`）。
-2. 概率会先被夹到 `[0, 1]` 区间，避免异常值导致行为失真。
-3. 开关关闭时，回退到“全量注入”（保持传统稳定行为）。
-4. 开关开启后，同一会话的不同轮次可能注入不同字段组合，形成“稳定人设下的表达弹性”。
-
-这套机制的实际意义：
-
-1. 降低固定模板感，减少每轮都重复同一套背景字段造成的机械感。
-2. 在不丢核心人格锚点的前提下，给回复风格更自然的波动空间。
-3. 可以按字段精细调参，例如“核心人格高概率、背景故事低概率”。
+这能保证角色锚点稳定、提示词行为可预测，也更利于缓存命中。
 
 ### user prompt 关键策略
 
@@ -232,12 +221,6 @@ default_chatter/
 | `plugin.enabled` | bool | 启用插件 |
 | `plugin.mode` | `enhanced` / `classical` | 执行模式 |
 | `plugin.reinforce_negative_behaviors` | bool | 每轮 user prompt 追加负面行为约束 |
-| `plugin.probabilistic_persona_injection_enabled` | bool | 启用人设概率注入 |
-| `plugin.personality_core_injection_probability` | float | 核心人格注入概率（0~1） |
-| `plugin.personality_side_injection_probability` | float | 人格侧面注入概率（0~1） |
-| `plugin.reply_style_injection_probability` | float | 回复风格注入概率（0~1） |
-| `plugin.identity_injection_probability` | float | 身份描述注入概率（0~1） |
-| `plugin.background_story_injection_probability` | float | 背景故事注入概率（0~1） |
 | `plugin.native_multimodal` | bool | 原生多模态开关 |
 | `plugin.max_images_per_payload` | int | 单次图片上限 |
 | `plugin.max_videos_per_payload` | int | 单次视频上限 |

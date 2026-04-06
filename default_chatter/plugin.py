@@ -14,6 +14,8 @@ import asyncio
 import datetime
 import json
 import re
+import threading
+from collections import deque
 from typing import Annotated, Any, AsyncGenerator
 
 from src.core.components.types import ChatType
@@ -110,15 +112,15 @@ system_prompt = """# 关于你
 - id：{bot_id}
 
 {extra_info}
-
-{continuous_memory}
 """
 
 user_prompt = """你当前正在名为"{stream_name}"的对话中。
 消息格式说明：【时间】<群组角色> [平台ID] 昵称$群名片 [消息ID]： 消息内容
-    
+
+{continuous_memory}
+
 {history}
-    
+
 {unreads}
 
 {extra}
@@ -373,10 +375,10 @@ class SendTextAction(BaseAction):
                     target_group_id = last_msg.extra.get("group_id")
                     target_group_name = last_msg.extra.get("group_name")
             else:
-                target_user_id = context.triggering_user_id
-                if not target_user_id and last_msg:
-                    target_user_id = last_msg.sender_id
-                    target_user_name = last_msg.sender_name
+                target_user_id, target_user_name = await self._resolve_private_target_from_context(
+                    context,
+                    last_msg,
+                )
 
             extra: dict[str, str] = {}
             if target_user_id:
@@ -475,6 +477,64 @@ _MESSAGE_NUCLEUS = "tool-message_nucleus"
 
 # SUSPEND 占位符：当 LLM 本轮全部调用的都是 action 时，注入此占位防止上下文缺少 assistant 轮次
 _SUSPEND_TEXT = "__SUSPEND__"
+
+# 运行时 assistant 注入队列：
+# 用于接收其它插件（如 proactive）的“伪装 assistant”上下文，
+# 在 default_chatter 的 WAIT_USER 阶段按会话顺序注入到 payloads。
+_RUNTIME_ASSISTANT_INJECTION_MAX_PER_STREAM = 24
+_RUNTIME_ASSISTANT_INJECTIONS: dict[str, deque[str]] = {}
+_RUNTIME_ASSISTANT_INJECTION_LOCK = threading.Lock()
+
+
+def push_runtime_assistant_injection(
+    stream_id: str,
+    content: str,
+    *,
+    max_per_stream: int | None = None,
+) -> None:
+    """向运行时队列写入一条 assistant 注入文本。"""
+    sid = str(stream_id or "").strip()
+    text = str(content or "").strip()
+    if not sid or not text:
+        return
+
+    limit = max_per_stream
+    if limit is None or limit <= 0:
+        limit = _RUNTIME_ASSISTANT_INJECTION_MAX_PER_STREAM
+
+    with _RUNTIME_ASSISTANT_INJECTION_LOCK:
+        queue = _RUNTIME_ASSISTANT_INJECTIONS.get(sid)
+        if queue is None:
+            queue = deque()
+            _RUNTIME_ASSISTANT_INJECTIONS[sid] = queue
+        queue.append(text)
+        while len(queue) > limit:
+            queue.popleft()
+
+
+def consume_runtime_assistant_injections(
+    stream_id: str,
+    *,
+    max_items: int | None = None,
+) -> list[str]:
+    """消费并返回某个会话的运行时 assistant 注入文本。"""
+    sid = str(stream_id or "").strip()
+    if not sid:
+        return []
+
+    with _RUNTIME_ASSISTANT_INJECTION_LOCK:
+        queue = _RUNTIME_ASSISTANT_INJECTIONS.get(sid)
+        if not queue:
+            return []
+
+        take_count = len(queue)
+        if max_items is not None and max_items > 0:
+            take_count = min(take_count, max_items)
+
+        result = [queue.popleft() for _ in range(take_count)]
+        if not queue:
+            _RUNTIME_ASSISTANT_INJECTIONS.pop(sid, None)
+        return result
 
 
 class DefaultChatter(BaseChatter):
@@ -892,6 +952,7 @@ class DefaultChatterPlugin(BasePlugin):
             template=user_prompt,
             policies={
                 "stream_name": optional("未知对话"),
+                "continuous_memory": optional(""),
                 "history": optional("")
                 .then(min_len(2))
                 .then(
