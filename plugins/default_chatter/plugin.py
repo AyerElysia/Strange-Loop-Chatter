@@ -176,7 +176,7 @@ class SendTextAction(BaseAction):
         # 示例: "@小明 你好" -> at_prefix_hint="小明", content="你好"
         at_prefix_hint: str | None = None
         if content:
-            at_match = re.match(r"^\s*@([^\s，,：:]+)\s*", content)
+            at_match = re.match(r"^\s*@([^\s]+)\s*", content)
             if at_match:
                 at_prefix_hint = at_match.group(1).strip()
                 content = content[at_match.end():].lstrip()
