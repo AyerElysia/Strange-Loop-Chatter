@@ -61,7 +61,6 @@ class LifeEngineConfig(BaseConfig):
         max_rounds_per_heartbeat: int = Field(
             default=3,
             ge=1,
-            le=10,
             description="单次心跳内允许模型连续进行工具调用的最大轮数（防止死循环）。",
         )
 
@@ -116,6 +115,38 @@ class LifeEngineConfig(BaseConfig):
             description="网页提取默认最大返回字符数。",
         )
 
+    @config_section("snn")
+    class SNNSection(SectionBase):
+        """SNN 皮层下状态层配置。"""
+
+        enabled: bool = Field(
+            default=False,
+            description="是否启用 SNN 状态层。启用后 life_engine 将运行一个持续的 SNN 驱动核。",
+        )
+
+        shadow_only: bool = Field(
+            default=True,
+            description="影子模式：只记录 SNN 状态变化，不注入心跳 prompt。用于初期验证。",
+        )
+
+        tick_interval_seconds: float = Field(
+            default=10.0,
+            ge=1.0,
+            description="SNN 独立 tick 间隔（秒）。SNN 以此频率独立更新衰减，不绑定 LLM 心跳。",
+        )
+
+        inject_to_heartbeat: bool = Field(
+            default=False,
+            description="是否将 SNN 驱动状态注入心跳 prompt。需要 shadow_only=false 才生效。",
+        )
+
+        feature_window_seconds: float = Field(
+            default=600.0,
+            ge=60.0,
+            description="特征提取窗口大小（秒）。决定 SNN 从多长时间的事件中提取输入。",
+        )
+
     settings: SettingsSection = Field(default_factory=SettingsSection)
     model: ModelSection = Field(default_factory=ModelSection)
     web: WebSection = Field(default_factory=WebSection)
+    snn: SNNSection = Field(default_factory=SNNSection)

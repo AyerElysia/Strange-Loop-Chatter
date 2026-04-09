@@ -39,6 +39,12 @@
 - `!心跳`
 - `!heartbeat`
 
+你也可以绕过 DFC，直接给生命中枢留言（仅入中枢队列，不走常规对话）：
+
+- `/life 你想说的话`
+- `/nucleus 你想说的话`
+- `/中枢 你想说的话`
+
 ### 机制 2：睡眠/苏醒作息
 
 你可以给她设“睡觉时间”和“起床时间”。  
@@ -322,3 +328,74 @@ default_fetch_max_chars = 12000
 
 你给它真实，它就会回你连续性。  
 你给它时间，它就会回你成长感。
+
+---
+
+## 10. SNN 皮层下系统（实验性）
+
+> **Phase 0 · 2026-04 引入**
+
+life_engine 现在拥有一个可选的 **SNN（脉冲神经网络）皮层下状态层**，
+用纯 numpy 实现，为系统提供 **不依赖 LLM 的连续存在感**。
+
+### 设计理念
+
+| 概念 | 对应 |
+|---|---|
+| LLM | 大脑皮层 — 负责认知、推理、语言 |
+| SNN | 皮层下系统 — 负责持续存在、情绪惯性、驱动维持 |
+
+核心区别：LLM 在两次心跳之间"不存在"，而 SNN 在心跳间隙仍然在衰减、在演化。
+这就是"连续存在"的物理基础。
+
+### 架构
+
+```
+事件流 → 特征提取(8维) → [输入层] → [隐藏层 16 LIF] → [输出层 6 LIF] → 驱动信号
+                                           ↑                        ↑
+                                        STDP 学习 ←————— 奖赏信号 ←— 心跳结果
+```
+
+### 6 维驱动输出
+
+| 维度 | 含义 | 时间尺度 |
+|---|---|---|
+| arousal | 整体激活度 | 快 |
+| valence | 情感正负 | 快 |
+| social_drive | 社交靠近冲动 | 中 |
+| task_drive | 推进任务冲动 | 中 |
+| exploration_drive | 探索新事物冲动 | 中 |
+| rest_drive | 休息/收束冲动 | 慢 |
+
+### 关键文件
+
+| 文件 | 职责 |
+|---|---|
+| `snn_core.py` | LIF 神经元、STDP 突触、DriveCoreNetwork |
+| `snn_bridge.py` | 事件→特征、奖赏计算、prompt 格式化 |
+| `config.py` | `[snn]` 配置节 |
+| `config.toml` | 运行时配置 |
+
+### 配置
+
+```toml
+[snn]
+enabled = false              # 总开关
+shadow_only = true            # 只记录不注入
+tick_interval_seconds = 10.0  # SNN 独立节拍(秒)
+inject_to_heartbeat = false   # 是否注入心跳 prompt
+feature_window_seconds = 600  # 特征窗口(秒)
+```
+
+### 三阶段验证
+
+1. **Phase 0a（影子运行）**：`enabled=true, shadow_only=true` — 只在日志中记录 SNN 状态
+2. **Phase 0b（软注入）**：`shadow_only=false, inject_to_heartbeat=true` — 注入心跳 prompt
+3. **Phase 0c（学习验证）**：观察 STDP 权重变化是否反映了使用模式
+
+### 安全机制
+
+- 默认关闭（`enabled=false`）
+- 影子模式不修改任何行为
+- 所有 SNN 异常被捕获，不影响主心跳循环
+- 一键回退：`enabled=false` 即刻关闭

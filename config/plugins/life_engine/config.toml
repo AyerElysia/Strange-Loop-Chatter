@@ -40,9 +40,9 @@ task_name = "life"
 
 # 网络搜索与网页提取能力配置（Tavily）。
 [web]
-# Tavily API Key。请直接填写在这里。
+# Tavily API Key。请在 config/plugins/life_engine/config.toml 的 [web] 中配置。
 # 值类型：str, 默认值：""
-tavily_api_key = ""
+tavily_api_key = "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"
 
 # Tavily API 基础地址。
 # 值类型：str, 默认值："https://api.tavily.com"
@@ -63,3 +63,25 @@ default_search_max_results = 5
 # 网页提取默认最大返回字符数。
 # 值类型：int, 默认值：12000
 default_fetch_max_chars = 12000
+
+# SNN 皮层下状态层配置。
+[snn]
+# 是否启用 SNN 状态层。启用后 life_engine 将运行一个持续的 SNN 驱动核。
+# 值类型：bool, 默认值：false
+enabled = false
+
+# 影子模式：只记录 SNN 状态变化，不注入心跳 prompt。用于初期验证。
+# 值类型：bool, 默认值：true
+shadow_only = true
+
+# SNN 独立 tick 间隔（秒）。SNN 以此频率独立更新衰减，不绑定 LLM 心跳。
+# 值类型：float, 默认值：10.0
+tick_interval_seconds = 10.0
+
+# 是否将 SNN 驱动状态注入心跳 prompt。需要 shadow_only=false 才生效。
+# 值类型：bool, 默认值：false
+inject_to_heartbeat = false
+
+# 特征提取窗口大小（秒）。决定 SNN 从多长时间的事件中提取输入。
+# 值类型：float, 默认值：600.0
+feature_window_seconds = 600.0
