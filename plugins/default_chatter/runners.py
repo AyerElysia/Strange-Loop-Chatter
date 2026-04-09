@@ -27,6 +27,17 @@ _PLAIN_TEXT_RETRY_REMINDER = (
     "请务必通过工具调用来完成任务，不要直接输出文字回复。）"
 )
 
+# 仅调用 think 时的强制重试次数
+_MAX_THINK_ONLY_RETRIES = 1
+
+# 仅调用 think 时注入的提醒
+_THINK_ONLY_RETRY_REMINDER = (
+    "（系统提醒：你本轮只调用了 action-think。"
+    "think 只能用于内在思考，不能作为唯一动作。"
+    "请立刻再来一轮，至少补充一个可执行动作（例如 action-send_text、"
+    "action-pass_and_wait，或其他可用的 tool/action）。）"
+)
+
 
 class _ToolCallWorkflowPhase(str, Enum):
     """default_chatter 的 toolcall 工作流相位（简化 FSM）。
@@ -56,6 +67,7 @@ class _EnhancedWorkflowRuntime:
     cross_round_seen_signatures: set[str]
     unread_msgs_to_flush: list[Message]
     plain_text_retry_count: int = 0
+    think_only_retry_count: int = 0
     last_continuous_memory_updated_at: str = ""
 
     def has_tool_result_tail(self) -> bool:
@@ -184,6 +196,32 @@ def _append_suspend_if_tool_result_tail(
     if payloads and payloads[-1].role == ROLE.TOOL_RESULT:
         response.add_payload(LLMPayload(ROLE.ASSISTANT, Text(suspend_text)))
         logger.debug("已注入 SUSPEND 占位符（pass_and_wait 优先结束本轮）")
+
+
+def _is_think_call_name(name: str) -> bool:
+    """判断调用名是否为 think 动作。"""
+    normalized = str(name or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized in {"action-think", "think"}:
+        return True
+    return normalized.endswith(":action:think")
+
+
+def _is_think_only_calls(calls: list[object]) -> bool:
+    """判断本轮是否“仅调用了 think”。"""
+    if not calls:
+        return False
+    return all(_is_think_call_name(getattr(call, "name", "")) for call in calls)
+
+
+def _append_think_only_retry_instruction(
+    response: LLMConversationState,
+    logger: Logger,
+) -> None:
+    """向上下文注入“think 不能单独结束本轮”的系统提醒。"""
+    response.add_payload(LLMPayload(ROLE.SYSTEM, Text(_THINK_ONLY_RETRY_REMINDER)))
+    logger.warning("检测到本轮仅调用 action-think，已注入系统提醒并触发重试")
 
 
 def _inject_runtime_assistant_payloads(
@@ -392,6 +430,7 @@ async def run_enhanced(
             # 仅在采纳新未读消息时清空跨轮去重状态；FOLLOW_UP 阶段不应清空。
             rt.cross_round_seen_signatures.clear()
             rt.plain_text_retry_count = 0
+            rt.think_only_retry_count = 0
             rt.unreads = unread_msgs
 
             unread_lines = "\n".join(
@@ -495,6 +534,26 @@ async def run_enhanced(
                 cross_round_seen_signatures=rt.cross_round_seen_signatures,
             )
 
+            think_only_calls = _is_think_only_calls(llm_response.call_list or [])
+            if (
+                think_only_calls
+                and not call_outcome.should_wait
+                and not call_outcome.has_pending_tool_results
+            ):
+                if rt.think_only_retry_count < _MAX_THINK_ONLY_RETRIES:
+                    rt.think_only_retry_count += 1
+                    _append_think_only_retry_instruction(rt.response, logger)
+                    _transition(
+                        rt=rt,
+                        to_phase=_ToolCallWorkflowPhase.FOLLOW_UP,
+                        logger=logger,
+                        reason="think-only guard retry",
+                    )
+                    continue
+                logger.warning("连续仅调用 action-think，达到重试上限，本轮按普通 action-only 处理")
+            else:
+                rt.think_only_retry_count = 0
+
             # pass_and_wait 具有最高优先级：即使同轮有非 action 工具结果，也直接等待用户。
             # 为避免下一轮被“尾部 TOOL_RESULT”强制 FOLLOW_UP，这里补一个 ASSISTANT 占位。
             if call_outcome.should_wait:
@@ -595,6 +654,7 @@ async def run_classical(
         cross_round_seen_signatures: set[str] = set()
         has_pending_tool_results = False
         plain_text_retry_count = 0
+        think_only_retry_count = 0
 
         while True:
             try:
@@ -635,6 +695,22 @@ async def run_classical(
                 cross_round_seen_signatures=cross_round_seen_signatures,
             )
             has_pending_tool_results = call_outcome.has_pending_tool_results
+
+            think_only_calls = _is_think_only_calls(response.call_list or [])
+            if (
+                think_only_calls
+                and not call_outcome.should_wait
+                and not has_pending_tool_results
+                and not call_outcome.sent_once
+            ):
+                if think_only_retry_count < _MAX_THINK_ONLY_RETRIES:
+                    think_only_retry_count += 1
+                    _append_think_only_retry_instruction(response, logger)
+                    continue
+                logger.warning("classical 模式连续仅调用 action-think，达到重试上限，本轮转入等待")
+            else:
+                think_only_retry_count = 0
+
             if not call_outcome.has_pending_tool_results:
                 append_suspend_payload_if_action_only(
                     calls=response.call_list or [],
@@ -658,3 +734,8 @@ async def run_classical(
             # 未要求等待时，若存在 pending 工具结果则继续 follow-up。
             if has_pending_tool_results:
                 continue
+
+            # 兜底：action-only 且未显式 wait/stop 的场景（例如仅 think），本轮收敛为等待。
+            await chatter.flush_unreads(unread_msgs)
+            yield Wait()
+            break
