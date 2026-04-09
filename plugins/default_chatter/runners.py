@@ -224,91 +224,6 @@ def _append_think_only_retry_instruction(
     logger.warning("检测到本轮仅调用 action-think，已注入系统提醒并触发重试")
 
 
-def _collect_available_tool_names(usable_map: object) -> set[str]:
-    """从 ToolRegistry 或兼容对象中收集工具 schema 名称。"""
-    names: set[str] = set()
-
-    get_all_names = getattr(usable_map, "get_all_names", None)
-    if callable(get_all_names):
-        try:
-            for raw_name in get_all_names():
-                name = str(raw_name or "").strip()
-                if name:
-                    names.add(name)
-        except Exception:
-            pass
-
-    if names:
-        return names
-
-    get_all = getattr(usable_map, "get_all", None)
-    if not callable(get_all):
-        return names
-
-    try:
-        usables = get_all()
-    except Exception:
-        return names
-
-    for usable in usables or []:
-        schema = None
-        to_schema = getattr(usable, "to_schema", None)
-        if callable(to_schema):
-            try:
-                schema = to_schema()
-            except Exception:
-                schema = None
-        if not isinstance(schema, dict):
-            continue
-        function_block = schema.get("function")
-        if isinstance(function_block, dict):
-            name = str(function_block.get("name") or "").strip()
-        else:
-            name = str(schema.get("name") or "").strip()
-        if name:
-            names.add(name)
-
-    return names
-
-
-def _build_tool_capability_reminder(usable_map: object) -> str:
-    """构建“按可用工具清单回答能力问题”的系统提醒。"""
-    names = _collect_available_tool_names(usable_map)
-    if not names:
-        return ""
-
-    has_web_search = "tool-nucleus_web_search" in names
-    has_browser_fetch = "tool-nucleus_browser_fetch" in names
-    if not (has_web_search or has_browser_fetch):
-        return ""
-
-    lines = [
-        "（系统能力校准：当用户问“你有没有某个工具/能力”时，必须以本轮可用工具清单为准，禁止凭印象回答“没有”。）",
-        "你当前可用的联网能力如下：",
-    ]
-    if has_web_search:
-        lines.append("- tool-nucleus_web_search：联网搜索")
-    if has_browser_fetch:
-        lines.append("- tool-nucleus_browser_fetch：网页提取/浏览")
-    lines.append("若用户询问是否有联网能力，应明确回答“有”，必要时直接调用对应工具。")
-    return "\n".join(lines)
-
-
-def _inject_tool_capability_reminder(
-    response: LLMConversationState,
-    usable_map: object,
-    logger: Logger,
-) -> None:
-    """将能力校准提醒写入 SYSTEM 上下文。"""
-    reminder = _build_tool_capability_reminder(usable_map)
-    if not reminder:
-        return
-    response.add_payload(LLMPayload(ROLE.SYSTEM, Text(reminder)))
-    debug_fn = getattr(logger, "debug", None)
-    if callable(debug_fn):
-        debug_fn("已注入工具能力校准提醒（含联网工具可用性）")
-
-
 def _inject_runtime_assistant_payloads(
     rt: _EnhancedWorkflowRuntime,
     chat_stream: ChatStream,
@@ -479,7 +394,6 @@ async def run_enhanced(
     history_text = chatter._build_enhanced_history_text(chat_stream)
     native_multimodal, max_images, max_videos = _get_multimodal_settings(chatter)
     usable_map = await chatter.inject_usables(request)
-    _inject_tool_capability_reminder(request, usable_map, logger)
 
     rt = _EnhancedWorkflowRuntime(
         response=request,
@@ -720,7 +634,6 @@ async def run_classical(
                 Text(await chatter._build_system_prompt(chat_stream)),
             )
         )
-        _inject_tool_capability_reminder(request, usable_map, logger)
         if native_multimodal:
             user_content = _build_multimodal_payload(
                 classical_user_text,
