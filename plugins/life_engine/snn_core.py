@@ -222,8 +222,8 @@ class DriveCoreNetwork:
 
     def __init__(self) -> None:
         # 神经元组——不同层使用不同时间常数
-        self.hidden = LIFNeuronGroup(self.HIDDEN_DIM, tau=15.0, threshold=0.3)
-        self.output = LIFNeuronGroup(self.OUTPUT_DIM, tau=30.0, threshold=0.5)
+        self.hidden = LIFNeuronGroup(self.HIDDEN_DIM, tau=15.0, threshold=0.18)
+        self.output = LIFNeuronGroup(self.OUTPUT_DIM, tau=30.0, threshold=0.28)
 
         # 突触
         self.syn_in_hid = STDPSynapse(
@@ -236,6 +236,10 @@ class DriveCoreNetwork:
         # 输出 EMA（指数移动平均）—— 比原始膜电位更平滑
         self._output_ema = np.zeros(self.OUTPUT_DIM, dtype=np.float64)
         self._ema_alpha = 0.1
+        # 轻量增益：让事件注入对脉冲更敏感，但不改变整体结构
+        self._input_gain = 1.8
+        self._hidden_spike_gain = 1.4
+        self._hidden_cont_gain = 0.35
 
         self.tick_count: int = 0
 
@@ -256,10 +260,16 @@ class DriveCoreNetwork:
         input_vec = np.clip(input_vec, -2.0, 2.0)
 
         # 前向传播
-        current_hidden = self.syn_in_hid.forward(input_vec)
+        input_scaled = input_vec * self._input_gain
+        current_hidden = self.syn_in_hid.forward(input_scaled)
+        # 有事件输入时给隐藏层一个很小的 tonic 偏置，减少“长期完全静默”。
+        current_hidden += 0.06 * float(np.mean(np.abs(input_vec)))
         spikes_hidden = self.hidden.step(current_hidden)
 
-        current_output = self.syn_hid_out.forward(spikes_hidden.astype(np.float64))
+        hidden_spike_signal = spikes_hidden.astype(np.float64) * self._hidden_spike_gain
+        hidden_cont_signal = np.clip(self.hidden.get_state(), 0.0, 1.0)
+        current_output = self.syn_hid_out.forward(hidden_spike_signal)
+        current_output += self._hidden_cont_gain * self.syn_hid_out.forward(hidden_cont_signal)
         spikes_output = self.output.step(current_output)
 
         # 用膜电位作为连续输出（比 spike 更平滑）
