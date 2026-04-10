@@ -1333,7 +1333,6 @@ class LifeEngineService(BaseService):
         
         # 计算空闲心跳数（距上次有工具调用的心跳数）
         idle_heartbeats = self._state.idle_heartbeat_count
-        minutes_since_tell = self._minutes_since_tell_dfc()
         
         # 根据外部消息间隔判断外界活跃度
         if minutes_since_external is None:
@@ -1431,7 +1430,6 @@ class LifeEngineService(BaseService):
             "- 没有信息差，只是在复述已知内容",
             "- 只是把动作要求丢给 DFC（任务分配）",
             "- 直接转发用户对 life 的命令原句",
-            f"- 距上次 tell_dfc 少于 10 分钟（当前: {minutes_since_tell if minutes_since_tell is not None else '未知'} 分钟），除非 importance=critical",
             "",
             "简化决策：",
             "- 有信息差 → tell_dfc",
