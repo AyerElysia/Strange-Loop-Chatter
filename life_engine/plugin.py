@@ -19,6 +19,7 @@ from .tools import ALL_TOOLS
 from .todo_tools import TODO_TOOLS
 from .memory_tools import MEMORY_TOOLS
 from .grep_tools import GREP_TOOLS
+from .web_tools import WEB_TOOLS
 
 
 logger = get_logger("life_engine", display="life_engine")
@@ -43,7 +44,7 @@ class LifeEnginePlugin(BasePlugin):
 
     plugin_name: str = "life_engine"
     plugin_description: str = "生命中枢，维护并行心跳与统一事件流上下文"
-    plugin_version: str = "3.2.0"
+    plugin_version: str = "3.3.0"
 
     configs: list[type] = [LifeEngineConfig]
     dependent_components: list[str] = []
@@ -61,14 +62,18 @@ class LifeEnginePlugin(BasePlugin):
 
     def get_components(self) -> list[type]:
         """返回插件提供的组件。"""
+        from .snn_router import SNNRouter
+
         return [
             LifeEngineService,
             LifeEngineMessageCollectorHandler,
             LifeEngineCommandHandler,
+            SNNRouter,
             *ALL_TOOLS,
             *TODO_TOOLS,
             *MEMORY_TOOLS,
             *GREP_TOOLS,
+            *WEB_TOOLS,
         ]
 
     async def on_plugin_loaded(self) -> None:

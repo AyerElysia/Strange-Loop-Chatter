@@ -187,16 +187,40 @@ class LifeEngineWakeDFCTool(BaseTool):
         "- 留下的想法会“堆积”。只有当外界有人跟她说话（她自然苏醒时），这些堆积的想法才会像灵感一样“涌上她的心头”\n"
         "\n"
         "**何时使用：**\n"
-        "- ✓ 休眠期整理文件产生了极其重要的领悟，想变成她的“直觉”\n"
-        "- ✓ 完成长期 TODO 后，把巨大的成就感传上去\n"
-        "- ✓ 发现过去记忆和现在的巧妙联系，想在下次她醒来时启发她\n"
+        "- ✓ 你掌握了 DFC 当前上下文里没有的新信息\n"
+        "- ✓ 这个新信息会改变 DFC 的判断、语气或优先级\n"
+        "- ✓ 你形成了新关联/新风险/新状态，值得让 DFC 知道\n"
         "\n"
         "**何时不用：**\n"
-        "- ✗ 外界有人正在高频聊天时（不要打断表意识的流动）\n"
-        "- ✗ 没话找话的废话（不要制造无用的潜意识噪音）\n"
-        "- ✗ 当作执行命令（潜意识无权命令表意识，只能用感受和冲动启发）\n"
+        "- ✗ 没有信息差，只是复述已知内容\n"
+        "- ✗ 只是想让 DFC 执行一个动作（这是任务分配，不是信息传递）\n"
+        "- ✗ 直接把用户对 life 的命令原句转发给 DFC\n"
         "\n"
         "**注意：** 因为是潜意识碎片，语句尽量感性、简练，像是一种朦胧但强烈的念头。"
+        "它的本质是“传递信息差”，不是“给 DFC 下命令”。"
+        "\n\n"
+        "**参数写法建议：**\n"
+        "- `message`: 必须包含三件事：新信息、影响、内在驱动\n"
+        "- `reason`: 说明这条信息差来自哪里（新观察/新关联/新风险/新状态）\n"
+        "- `importance`: 常规用 normal；只有紧急时用 high/critical\n"
+        "- `stream_id`: 不确定就留空，让系统自动路由\n"
+        "\n"
+        "**信息差模板（推荐）：**\n"
+        "message='[信息差] ... [影响] ... [内在驱动] ...'\n"
+        "\n"
+        "**反例（错误）：**\n"
+        "message='让DFC去先安抚他，然后问预算'\n"
+        "\n"
+        "**正例（正确）：**\n"
+        "message='[信息差] 我发现对方在预算话题前先暴露了焦虑。"
+        "[影响] 若直接谈价格，可能触发防御。"
+        "[内在驱动] 我此刻更想先把这份不安接住。'\n"
+        "\n"
+        "**推荐示例：**\n"
+        "message='[信息差] 我在历史里发现对方对“被忽视”高度敏感。"
+        "[影响] 强推进会触发退缩。"
+        "[内在驱动] 我会自然放慢推进节奏。'，"
+        "reason='新关联', importance='normal'"
     )
     chatter_allow: list[str] = ["life_engine_internal"]
 
@@ -1017,10 +1041,11 @@ class LifeEngineRunAgentTool(BaseTool):
             from .todo_tools import TODO_TOOLS
             from .memory_tools import MEMORY_TOOLS
             from .grep_tools import GREP_TOOLS
+            from .web_tools import WEB_TOOLS
 
             excluded_names = {"nucleus_run_agent", "nucleus_tell_dfc"}
             agent_tools = []
-            for tool_cls in ALL_TOOLS + TODO_TOOLS + MEMORY_TOOLS + GREP_TOOLS:
+            for tool_cls in ALL_TOOLS + TODO_TOOLS + MEMORY_TOOLS + GREP_TOOLS + WEB_TOOLS:
                 if hasattr(tool_cls, "tool_name") and tool_cls.tool_name not in excluded_names:
                     agent_tools.append(tool_cls)
 
@@ -1065,7 +1090,6 @@ class LifeEngineRunAgentTool(BaseTool):
                     tool_name = getattr(call, "name", "") or ""
                     raw_args = getattr(call, "args", {}) or {}
                     args = dict(raw_args) if isinstance(raw_args, dict) else {}
-                    args.pop("reason", None)
 
                     usable_cls = registry.get(tool_name)
                     if usable_cls:

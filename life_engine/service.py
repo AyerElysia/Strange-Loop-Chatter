@@ -38,6 +38,8 @@ from .audit import (
     log_heartbeat_model_response,
     log_lifecycle,
     log_message_received,
+    log_snn_snapshot,
+    log_snn_tick,
     log_wake_context_injected,
 )
 from .config import LifeEngineConfig
@@ -223,7 +225,7 @@ class LifeEngineService(BaseService):
 
     service_name: str = "life_engine"
     service_description: str = "生命中枢服务，维持并行心跳与事件流上下文"
-    version: str = "3.2.0"
+    version: str = "3.3.0"
 
     @classmethod
     def get_instance(cls) -> "LifeEngineService | None":
@@ -241,6 +243,10 @@ class LifeEngineService(BaseService):
         self._sleep_state_active: bool = False
         self._memory_service: "LifeMemoryService | None" = None
         self._last_decay_date: str | None = None  # 上次衰减任务日期
+        # SNN 皮层下系统
+        self._snn_network: Any = None
+        self._snn_bridge: Any = None
+        self._snn_tick_task_id: str | None = None
 
     def _get_lock(self) -> asyncio.Lock:
         """获取懒加载锁。"""
@@ -411,6 +417,12 @@ class LifeEngineService(BaseService):
                 "pending_events": [self._event_to_dict(e) for e in self._pending_events],
                 "event_history": [self._event_to_dict(e) for e in self._event_history],
             }
+            # SNN 状态持久化
+            if self._snn_network is not None:
+                try:
+                    payload["snn_state"] = self._snn_network.serialize()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"SNN 状态序列化失败: {exc}")
 
         path = self._runtime_context_path()
         temp_path = path.with_suffix(path.suffix + ".tmp")
@@ -475,6 +487,9 @@ class LifeEngineService(BaseService):
                 if self._pending_events:
                     max_seq = max(max_seq, max(event.sequence for event in self._pending_events))
                 self._state.event_sequence = max(self._state.event_sequence, max_seq)
+
+        # 恢复 SNN 状态（延迟到 _init_snn 中执行）
+        self._snn_persisted_state = raw.get("snn_state")
 
         logger.info(
             "life_engine 上下文恢复完成: "
@@ -654,6 +669,10 @@ class LifeEngineService(BaseService):
         data["in_sleep_window"] = in_sleep_window
         data["sleep_window"] = sleep_window_desc
         data["log_file_path"] = str(get_life_log_file())
+        # SNN 状态
+        data["snn_enabled"] = self._cfg().snn.enabled
+        if self._snn_network is not None:
+            data["snn_health"] = self._snn_network.get_health()
         return data
 
     def health(self) -> dict[str, Any]:
@@ -751,6 +770,87 @@ class LifeEngineService(BaseService):
             "stream_id": event.stream_id or "",
             "pending_event_count": self._state.pending_event_count,
             "queued": True,
+        }
+
+    async def enqueue_direct_message(
+        self,
+        message: str,
+        *,
+        stream_id: str = "",
+        platform: str = "",
+        chat_type: str = "",
+        sender_name: str = "",
+        sender_id: str = "",
+    ) -> dict[str, Any]:
+        """接收用户通过命令直达生命中枢的留言（绕过 DFC）。"""
+        if not self._is_enabled():
+            raise RuntimeError("life_engine 未启用")
+
+        text = str(message or "").strip()
+        if not text:
+            raise ValueError("message 不能为空")
+
+        seq = self._next_sequence()
+        platform_name = str(platform or "direct").strip() or "direct"
+        chat_type_name = str(chat_type or "unknown").strip().lower() or "unknown"
+        sender_display = str(sender_name or "外部用户").strip() or "外部用户"
+        target_stream_id = str(stream_id or "").strip()
+        source_detail_parts = [
+            platform_name,
+            "入站",
+            "直连命令",
+            "用户直达生命中枢",
+        ]
+        if target_stream_id:
+            source_detail_parts.append(f"stream_id={target_stream_id}")
+
+        event = LifeEngineEvent(
+            event_id=f"direct_msg_{seq}",
+            event_type=EventType.MESSAGE,
+            timestamp=_now_iso(),
+            sequence=seq,
+            source=platform_name,
+            source_detail=" | ".join(source_detail_parts),
+            content=_shorten_text(text, max_length=500),
+            content_type="direct_message",
+            sender=sender_display,
+            chat_type=chat_type_name,
+            stream_id=target_stream_id or None,
+        )
+
+        async with self._get_lock():
+            self._pending_events.append(event)
+            self._state.pending_event_count = len(self._pending_events)
+        await self._save_runtime_context()
+
+        log_message_received(
+            received_at=event.timestamp,
+            platform=event.source,
+            chat_type=event.chat_type or "unknown",
+            source_label=event.source_detail,
+            source_detail=event.source_detail,
+            stream_id=event.stream_id or "",
+            sender_display=event.sender or "外部用户",
+            sender_id=str(sender_id or "").strip() or "external_user",
+            message_id=event.event_id,
+            reply_to=None,
+            message_type=event.content_type,
+            content=event.content,
+            direction="received",
+            pending_message_count=self._state.pending_event_count,
+        )
+        logger.info(
+            "life_engine 已接收直连留言: "
+            f"stream_id={event.stream_id or 'unknown'} "
+            f"sender={event.sender or '外部用户'} "
+            f"pending={self._state.pending_event_count}"
+        )
+        return {
+            "event_id": event.event_id,
+            "stream_id": event.stream_id or "",
+            "pending_event_count": self._state.pending_event_count,
+            "queued": True,
+            "channel": "direct_command",
         }
 
     async def record_tool_call(
@@ -1233,6 +1333,7 @@ class LifeEngineService(BaseService):
         
         # 计算空闲心跳数（距上次有工具调用的心跳数）
         idle_heartbeats = self._state.idle_heartbeat_count
+        minutes_since_tell = self._minutes_since_tell_dfc()
         
         # 根据外部消息间隔判断外界活跃度
         if minutes_since_external is None:
@@ -1281,6 +1382,19 @@ class LifeEngineService(BaseService):
             "",
         ])
         
+        # SNN 驱动状态注入（仅在非影子模式且启用注入时生效）
+        if (
+            self._snn_network is not None
+            and self._snn_bridge is not None
+            and not self._cfg().snn.shadow_only
+            and self._cfg().snn.inject_to_heartbeat
+        ):
+            drive_text = self._snn_bridge.format_drive_for_prompt(
+                self._snn_network.get_drive_discrete()
+            )
+            if drive_text:
+                lines.extend([f"**{drive_text}**", ""])
+        
         # 添加空闲警告
         if idle_warning:
             lines.extend([idle_warning, ""])
@@ -1300,6 +1414,50 @@ class LifeEngineService(BaseService):
             "4. **写点东西** → `nucleus_write_file` / `nucleus_edit_file` - 记录想法",
             "5. **建立关联** → `nucleus_relate_file` - 把相关的记忆连接起来",
             "6. **传话给DFC** → `nucleus_tell_dfc` - 有重要事情要说",
+            "7. **联网搜索** → `nucleus_web_search` - 了解外部世界的新信息",
+            "8. **网页浏览** → `nucleus_browser_fetch` - 深入阅读某个网页",
+            "",
+            "### 🧭 `nucleus_tell_dfc` 的核心判定：信息差",
+            "",
+            "判断标准不是语气，而是：**你是否握有 DFC 目前没有的增量信息**。",
+            "",
+            "应该使用 `nucleus_tell_dfc`：",
+            "- 你得到新信息，且会改变 DFC 的判断/语气/优先级",
+            "- 你形成了新关联（把分散线索连接成新结论）",
+            "- 你发现了新风险（误解风险、情绪风险、节奏风险）",
+            "- 你状态显著变化，且这个变化会影响外在对话",
+            "",
+            "不应该使用 `nucleus_tell_dfc`：",
+            "- 没有信息差，只是在复述已知内容",
+            "- 只是把动作要求丢给 DFC（任务分配）",
+            "- 直接转发用户对 life 的命令原句",
+            f"- 距上次 tell_dfc 少于 10 分钟（当前: {minutes_since_tell if minutes_since_tell is not None else '未知'} 分钟），除非 importance=critical",
+            "",
+            "简化决策：",
+            "- 有信息差 → tell_dfc",
+            "- 无信息差 → 走其他工具（写文件/TODO/记忆）",
+            "",
+            "### 🧩 `nucleus_tell_dfc` 参数模板（照着填）",
+            "",
+            "```json",
+            "{",
+            '  "message": "[信息差] ... [影响] ... [内在驱动] ...",',
+            '  "reason": "新观察 | 新关联 | 新风险 | 新状态",',
+            '  "importance": "normal",',
+            '  "stream_id": ""',
+            "}",
+            "```",
+            "",
+            "字段要求：",
+            "- `message` 必须同时给出：新增信息、影响解释、内在驱动",
+            "- `message` 不是给 DFC 分配动作，而是补齐认知盲区",
+            "- `reason` 必须标明信息差类型，不要写“随便说说”",
+            "- `importance` 默认 `normal`；只有紧急影响对话方向才用 `high/critical`",
+            "- `stream_id` 不确定就留空，让系统自动选最近活跃流",
+            "",
+            "表达示例：",
+            "- ❌ 错误：`让DFC去先安抚他，再问预算`",
+            "- ✅ 正确：`[信息差] 对方先暴露焦虑。 [影响] 直接谈预算会触发防御。 [内在驱动] 我会自然更想先接住这份不安。`",
             "",
             "### ✍️ 输出格式（必须遵守）",
             "",
@@ -1470,8 +1628,9 @@ class LifeEngineService(BaseService):
         from .tools import ALL_TOOLS
         from .todo_tools import TODO_TOOLS
         from .memory_tools import MEMORY_TOOLS
+        from .web_tools import WEB_TOOLS
         
-        return ALL_TOOLS + TODO_TOOLS + MEMORY_TOOLS
+        return ALL_TOOLS + TODO_TOOLS + MEMORY_TOOLS + WEB_TOOLS
 
     async def _execute_heartbeat_tool_call(
         self,
@@ -1648,6 +1807,9 @@ class LifeEngineService(BaseService):
         # 初始化记忆服务
         await self._init_memory_service()
 
+        # 初始化 SNN 皮层下系统
+        await self._init_snn()
+
         self._state.running = True
         self._state.started_at = _now_iso()
         self._state.last_heartbeat_at = self._state.last_heartbeat_at or self._state.started_at
@@ -1671,7 +1833,8 @@ class LifeEngineService(BaseService):
             f"task={cfg.model.task_name} "
             f"workspace={cfg.settings.workspace_path} "
             f"sleep={cfg.settings.sleep_time or '-'} "
-            f"wake={cfg.settings.wake_time or '-'}"
+            f"wake={cfg.settings.wake_time or '-'} "
+            f"snn={cfg.snn.enabled}"
         )
         log_lifecycle(
             "started",
@@ -1679,6 +1842,7 @@ class LifeEngineService(BaseService):
             heartbeat_interval_seconds=int(cfg.settings.heartbeat_interval_seconds),
             model_task_name=cfg.model.task_name,
             log_file_path=str(get_life_log_file()),
+            snn_enabled=cfg.snn.enabled,
         )
 
     async def stop(self) -> None:
@@ -1697,6 +1861,14 @@ class LifeEngineService(BaseService):
             except Exception:
                 pass
 
+        # 停止 SNN tick 循环
+        if self._snn_tick_task_id:
+            try:
+                get_task_manager().cancel_task(self._snn_tick_task_id)
+            except Exception:
+                pass
+            self._snn_tick_task_id = None
+
         self._heartbeat_task_id = None
         self._stop_event = None
         _service_instance = None  # 清理全局单例
@@ -1707,6 +1879,7 @@ class LifeEngineService(BaseService):
             pending_message_count=pending_before_stop,
             heartbeat_count=self._state.heartbeat_count,
             log_file_path=str(get_life_log_file()),
+            snn_tick_count=self._snn_network.tick_count if self._snn_network else 0,
         )
 
     async def _heartbeat_loop(self) -> None:
@@ -1754,6 +1927,9 @@ class LifeEngineService(BaseService):
                 # 每日运行一次记忆衰减任务
                 await self._maybe_run_daily_decay()
                 
+                # SNN 心跳前更新：注入事件特征
+                await self._snn_heartbeat_pre()
+                
                 injected_content = await self.inject_wake_context()
                 log_heartbeat_event(
                     heartbeat_count=self._state.heartbeat_count,
@@ -1765,6 +1941,8 @@ class LifeEngineService(BaseService):
                 try:
                     model_reply = await self._run_heartbeat_model(injected_content)
                     await self._record_model_reply(model_reply)
+                    # SNN 心跳后更新：计算奖赏
+                    await self._snn_heartbeat_post()
                 except Exception as exc:  # noqa: BLE001
                     self._state.last_model_error = str(exc)
                     log_error(
@@ -1899,3 +2077,171 @@ class LifeEngineService(BaseService):
                 )
         except Exception as e:
             logger.error(f"记忆衰减任务失败: {e}", exc_info=True)
+
+    # ================================================================
+    # SNN 皮层下系统
+    # ================================================================
+
+    async def _init_snn(self) -> None:
+        """初始化 SNN 皮层下驱动核。"""
+        cfg = self._cfg()
+        if not cfg.snn.enabled:
+            logger.debug("SNN 未启用，跳过初始化")
+            return
+
+        try:
+            from .snn_core import DriveCoreNetwork
+            from .snn_bridge import SNNBridge
+
+            self._snn_network = DriveCoreNetwork()
+            self._snn_bridge = SNNBridge(self)
+
+            # 从持久化恢复
+            snn_persisted = getattr(self, "_snn_persisted_state", None)
+            if snn_persisted and isinstance(snn_persisted, dict):
+                self._snn_network.deserialize(snn_persisted)
+                logger.info(
+                    f"SNN 状态已恢复，tick_count={self._snn_network.tick_count}"
+                )
+            self._snn_persisted_state = None  # 清理
+
+            # 启动独立 tick 循环
+            tick_interval = cfg.snn.tick_interval_seconds
+            task = get_task_manager().create_task(
+                self._snn_tick_loop(tick_interval),
+                name="snn_tick_loop",
+                daemon=True,
+            )
+            self._snn_tick_task_id = task.task_id
+
+            mode = "shadow" if cfg.snn.shadow_only else "active"
+            logger.info(
+                f"SNN 皮层下系统已初始化: mode={mode} "
+                f"tick_interval={tick_interval}s "
+                f"inject={cfg.snn.inject_to_heartbeat}"
+            )
+            log_snn_snapshot(
+                action="init",
+                mode=mode,
+                tick_count=self._snn_network.tick_count,
+                health=self._snn_network.get_health(),
+            )
+        except Exception as e:
+            logger.error(f"SNN 初始化失败: {e}", exc_info=True)
+            self._snn_network = None
+            self._snn_bridge = None
+
+    async def _snn_tick_loop(self, interval: float) -> None:
+        """SNN 独立 tick 循环。
+
+        在心跳间隔之间持续运行，让 SNN 的膜电位自然衰减。
+        只做衰减（零输入），不注入新特征——特征在心跳时才注入。
+        这正是"连续存在"的物理基础：即使没有事件，时间的流逝仍然在改变内在状态。
+        """
+        import numpy as np
+
+        persist_interval = max(1, int(60 / interval))  # 约每 60 秒持久化一次
+        snapshot_interval = max(1, int(300 / interval))  # 约每 5 分钟快照一次
+        zero_input = np.zeros(8, dtype=np.float64)
+
+        while self._state.running:
+            try:
+                await asyncio.sleep(interval)
+                if not self._state.running:
+                    break
+                if self._snn_network is None:
+                    break
+
+                # 纯衰减 tick（零输入，零奖赏）
+                self._snn_network.step(zero_input, reward=0.0)
+
+                tick = self._snn_network.tick_count
+
+                # 定期持久化
+                if tick % persist_interval == 0:
+                    await self._save_runtime_context()
+
+                # 定期审计快照
+                if tick % snapshot_interval == 0:
+                    log_snn_snapshot(
+                        action="periodic",
+                        tick_count=tick,
+                        health=self._snn_network.get_health(),
+                    )
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"SNN tick 异常: {e}")
+                # 短暂等待后继续，不让单次异常杀死循环
+                await asyncio.sleep(interval)
+
+        logger.info("SNN tick 循环已停止")
+
+    async def _snn_heartbeat_pre(self) -> None:
+        """心跳前 SNN 更新：从事件中提取特征，推进 SNN 一步。"""
+        if self._snn_network is None or self._snn_bridge is None:
+            return
+
+        try:
+            cfg = self._cfg()
+            features = self._snn_bridge.extract_features_from_events(
+                self._event_history,
+                window_seconds=cfg.snn.feature_window_seconds,
+            )
+            reward = self._snn_bridge.get_last_reward()
+            output = self._snn_network.step(features, reward=reward)
+
+            log_snn_tick(
+                action="heartbeat_pre",
+                tick_count=self._snn_network.tick_count,
+                features=features.tolist(),
+                reward=round(reward, 4),
+                output=output.tolist(),
+                drives=self._snn_network.get_drive_dict(),
+            )
+        except Exception as e:
+            logger.warning(f"SNN heartbeat_pre 异常: {e}")
+
+    async def _snn_heartbeat_post(self) -> None:
+        """心跳后 SNN 更新：根据心跳结果计算奖赏信号。"""
+        if self._snn_bridge is None:
+            return
+
+        try:
+            # 从当前状态提取心跳结果指标
+            tool_event_count = 0
+            tool_success_count = 0
+            tool_fail_count = 0
+
+            # 检查最近的事件获取工具调用统计
+            for event in reversed(self._event_history[-20:]):
+                etype = getattr(event, "event_type", None)
+                etype_val = getattr(etype, "value", str(etype)) if etype else ""
+                if etype_val == "heartbeat":
+                    break  # 到上一个心跳就停
+                if etype_val == "tool_call":
+                    tool_event_count += 1
+                elif etype_val == "tool_result":
+                    tool_event_count += 1
+                    if getattr(event, "tool_success", False):
+                        tool_success_count += 1
+                    else:
+                        tool_fail_count += 1
+
+            reward = self._snn_bridge.record_heartbeat_result(
+                tool_event_count=tool_event_count,
+                tool_success_count=tool_success_count,
+                tool_fail_count=tool_fail_count,
+                idle_count=self._state.idle_heartbeat_count,
+            )
+
+            log_snn_tick(
+                action="heartbeat_post",
+                tick_count=self._snn_network.tick_count if self._snn_network else 0,
+                reward=round(reward, 4),
+                idle_count=self._state.idle_heartbeat_count,
+                tool_events=tool_event_count,
+            )
+        except Exception as e:
+            logger.warning(f"SNN heartbeat_post 异常: {e}")
