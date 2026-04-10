@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neo-MoFox · 生命中枢皮层下 SNN</title>
+    <!-- 引入 Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #020617;
+            --glass-bg: rgba(15, 23, 42, 0.4);
+            --glass-border: rgba(148, 163, 184, 0.1);
+            --text-main: #f8fafc;
+            --text-dim: #94a3b8;
+            --cyan: #06b6d4;
+            --cyan-glow: rgba(6, 182, 212, 0.5);
+            --pink: #ec4899;
+            --pink-glow: rgba(236, 72, 153, 0.5);
+            --green: #10b981;
+            --red: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(30, 27, 75, 0.5) 0%, transparent 50%),
+                radial-gradient(circle at 85% 30%, rgba(12, 74, 110, 0.4) 0%, transparent 50%);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* 顶部导航 */
+        header {
+            padding: 20px 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--glass-border);
+            background: rgba(2, 6, 23, 0.6);
+            backdrop-filter: blur(12px);
+            z-index: 10;
+        }
+
+        .logo {
+            font-size: 1.2rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--cyan);
+            box-shadow: 0 0 10px var(--cyan-glow);
+            animation: pulse 2s infinite ease-in-out;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(0.95); opacity: 0.8; }
+        }
+
+        .status-badge {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            padding: 4px 12px;
+            border-radius: 100px;
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--green);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            transition: all 0.3s;
+        }
+
+        /* 主体网格 */
+        main {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 300px 1fr 300px;
+            gap: 24px;
+            padding: 24px;
+            height: calc(100vh - 70px);
+        }
+
+        /* 玻璃态面板 */
+        .glass-panel {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        /* 隐藏滚动条 */
+        .glass-panel::-webkit-scrollbar { width: 0; }
+
+        h2 {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-dim);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* 统一的进度条和指标 */
+        .metric-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .metric-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        .metric-value {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--cyan);
+            font-size: 0.85rem;
+        }
+
+        .progress-track {
+            height: 6px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--cyan);
+            border-radius: 10px;
+            transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.4s;
+            box-shadow: 0 0 10px var(--cyan-glow);
+        }
+
+        /* 中间画布容器 */
+        .canvas-container {
+            position: relative;
+            border-radius: 16px;
+            overflow: hidden;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--glass-border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .canvas-overlay {
+            position: absolute;
+            top: 24px;
+            left: 24px;
+            pointer-events: none;
+        }
+
+        .time-display {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 2rem;
+            font-weight: 300;
+            color: rgba(255,255,255,0.8);
+            letter-spacing: -1px;
+        }
+
+        .tick-display {
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+
+        /* Stats list */
+        .stat-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            font-size: 0.9rem;
+        }
+        .stat-item span:last-child {
+            font-family: 'JetBrains Mono', monospace;
+            color: rgba(255,255,255,0.9);
+        }
+
+        /* 错误浮层 */
+        #error-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(2, 6, 23, 0.9);
+            backdrop-filter: blur(8px);
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 16px;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+        }
+        #error-overlay.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+        .error-box {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            padding: 32px;
+            border-radius: 16px;
+            text-align: center;
+        }
+        .error-box h3 {
+            color: var(--red);
+            font-size: 1.2rem;
+            margin-bottom: 8px;
+        }
+
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo">
+            <div class="logo-indicator" id="logo-indicator"></div>
+            Neo-MoFox <span style="color:var(--text-dim); font-weight: 400">| SNN Subcortical System</span>
+        </div>
+        <div class="status-badge" id="status-badge">● CONNECTED</div>
+    </header>
+
+    <main>
+        <!-- 左侧面板：驱动状态 -->
+        <div class="glass-panel">
+            <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg> 连续驱动流 (Drives)</h2>
+            <div id="drives-container" style="display: flex; flex-direction: column; gap: 20px; margin-top: 10px;">
+                <!-- JS 渲染 -->
+            </div>
+        </div>
+
+        <!-- 中间：网络拓扑图 -->
+        <div class="canvas-container" id="canvas-container">
+            <div class="canvas-overlay">
+                <div class="time-display" id="time-display">00:00:00</div>
+                <div class="tick-display">Global Tick: <span id="tick-count">---</span></div>
+            </div>
+            <canvas id="snn-canvas"></canvas>
+        </div>
+
+        <!-- 右侧面板：突触分析与状态 -->
+        <div class="glass-panel">
+            <h2><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> 突触塑性分析 (STDP)</h2>
+            
+            <div class="stat-list" style="margin-top: 10px;">
+                <div class="stat-item">
+                    <span>Input 刺激活跃度</span>
+                    <span id="stat-in-act">0.00</span>
+                </div>
+                <div class="stat-item">
+                    <span>Hidden 发放率</span>
+                    <span id="stat-hid-rate">0.00 Hz</span>
+                </div>
+                <div class="stat-item">
+                    <span>In→Hid 权重范数</span>
+                    <span id="stat-w1-norm">0.00</span>
+                </div>
+                <div class="stat-item">
+                    <span>In→Hid 绝对均值</span>
+                    <span id="stat-w1-mean">0.00</span>
+                </div>
+                <div class="stat-item">
+                    <span>Hid→Out 权重范数</span>
+                    <span id="stat-w2-norm">0.00</span>
+                </div>
+            </div>
+
+            <h2 style="margin-top: 20px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg> 离散化映射</h2>
+            <div id="discrete-container" class="stat-list" style="margin-top: 10px;">
+                <!-- JS 渲染 -->
+            </div>
+        </div>
+    </main>
+
+    <div id="error-overlay">
+        <div class="error-box">
+            <h3>连接中断 / 系统未开启</h3>
+            <p id="error-msg" style="color:var(--text-dim); font-size:0.9rem;">请检查 life_engine 插件配置 [snn] enabled = true</p>
+        </div>
+    </div>
+
+<script>
+/**
+ * 高性能 SNN HTML5 Canvas 可视化
+ */
+
+// 状态数据
+let snnState = null;
+let lastFetchTime = 0;
+let isConnected = false;
+
+// 驱动元数据映射
+const DRIVE_META = {
+    'arousal': { label: 'Arousal (唤醒度)', color: '#06b6d4', min: 0, max: 2 },
+    'valence': { label: 'Valence (情绪效价)', color: '#10b981', min: -1, max: 1 },
+    'social_drive': { label: 'Social (社交驱动)', color: '#ec4899', min: 0, max: 2 },
+    'task_drive': { label: 'Task (任务驱动)', color: '#8b5cf6', min: -1, max: 2 },
+    'exploration_drive': { label: 'Exploration (探索驱动)', color: '#f59e0b', min: 0, max: 2 },
+    'rest_drive': { label: 'Rest (休息收束)', color: '#64748b', min: 0, max: 2 }
+};
+
+const INPUT_LABELS = [
+    "Msg In", "Msg Out", "Tool Success", "Tool Fail",
+    "Idle", "Tell DFC", "New Content", "Silence"
+];
+
+// Canvas 渲染配置
+const canvas = document.getElementById('snn-canvas');
+const ctx = canvas.getContext('2d', { alpha: false });
+let width, height;
+
+// 物理插值状态 (用于平滑动画)
+const visualNodes = {
+    input: Array(8).fill(0).map(() => ({ v: 0, targetV: 0, glow: 0 })),
+    hidden: Array(16).fill(0).map(() => ({ v: 0, targetV: 0, glow: 0 })),
+    output: Array(6).fill(0).map(() => ({ v: 0, targetV: 0, glow: 0, sign: 1 }))
+};
+
+// 粒子系统用于模拟脉冲传递
+const particles = [];
+
+// 适应容器大小
+function resizeCanvas() {
+    const parent = canvas.parentElement;
+    // Retina 支持
+    const dpr = window.devicePixelRatio || 1;
+    width = parent.clientWidth;
+    height = parent.clientHeight;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    ctx.scale(dpr, dpr);
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// ==========================================
+// 数据获取与绑定
+// ==========================================
+
+async function fetchState() {
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        
+        // 我们通过当前域名的同源 API 拉取
+        // 使用相对路径 api/state 获取数据，确保在子路由下访问正确
+        const res = await fetch('api/state', { signal: controller.signal });
+        clearTimeout(timeoutId);
+        
+        if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+        }
+        
+        const data = await res.json();
+        
+        if (data.status === 'disabled') {
+            throw new Error('SNN is disabled in config.');
+        }
+
+        snnState = data;
+        
+        if (!isConnected) {
+            isConnected = true;
+            document.getElementById('error-overlay').classList.remove('active');
+            document.getElementById('status-badge').textContent = '● CONNECTED';
+            document.getElementById('status-badge').style.color = 'var(--green)';
+            document.getElementById('logo-indicator').style.animationPlayState = 'running';
+        }
+        
+        updateDOM();
+        updateVisualTargets();
+        
+    } catch (err) {
+        isConnected = false;
+        document.getElementById('error-overlay').classList.add('active');
+        document.getElementById('error-msg').textContent = err.message;
+        document.getElementById('status-badge').textContent = '○ DISCONNECTED';
+        document.getElementById('status-badge').style.color = 'var(--red)';
+        document.getElementById('logo-indicator').style.animationPlayState = 'paused';
+    }
+}
+
+function updateDOM() {
+    if (!snnState) return;
+    
+    // 更新时间与 Tick
+    const now = new Date();
+    document.getElementById('time-display').textContent = now.toTimeString().split(' ')[0];
+    document.getElementById('tick-count').textContent = snnState.tick_count;
+
+    // 左侧：连续驱动态
+    const drivesContainer = document.getElementById('drives-container');
+    if (drivesContainer.children.length === 0) {
+        // 全新渲染
+        drivesContainer.innerHTML = Object.entries(DRIVE_META).map(([key, meta]) => `
+            <div class="metric-group" id="drive-grp-${key}">
+                <div class="metric-header">
+                    <span>${meta.label}</span>
+                    <span class="metric-value" id="drive-val-${key}">0.000</span>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-fill" id="drive-bar-${key}" style="width: 0%; background: ${meta.color}; box-shadow: 0 0 10px ${meta.color}80;"></div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    // 更新驱动态值
+    Object.entries(snnState.drives).forEach(([key, val]) => {
+        const meta = DRIVE_META[key];
+        const pct = Math.max(0, Math.min(100, ((val - meta.min) / (meta.max - meta.min)) * 100));
+        document.getElementById(`drive-val-${key}`).textContent = val.toFixed(4);
+        document.getElementById(`drive-bar-${key}`).style.width = `${pct}%`;
+    });
+
+    // 右下：离散态
+    const discreteContainer = document.getElementById('discrete-container');
+    discreteContainer.innerHTML = Object.entries(snnState.drives_discrete).map(([key, val]) => {
+        let color = '#94a3b8';
+        if(val==='高') color = '#ec4899';
+        else if(val==='中') color = '#06b6d4';
+        else if(val==='低') color = '#10b981';
+        return `
+            <div class="stat-item">
+                <span>${DRIVE_META[key].label}</span>
+                <span style="color: ${color}">${val}</span>
+            </div>
+        `;
+    }).join('');
+
+    // 右上：统计
+    // 计算 W1, W2 范数
+    const w1 = snnState.syn_in_hid_W;
+    const w2 = snnState.syn_hid_out_W;
+    let w1_sq_sum = 0, w2_sq_sum = 0, w1_abs_sum = 0;
+    let out_elements = 0;
+    
+    for(let i=0; i<w1.length; i++){
+        for(let j=0; j<w1[i].length; j++) {
+            w1_sq_sum += w1[i][j]*w1[i][j];
+            w1_abs_sum += Math.abs(w1[i][j]);
+            out_elements++;
+        }
+    }
+    for(let i=0; i<w2.length; i++){
+        for(let j=0; j<w2[i].length; j++) w2_sq_sum += w2[i][j]*w2[i][j];
+    }
+    
+    document.getElementById('stat-w1-norm').textContent = Math.sqrt(w1_sq_sum).toFixed(3);
+    document.getElementById('stat-w1-mean').textContent = (w1_abs_sum/out_elements).toFixed(3);
+    document.getElementById('stat-w2-norm').textContent = Math.sqrt(w2_sq_sum).toFixed(3);
+
+    const spikes = snnState.hidden_spikes.filter(v => v).length;
+    document.getElementById('stat-hid-rate').textContent = `${(spikes / 16).toFixed(2)} Hz`;
+}
+
+function updateVisualTargets() {
+    if (!snnState) return;
+
+    // TODO: 目前 API 没有返回输入的特征。假定输入痕迹来源于 trace_pre (LTP 痕迹)
+    const trace_pre = snnState.syn_in_hid_trace_pre;
+    for(let i=0; i<8; i++){
+        // 如果 trace_pre 有值说明刚才有输入
+        visualNodes.input[i].targetV = Math.min(1.0, trace_pre[i] * 2.0);
+        if (visualNodes.input[i].targetV > 0.5 && visualNodes.input[i].glow < 0.1) {
+            visualNodes.input[i].glow = 1.0;
+            spawnParticles(0, i, Array.from({length:16}).map((_, idx)=>idx)); // 输入到所有隐藏层
+        }
+    }
+
+    // 更新 Hidden
+    for(let i=0; i<16; i++){
+        visualNodes.hidden[i].targetV = snnState.hidden_v[i];
+        if (snnState.hidden_spikes[i]) {
+            visualNodes.hidden[i].glow = 1.0; // 亮起
+            spawnParticles(1, i, Array.from({length:6}).map((_, idx)=>idx));
+        }
+    }
+
+    // 更新 Output
+    for(let i=0; i<6; i++){
+        const ov = Number(snnState.output_v[i] ?? 0);
+        visualNodes.output[i].sign = ov >= 0 ? 1 : -1;
+        // 右侧可视化按 |output_v| 放大显示，避免“有波动但完全看不见”
+        visualNodes.output[i].targetV = Math.min(1.0, Math.abs(ov) * 32.0);
+        if (snnState.output_spikes[i]) {
+            visualNodes.output[i].glow = 1.0;
+        } else if (Math.abs(ov) > 0.008) {
+            // 即使没有 spike，只要输出电位有明显波动，也给中等亮度提示
+            visualNodes.output[i].glow = Math.max(visualNodes.output[i].glow, 0.55);
+        }
+    }
+}
+
+// 粒子发射器
+// Layer: 0 (in->hid), 1 (hid->out)
+function spawnParticles(layer, sourceIdx, targetIndices) {
+    targetIndices.forEach(targetIdx => {
+        // 只有 15% 几率发射粒子防止太满
+        if(Math.random() > 0.15) return;
+        particles.push({
+            layer,
+            sourceIdx,
+            targetIdx,
+            progress: 0,
+            speed: 0.02 + Math.random() * 0.02
+        });
+    });
+}
+
+// ==========================================
+// Canvas 动画引擎
+// ==========================================
+
+function drawNode(x, y, radius, v, glow, color) {
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    
+    // 基础底层
+    ctx.fillStyle = `rgba(15, 23, 42, 0.8)`;
+    ctx.fill();
+    ctx.strokeStyle = `rgba(148, 163, 184, 0.2)`;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // V 填充
+    if (v > 0) {
+        ctx.beginPath();
+        ctx.arc(x, y, radius - 2, 0, Math.PI * 2);
+        ctx.fillStyle = color.replace(')', `, ${Math.min(v, 1.0)*0.5})`).replace('rgb', 'rgba');
+        ctx.fill();
+    }
+
+    // Glow 发放
+    if (glow > 0.01) {
+        ctx.beginPath();
+        ctx.arc(x, y, radius + 2 + glow * 8, 0, Math.PI * 2);
+        const grad = ctx.createRadialGradient(x, y, radius, x, y, radius + 2 + glow * 8);
+        grad.addColorStop(0, `rgba(255, 255, 255, ${glow * 0.8})`);
+        grad.addColorStop(1, `rgba(255, 255, 255, 0)`);
+        ctx.fillStyle = grad;
+        ctx.fill();
+    }
+}
+
+function render() {
+    ctx.fillStyle = '#020617';
+    ctx.fillRect(0, 0, width, height);
+
+    // 平滑插值 (Lerp)
+    const lerp = (a, b, t) => a + (b - a) * t;
+    
+    ['input', 'hidden', 'output'].forEach(layer => {
+        visualNodes[layer].forEach(n => {
+            n.v = lerp(n.v, n.targetV, 0.1);
+            n.glow = lerp(n.glow, 0, 0.05);
+        });
+    });
+
+    const paddingX = 80;
+    const paddingY = 60;
+    const colX = [paddingX, width / 2, width - paddingX - 40];
+    
+    const getNodePos = (layer, idx, count) => {
+        const x = colX[layer];
+        const availableHeight = height - paddingY * 2;
+        const spacing = availableHeight / (count - 1 || 1);
+        const y = paddingY + idx * spacing;
+        return { x, y };
+    };
+
+    // 绘制连线：W1 (Input -> Hidden)
+    if (snnState && snnState.syn_in_hid_W) {
+        const W = snnState.syn_in_hid_W; // shape: 16 (post/hid) x 8 (pre/in)
+        for(let pre=0; pre<8; pre++) {
+            const p1 = getNodePos(0, pre, 8);
+            for(let post=0; post<16; post++) {
+                const w = W[post][pre];
+                if (Math.abs(w) < 0.1) continue; // 优化渲染：忽略小权重
+                
+                const p2 = getNodePos(1, post, 16);
+                
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                // 贝塞尔曲线
+                ctx.bezierCurveTo(p1.x + 100, p1.y, p2.x - 100, p2.y, p2.x, p2.y);
+                
+                if (w > 0) {
+                    ctx.strokeStyle = `rgba(6, 182, 212, ${w * 0.5})`; // 增强蓝
+                } else {
+                    ctx.strokeStyle = `rgba(236, 72, 153, ${Math.abs(w) * 0.5})`; // 减弱粉
+                }
+                ctx.lineWidth = 1 + Math.abs(w);
+                ctx.stroke();
+            }
+        }
+    }
+
+    // 绘制连线：W2 (Hidden -> Output)
+    if (snnState && snnState.syn_hid_out_W) {
+        const W = snnState.syn_hid_out_W; // shape: 6 (out) x 16 (hid)
+        for(let pre=0; pre<16; pre++) {
+            const p1 = getNodePos(1, pre, 16);
+            for(let post=0; post<6; post++) {
+                const w = W[post][pre];
+                if (Math.abs(w) < 0.1) continue;
+                
+                const p2 = getNodePos(2, post, 6);
+                
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                ctx.bezierCurveTo(p1.x + 100, p1.y, p2.x - 100, p2.y, p2.x, p2.y);
+                
+                if (w > 0) ctx.strokeStyle = `rgba(6, 182, 212, ${w * 0.5})`;
+                else ctx.strokeStyle = `rgba(236, 72, 153, ${Math.abs(w) * 0.5})`;
+                
+                ctx.lineWidth = 1 + Math.abs(w);
+                ctx.stroke();
+            }
+        }
+    }
+
+    // 绘制粒子
+    for(let i = particles.length-1; i>=0; i--) {
+        const p = particles[i];
+        p.progress += p.speed;
+        if(p.progress > 1.0) {
+            particles.splice(i, 1);
+            continue;
+        }
+        
+        let p1, p2;
+        if(p.layer === 0) {
+            p1 = getNodePos(0, p.sourceIdx, 8);
+            p2 = getNodePos(1, p.targetIdx, 16);
+        } else {
+            p1 = getNodePos(1, p.sourceIdx, 16);
+            p2 = getNodePos(2, p.targetIdx, 6);
+        }
+        
+        // 计算贝塞尔曲线上的点
+        const t = p.progress;
+        const u = 1 - t;
+        const cp1x = p1.x + 100, cp1y = p1.y;
+        const cp2x = p2.x - 100, cp2y = p2.y;
+        
+        const px = u*u*u*p1.x + 3*u*u*t*cp1x + 3*u*t*t*cp2x + t*t*t*p2.x;
+        const py = u*u*u*p1.y + 3*u*u*t*cp1y + 3*u*t*t*cp2y + t*t*t*p2.y;
+        
+        ctx.beginPath();
+        ctx.arc(px, py, 2.5, 0, Math.PI*2);
+        ctx.fillStyle = '#ffffff';
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = '#ffffff';
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    }
+
+    // 绘制节点
+    // Input
+    for(let i=0; i<8; i++) {
+        const p = getNodePos(0, i, 8);
+        drawNode(p.x, p.y, 8, visualNodes.input[i].v, visualNodes.input[i].glow, 'rgb(148, 163, 184)');
+        
+        // Label
+        ctx.fillStyle = `rgba(255,255,255,${0.3 + visualNodes.input[i].v*0.7})`;
+        ctx.font = '10px Inter';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(INPUT_LABELS[i], p.x - 16, p.y);
+    }
+
+    // Hidden
+    for(let i=0; i<16; i++) {
+        const p = getNodePos(1, i, 16);
+        drawNode(p.x, p.y, 6, Math.max(0, visualNodes.hidden[i].v), visualNodes.hidden[i].glow, 'rgb(16, 185, 129)');
+    }
+
+    // Output
+    for(let i=0; i<6; i++) {
+        const p = getNodePos(2, i, 6);
+        const driveName = Object.keys(DRIVE_META)[i];
+        let c = 'rgb(6, 182, 212)';
+        if(DRIVE_META[driveName]) {
+            // Hex to rgb string roughly
+            c = DRIVE_META[driveName].color; 
+            // format to rgb() for replace() compatibility
+            const temp = document.createElement('div');
+            temp.style.color = c;
+            document.body.appendChild(temp);
+            c = window.getComputedStyle(temp).color;
+            document.body.removeChild(temp);
+        }
+        if (visualNodes.output[i].sign < 0) {
+            // 负向驱动用暖色显示，避免“负值看起来像没激活”
+            c = 'rgb(244, 114, 182)';
+        }
+        drawNode(p.x, p.y, 10, visualNodes.output[i].v, visualNodes.output[i].glow, c);
+        
+        // Label
+        ctx.fillStyle = `rgba(255,255,255,0.7)`;
+        ctx.font = '11px Inter';
+        ctx.textAlign = 'left';
+        ctx.fillText(DRIVE_META[driveName].label.split(' ')[0], p.x + 20, p.y);
+    }
+
+    requestAnimationFrame(render);
+}
+
+// 启动循环
+setInterval(fetchState, 1000);
+fetchState();
+requestAnimationFrame(render);
+
+</script>
+</body>
+</html>
