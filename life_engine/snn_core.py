@@ -1,13 +1,14 @@
-"""SNN 皮层下驱动核心。
+"""SNN 皮层下驱动核心 v2。
 
-纯 numpy 实现的 LIF 神经元 + STDP 突触 + 驱动核网络。
+纯 numpy 实现的 LIF 神经元 + 软 STDP 突触 + 驱动核网络。
 为 life_engine 提供持续运行的状态底座，不依赖 LLM 即可维持连续内在状态。
 
-设计理念：
-- LLM 是大脑皮层（高级认知），SNN 是皮层下系统（持续存在）。
-- SNN 不输出自然语言，不调用工具，只维护低维驱动状态。
-- 膜电位持续衰减 = 时间的流逝留下物理性痕迹。
-- STDP 学习 = 系统本身具备适应能力，不依赖外部训练。
+v2 关键改进（对照 v1 诊断报告）：
+- 分离 decay_only() 与 step()：零输入 tick 不再执行完整 step，避免淹没信号。
+- 软 STDP：用 sigmoid(膜电位) 代替二值 spike 参与学习，低活跃时也能触发可塑性。
+- 背景噪声：真实输入时叠加微弱高斯噪声，打破不动点。
+- 动态离散化：基于运行时 EMA 均值+标准差的 z-score 阈值，而非固定绝对阈值。
+- 更温和的自稳态：缩小调节步长，避免 gain/threshold 撞到极限。
 """
 
 from __future__ import annotations
@@ -21,20 +22,7 @@ logger = logging.getLogger("life_engine.snn")
 
 
 class LIFNeuronGroup:
-    """一组 Leaky Integrate-and-Fire 神经元。
-
-    每个神经元维护自己的膜电位 v，接收输入电流后积分，
-    达到阈值时发放脉冲（spike）并重置。膜电位在无输入时自然衰减。
-
-    Attributes:
-        n: 神经元数量。
-        tau: 膜电位时间常数（tick 数）。越大衰减越慢。
-        threshold: 发放阈值。
-        reset: 发放后重置电位。
-        rest: 静息电位。
-        v: 当前膜电位向量。
-        spikes: 上一步的脉冲向量。
-    """
+    """Leaky Integrate-and-Fire 神经元组。"""
 
     __slots__ = ("n", "tau", "threshold", "reset", "rest", "v", "spikes")
 
@@ -51,57 +39,42 @@ class LIFNeuronGroup:
         self.threshold = threshold
         self.reset = reset
         self.rest = rest
-
         self.v = np.full(n, rest, dtype=np.float64)
         self.spikes = np.zeros(n, dtype=bool)
 
     def step(self, current: np.ndarray, dt: float = 1.0) -> np.ndarray:
-        """单步更新。
-
-        Args:
-            current: 输入电流向量（shape = (n,)）。
-            dt: 时间步长（通常为 1.0）。
-
-        Returns:
-            布尔脉冲向量（shape = (n,)）。
-        """
+        """单步更新：积分 + 发放。"""
         dv = (-(self.v - self.rest) + current) / self.tau * dt
         self.v += dv
-
-        # 数值安全：裁剪极端值
         np.clip(self.v, -10.0, 10.0, out=self.v)
-
         self.spikes = self.v >= self.threshold
         self.v[self.spikes] = self.reset
-
         return self.spikes.copy()
 
+    def decay_only(self, dt: float = 1.0) -> None:
+        """仅膜电位泄漏衰减，不注入电流，不检查发放。"""
+        dv = -(self.v - self.rest) / self.tau * dt
+        self.v += dv
+        np.clip(self.v, -10.0, 10.0, out=self.v)
+        self.spikes[:] = False
+
     def get_state(self) -> np.ndarray:
-        """获取当前膜电位（用于外部读取）。"""
         return self.v.copy()
 
     def set_state(self, v: np.ndarray) -> None:
-        """恢复膜电位（从持久化恢复）。"""
         if v.shape == self.v.shape:
             self.v = v.copy()
         else:
             logger.warning(
-                f"LIF 状态恢复形状不匹配: expected {self.v.shape}, got {v.shape}，使用默认值"
+                f"LIF 状态恢复形状不匹配: expected {self.v.shape}, got {v.shape}"
             )
 
 
 class STDPSynapse:
-    """简化 STDP 突触连接。
+    """软 STDP 突触连接。
 
-    实现 Spike-Timing-Dependent Plasticity：
-    - 前神经元先于后神经元发放 → 增强连接（因果关系）
-    - 后神经元先于前神经元发放 → 减弱连接
-    - 叠加奖赏调制：正奖赏放大增强，负奖赏放大减弱。
-
-    Attributes:
-        W: 权重矩阵 (n_post, n_pre)。
-        trace_pre: 前突触活动痕迹。
-        trace_post: 后突触活动痕迹。
+    v2 改进：支持连续活跃度（sigmoid of membrane potential）参与学习，
+    而非仅在二值 spike 时才更新。这确保在低放电率下仍有可塑性。
     """
 
     __slots__ = (
@@ -124,64 +97,60 @@ class STDPSynapse:
         w_min: float = -1.0,
         w_max: float = 1.0,
     ) -> None:
-        # Xavier-like 初始化
         scale = np.sqrt(2.0 / (n_pre + n_post))
         self.W = np.random.uniform(-scale, scale, (n_post, n_pre)).astype(np.float64)
-
         self.lr_plus = lr_plus
         self.lr_minus = lr_minus
         self.w_min = w_min
         self.w_max = w_max
-
         self.trace_pre = np.zeros(n_pre, dtype=np.float64)
         self.trace_post = np.zeros(n_post, dtype=np.float64)
-        self.trace_decay = 0.95
+        self.trace_decay = 0.90
 
     def forward(self, pre_activity: np.ndarray) -> np.ndarray:
-        """计算突触后电流。
-
-        Args:
-            pre_activity: 前突触活动向量（float，可以是 spike 或连续值）。
-
-        Returns:
-            突触后电流向量。
-        """
         return self.W @ pre_activity
 
+    def update_soft(
+        self,
+        pre_activity: np.ndarray,
+        post_activity: np.ndarray,
+        reward: float = 0.0,
+    ) -> None:
+        """软 STDP 更新：用连续活跃度而非二值 spike。"""
+        self.trace_pre = self.trace_pre * self.trace_decay + pre_activity
+        self.trace_post = self.trace_post * self.trace_decay + post_activity
+
+        reward_factor = 1.0 + np.clip(reward, -1.0, 1.0)
+
+        pre_strength = float(np.sum(pre_activity))
+        post_strength = float(np.sum(post_activity))
+
+        if post_strength > 0.05:
+            dw_plus = self.lr_plus * np.outer(post_activity, self.trace_pre)
+            self.W += dw_plus * max(reward_factor, 0.1)
+
+        if pre_strength > 0.05:
+            dw_minus = -self.lr_minus * np.outer(self.trace_post, pre_activity)
+            self.W += dw_minus * max(2.0 - reward_factor, 0.1)
+
+        np.clip(self.W, self.w_min, self.w_max, out=self.W)
+
+    # 向后兼容 v1 调用
     def update(
         self,
         pre_spikes: np.ndarray,
         post_spikes: np.ndarray,
         reward: float = 0.0,
     ) -> None:
-        """STDP + 奖赏调制更新。
+        """兼容旧接口，内部转发到 update_soft。"""
+        self.update_soft(pre_spikes.astype(np.float64), post_spikes.astype(np.float64), reward)
 
-        Args:
-            pre_spikes: 前突触脉冲向量（float, 0 或 1）。
-            post_spikes: 后突触脉冲向量（float, 0 或 1）。
-            reward: 奖赏信号（[-1, 1]）。
-        """
-        # 更新痕迹
-        self.trace_pre = self.trace_pre * self.trace_decay + pre_spikes
-        self.trace_post = self.trace_post * self.trace_decay + post_spikes
-
-        reward_factor = 1.0 + np.clip(reward, -1.0, 1.0)
-
-        # 前→后增强（LTP）
-        if np.any(post_spikes > 0.5):
-            dw_plus = self.lr_plus * np.outer(post_spikes, self.trace_pre)
-            self.W += dw_plus * max(reward_factor, 0.1)
-
-        # 后→前减弱（LTD）
-        if np.any(pre_spikes > 0.5):
-            dw_minus = -self.lr_minus * np.outer(self.trace_post, pre_spikes)
-            self.W += dw_minus * max(2.0 - reward_factor, 0.1)
-
-        # 权重裁剪
-        np.clip(self.W, self.w_min, self.w_max, out=self.W)
+    def decay_traces(self) -> None:
+        """纯衰减 tick 时只衰减 trace，不更新权重。"""
+        self.trace_pre *= self.trace_decay
+        self.trace_post *= self.trace_decay
 
     def get_weight_stats(self) -> dict[str, float]:
-        """获取权重统计信息（用于监控）。"""
         return {
             "w_mean": float(np.mean(self.W)),
             "w_std": float(np.std(self.W)),
@@ -192,19 +161,23 @@ class STDPSynapse:
         }
 
 
-class DriveCoreNetwork:
-    """SNN 驱动核网络。
+def _sigmoid(x: np.ndarray, center: float = 0.0, steepness: float = 8.0) -> np.ndarray:
+    """Sigmoid 激活，将膜电位映射为 [0, 1] 连续活跃度。"""
+    return 1.0 / (1.0 + np.exp(-steepness * (x - center)))
 
-    结构: 输入层(8) → 隐藏层(16 LIF) → 输出层(6 LIF)
-    输出使用膜电位的 EMA 平滑值，提供连续驱动信号。
+
+class DriveCoreNetwork:
+    """SNN 驱动核网络 v2。
+
+    结构: 输入层(8) -> 隐藏层(16 LIF) -> 输出层(6 LIF)
 
     输出维度：
-        0 - arousal:           整体激活度（短时间尺度）
-        1 - valence:           情感正负（短时间尺度）
-        2 - social_drive:      社交靠近冲动（中时间尺度）
-        3 - task_drive:        推进任务冲动（中时间尺度）
-        4 - exploration_drive: 探索新事物冲动（中时间尺度）
-        5 - rest_drive:        休息/收束冲动（慢时间尺度）
+        0 - arousal:           整体激活度
+        1 - valence:           情感正负
+        2 - social_drive:      社交冲动
+        3 - task_drive:        推进任务冲动
+        4 - exploration_drive: 探索冲动
+        5 - rest_drive:        休息冲动
     """
 
     INPUT_DIM = 8
@@ -221,86 +194,135 @@ class DriveCoreNetwork:
     ]
 
     def __init__(self) -> None:
-        # 神经元组——不同层使用不同时间常数
-        self.hidden = LIFNeuronGroup(self.HIDDEN_DIM, tau=15.0, threshold=0.3)
-        self.output = LIFNeuronGroup(self.OUTPUT_DIM, tau=30.0, threshold=0.5)
+        self.hidden = LIFNeuronGroup(self.HIDDEN_DIM, tau=12.0, threshold=0.15)
+        self.output = LIFNeuronGroup(self.OUTPUT_DIM, tau=25.0, threshold=0.20)
 
-        # 突触
         self.syn_in_hid = STDPSynapse(
-            self.INPUT_DIM, self.HIDDEN_DIM, lr_plus=0.01, lr_minus=0.005
+            self.INPUT_DIM, self.HIDDEN_DIM, lr_plus=0.015, lr_minus=0.007
         )
         self.syn_hid_out = STDPSynapse(
-            self.HIDDEN_DIM, self.OUTPUT_DIM, lr_plus=0.008, lr_minus=0.004
+            self.HIDDEN_DIM, self.OUTPUT_DIM, lr_plus=0.012, lr_minus=0.006
         )
 
-        # 输出 EMA（指数移动平均）—— 比原始膜电位更平滑
         self._output_ema = np.zeros(self.OUTPUT_DIM, dtype=np.float64)
-        self._ema_alpha = 0.1
+        self._ema_alpha = 0.15
+
+        self._input_gain = 2.0
+        self._hidden_spike_gain = 1.5
+        self._hidden_cont_gain = 0.4
+        self._noise_std = 0.08
+
+        # 自稳态
+        self._target_hidden_rate = 0.10
+        self._target_output_rate = 0.06
+        self._homeo_alpha = 0.03
+        self._homeo_threshold_lr = 0.005
+        self._homeo_gain_lr = 0.08
+        self._hidden_rate_ema = 0.05
+        self._output_rate_ema = 0.03
+
+        # 运行时统计（动态离散化）
+        self._output_running_mean = np.zeros(self.OUTPUT_DIM, dtype=np.float64)
+        self._output_running_var = np.ones(self.OUTPUT_DIM, dtype=np.float64) * 0.01
+        self._stats_alpha = 0.01
 
         self.tick_count: int = 0
+        self._real_step_count: int = 0
 
-    def step(self, input_vec: np.ndarray, reward: float = 0.0) -> np.ndarray:
-        """单步前向传播 + 学习更新。
-
-        Args:
-            input_vec: 8 维输入特征（归一化到 [-1, 1]）。
-            reward: 奖赏信号（[-1, 1]），来自上一轮心跳结果。
-
-        Returns:
-            6 维驱动输出（EMA 平滑后）。
-        """
-        # 输入安全检查
-        if input_vec.shape != (self.INPUT_DIM,):
-            input_vec = np.zeros(self.INPUT_DIM, dtype=np.float64)
-
-        input_vec = np.clip(input_vec, -2.0, 2.0)
-
-        # 前向传播
-        current_hidden = self.syn_in_hid.forward(input_vec)
-        spikes_hidden = self.hidden.step(current_hidden)
-
-        current_output = self.syn_hid_out.forward(spikes_hidden.astype(np.float64))
-        spikes_output = self.output.step(current_output)
-
-        # 用膜电位作为连续输出（比 spike 更平滑）
-        raw_output = self.output.get_state()
-        self._output_ema = (
-            (1 - self._ema_alpha) * self._output_ema + self._ema_alpha * raw_output
-        )
-
-        # STDP 学习（带奖赏调制）
-        input_as_spikes = (np.abs(input_vec) > 0.1).astype(np.float64)
-
-        self.syn_in_hid.update(
-            input_as_spikes,
-            spikes_hidden.astype(np.float64),
-            reward=reward,
-        )
-        self.syn_hid_out.update(
-            spikes_hidden.astype(np.float64),
-            spikes_output.astype(np.float64),
-            reward=reward,
-        )
-
+    def decay_only(self) -> np.ndarray:
+        """零输入衰减 tick：只泄漏膜电位和 trace，不学习。"""
+        self.hidden.decay_only()
+        self.output.decay_only()
+        self.syn_in_hid.decay_traces()
+        self.syn_hid_out.decay_traces()
         self.tick_count += 1
         return self._output_ema.copy()
 
+    def step(self, input_vec: np.ndarray, reward: float = 0.0) -> np.ndarray:
+        """真实输入步：前向传播 + 噪声 + 软 STDP 学习。"""
+        if input_vec.shape != (self.INPUT_DIM,):
+            input_vec = np.zeros(self.INPUT_DIM, dtype=np.float64)
+        input_vec = np.clip(input_vec, -2.0, 2.0)
+
+        # 前向 + 噪声
+        input_scaled = input_vec * self._input_gain
+        current_hidden = self.syn_in_hid.forward(input_scaled)
+        noise = np.random.normal(0, self._noise_std, size=self.HIDDEN_DIM)
+        current_hidden += noise
+        input_strength = float(np.mean(np.abs(input_vec)))
+        current_hidden += 0.08 * input_strength
+        spikes_hidden = self.hidden.step(current_hidden)
+
+        hidden_spike_signal = spikes_hidden.astype(np.float64) * self._hidden_spike_gain
+        hidden_cont_signal = np.clip(self.hidden.get_state(), 0.0, 1.0)
+        current_output = self.syn_hid_out.forward(hidden_spike_signal)
+        current_output += self._hidden_cont_gain * self.syn_hid_out.forward(hidden_cont_signal)
+        current_output += np.random.normal(0, self._noise_std * 0.5, size=self.OUTPUT_DIM)
+        spikes_output = self.output.step(current_output)
+
+        # 自稳态
+        hidden_rate = float(np.mean(spikes_hidden.astype(np.float64)))
+        output_rate = float(np.mean(spikes_output.astype(np.float64)))
+        self._hidden_rate_ema = (1.0 - self._homeo_alpha) * self._hidden_rate_ema + self._homeo_alpha * hidden_rate
+        self._output_rate_ema = (1.0 - self._homeo_alpha) * self._output_rate_ema + self._homeo_alpha * output_rate
+
+        self.hidden.threshold += self._homeo_threshold_lr * (self._hidden_rate_ema - self._target_hidden_rate)
+        self.output.threshold += self._homeo_threshold_lr * (self._output_rate_ema - self._target_output_rate)
+        self._input_gain += self._homeo_gain_lr * (self._target_hidden_rate - self._hidden_rate_ema)
+        self._hidden_spike_gain += self._homeo_gain_lr * (self._target_output_rate - self._output_rate_ema)
+
+        self.hidden.threshold = float(np.clip(self.hidden.threshold, 0.05, 0.5))
+        self.output.threshold = float(np.clip(self.output.threshold, 0.05, 0.5))
+        self._input_gain = float(np.clip(self._input_gain, 0.8, 3.5))
+        self._hidden_spike_gain = float(np.clip(self._hidden_spike_gain, 0.8, 3.5))
+        self._hidden_cont_gain = float(np.clip(self._hidden_cont_gain, 0.15, 0.8))
+
+        # EMA 输出
+        raw_output = self.output.get_state()
+        self._output_ema = (1 - self._ema_alpha) * self._output_ema + self._ema_alpha * raw_output
+
+        # 更新运行时统计
+        self._output_running_mean = (
+            (1 - self._stats_alpha) * self._output_running_mean
+            + self._stats_alpha * self._output_ema
+        )
+        diff = self._output_ema - self._output_running_mean
+        self._output_running_var = (
+            (1 - self._stats_alpha) * self._output_running_var
+            + self._stats_alpha * (diff ** 2)
+        )
+
+        # 软 STDP
+        hidden_v = self.hidden.get_state()
+        output_v = self.output.get_state()
+        soft_hidden = _sigmoid(hidden_v, center=self.hidden.threshold * 0.5, steepness=10.0)
+        soft_output = _sigmoid(output_v, center=self.output.threshold * 0.5, steepness=10.0)
+        input_activity = np.abs(input_vec) / max(float(np.max(np.abs(input_vec))), 0.01)
+
+        self.syn_in_hid.update_soft(input_activity, soft_hidden, reward=reward)
+        self.syn_hid_out.update_soft(soft_hidden, soft_output, reward=reward)
+
+        self.tick_count += 1
+        self._real_step_count += 1
+        return self._output_ema.copy()
+
     def get_drive_dict(self) -> dict[str, float]:
-        """返回命名的驱动向量。"""
         return {
             name: round(float(val), 4)
             for name, val in zip(self.OUTPUT_NAMES, self._output_ema)
         }
 
     def get_drive_discrete(self) -> dict[str, str]:
-        """返回离散化的驱动描述（用于注入 prompt）。"""
+        """动态离散化：z-score。"""
         result: dict[str, str] = {}
-        for name, value in zip(self.OUTPUT_NAMES, self._output_ema):
-            if value > 0.6:
+        std = np.sqrt(np.maximum(self._output_running_var, 1e-6))
+        for i, name in enumerate(self.OUTPUT_NAMES):
+            z = (self._output_ema[i] - self._output_running_mean[i]) / std[i]
+            if z > 1.0:
                 level = "高"
-            elif value > 0.3:
+            elif z > 0.3:
                 level = "中"
-            elif value > -0.3:
+            elif z > -0.5:
                 level = "低"
             else:
                 level = "抑制"
@@ -308,26 +330,35 @@ class DriveCoreNetwork:
         return result
 
     def get_output_ema(self) -> np.ndarray:
-        """获取原始 EMA 输出。"""
         return self._output_ema.copy()
 
     def get_health(self) -> dict[str, Any]:
-        """获取网络健康状态（用于监控和审计）。"""
         return {
             "tick_count": self.tick_count,
+            "real_step_count": self._real_step_count,
             "drives": self.get_drive_dict(),
             "drives_discrete": self.get_drive_discrete(),
             "hidden_v_mean": round(float(np.mean(self.hidden.v)), 4),
             "hidden_v_std": round(float(np.std(self.hidden.v)), 4),
             "output_v_mean": round(float(np.mean(self.output.v)), 4),
             "output_v_std": round(float(np.std(self.output.v)), 4),
+            "hidden_threshold": round(float(self.hidden.threshold), 4),
+            "output_threshold": round(float(self.output.threshold), 4),
+            "input_gain": round(float(self._input_gain), 4),
+            "hidden_spike_gain": round(float(self._hidden_spike_gain), 4),
+            "hidden_cont_gain": round(float(self._hidden_cont_gain), 4),
+            "hidden_rate_ema": round(float(self._hidden_rate_ema), 4),
+            "output_rate_ema": round(float(self._output_rate_ema), 4),
+            "output_running_mean": [round(float(v), 4) for v in self._output_running_mean],
+            "output_running_std": [round(float(np.sqrt(max(v, 0))), 4) for v in self._output_running_var],
+            "noise_std": round(self._noise_std, 4),
             "syn_in_hid": self.syn_in_hid.get_weight_stats(),
             "syn_hid_out": self.syn_hid_out.get_weight_stats(),
         }
 
     def serialize(self) -> dict[str, Any]:
-        """序列化全部状态（用于持久化）。"""
         return {
+            "version": 2,
             "hidden_v": self.hidden.v.tolist(),
             "output_v": self.output.v.tolist(),
             "output_ema": self._output_ema.tolist(),
@@ -337,11 +368,20 @@ class DriveCoreNetwork:
             "syn_hid_out_W": self.syn_hid_out.W.tolist(),
             "syn_hid_out_trace_pre": self.syn_hid_out.trace_pre.tolist(),
             "syn_hid_out_trace_post": self.syn_hid_out.trace_post.tolist(),
+            "hidden_threshold": float(self.hidden.threshold),
+            "output_threshold": float(self.output.threshold),
+            "input_gain": float(self._input_gain),
+            "hidden_spike_gain": float(self._hidden_spike_gain),
+            "hidden_cont_gain": float(self._hidden_cont_gain),
+            "hidden_rate_ema": float(self._hidden_rate_ema),
+            "output_rate_ema": float(self._output_rate_ema),
             "tick_count": self.tick_count,
+            "real_step_count": self._real_step_count,
+            "output_running_mean": self._output_running_mean.tolist(),
+            "output_running_var": self._output_running_var.tolist(),
         }
 
     def deserialize(self, data: dict[str, Any]) -> None:
-        """从持久化数据恢复。"""
         try:
             if "hidden_v" in data:
                 self.hidden.set_state(np.array(data["hidden_v"], dtype=np.float64))
@@ -359,25 +399,51 @@ class DriveCoreNetwork:
                 w = np.array(data["syn_hid_out_W"], dtype=np.float64)
                 if w.shape == self.syn_hid_out.W.shape:
                     self.syn_hid_out.W = w
-            if "syn_in_hid_trace_pre" in data:
-                t = np.array(data["syn_in_hid_trace_pre"], dtype=np.float64)
-                if t.shape == self.syn_in_hid.trace_pre.shape:
-                    self.syn_in_hid.trace_pre = t
-            if "syn_in_hid_trace_post" in data:
-                t = np.array(data["syn_in_hid_trace_post"], dtype=np.float64)
-                if t.shape == self.syn_in_hid.trace_post.shape:
-                    self.syn_in_hid.trace_post = t
-            if "syn_hid_out_trace_pre" in data:
-                t = np.array(data["syn_hid_out_trace_pre"], dtype=np.float64)
-                if t.shape == self.syn_hid_out.trace_pre.shape:
-                    self.syn_hid_out.trace_pre = t
-            if "syn_hid_out_trace_post" in data:
-                t = np.array(data["syn_hid_out_trace_post"], dtype=np.float64)
-                if t.shape == self.syn_hid_out.trace_post.shape:
-                    self.syn_hid_out.trace_post = t
+            for key, arr, attr_path in [
+                ("syn_in_hid_trace_pre", self.syn_in_hid.trace_pre, "syn_in_hid.trace_pre"),
+                ("syn_in_hid_trace_post", self.syn_in_hid.trace_post, "syn_in_hid.trace_post"),
+                ("syn_hid_out_trace_pre", self.syn_hid_out.trace_pre, "syn_hid_out.trace_pre"),
+                ("syn_hid_out_trace_post", self.syn_hid_out.trace_post, "syn_hid_out.trace_post"),
+            ]:
+                if key in data:
+                    t = np.array(data[key], dtype=np.float64)
+                    if t.shape == arr.shape:
+                        parts = attr_path.split(".")
+                        setattr(getattr(self, parts[0]), parts[1], t)
+
             if "tick_count" in data:
                 self.tick_count = int(data["tick_count"])
+            if "real_step_count" in data:
+                self._real_step_count = int(data["real_step_count"])
+            if "hidden_threshold" in data:
+                self.hidden.threshold = float(data["hidden_threshold"])
+            if "output_threshold" in data:
+                self.output.threshold = float(data["output_threshold"])
+            if "input_gain" in data:
+                self._input_gain = float(data["input_gain"])
+            if "hidden_spike_gain" in data:
+                self._hidden_spike_gain = float(data["hidden_spike_gain"])
+            if "hidden_cont_gain" in data:
+                self._hidden_cont_gain = float(data["hidden_cont_gain"])
+            if "hidden_rate_ema" in data:
+                self._hidden_rate_ema = float(data["hidden_rate_ema"])
+            if "output_rate_ema" in data:
+                self._output_rate_ema = float(data["output_rate_ema"])
+            if "output_running_mean" in data:
+                m = np.array(data["output_running_mean"], dtype=np.float64)
+                if m.shape == self._output_running_mean.shape:
+                    self._output_running_mean = m
+            if "output_running_var" in data:
+                v = np.array(data["output_running_var"], dtype=np.float64)
+                if v.shape == self._output_running_var.shape:
+                    self._output_running_var = v
 
-            logger.info(f"SNN 状态反序列化成功，tick_count={self.tick_count}")
+            self.hidden.threshold = float(np.clip(self.hidden.threshold, 0.05, 0.5))
+            self.output.threshold = float(np.clip(self.output.threshold, 0.05, 0.5))
+            self._input_gain = float(np.clip(self._input_gain, 0.8, 3.5))
+            self._hidden_spike_gain = float(np.clip(self._hidden_spike_gain, 0.8, 3.5))
+            self._hidden_cont_gain = float(np.clip(self._hidden_cont_gain, 0.15, 0.8))
+
+            logger.info(f"SNN v2 状态反序列化成功，tick={self.tick_count}, real_steps={self._real_step_count}")
         except Exception as e:
-            logger.error(f"SNN 状态反序列化失败，将从默认状态开始: {e}")
+            logger.error(f"SNN 状态反序列化失败: {e}")

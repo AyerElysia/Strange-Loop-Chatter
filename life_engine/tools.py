@@ -169,8 +169,6 @@ async def _sync_memory_embedding_for_file(plugin: Any, path: str, content: str) 
         logger.warning(f"同步记忆 embedding 失败 {path}: {e}")
 
 
-# 冷却时间常量（分钟）
-_TELL_DFC_COOLDOWN_MINUTES = 10  # 两次传话之间的最小间隔
 _TELL_DFC_EXTERNAL_ACTIVE_MINUTES = 5  # 外部消息在此时间内视为"活跃"
 
 
@@ -238,23 +236,11 @@ class LifeEngineWakeDFCTool(BaseTool):
         if not text:
             return False, "message 不能为空"
 
-        # 获取服务实例以检查冷却时间
+        # 获取服务实例以辅助路由判断
         life_service = _get_life_engine_service(self.plugin)
         if life_service:
-            minutes_since_tell = life_service._minutes_since_tell_dfc()
             minutes_since_external = life_service._minutes_since_external_message()
-            
-            # 冷却检查：两次传话之间需要间隔
-            if minutes_since_tell is not None and minutes_since_tell < _TELL_DFC_COOLDOWN_MINUTES:
-                # 除非是 critical 级别，否则拒绝
-                if importance != "critical":
-                    return (
-                        False,
-                        f"刚才才传话给 DFC（{minutes_since_tell} 分钟前），请稍后再传。"
-                        f"冷却时间: {_TELL_DFC_COOLDOWN_MINUTES} 分钟。"
-                        "如果真的很紧急，请使用 importance='critical'。"
-                    )
-            
+
             # 活跃检查：如果外界很活跃，建议不要打扰
             if minutes_since_external is not None and minutes_since_external < _TELL_DFC_EXTERNAL_ACTIVE_MINUTES:
                 # 除非是 high 或 critical 级别，否则给出警告但不阻止
@@ -613,8 +599,8 @@ class LifeEngineMoveFileTool(BaseTool):
     tool_description: str = (
         "移动或重命名文件/目录。\n\n"
         "**何时使用：** 整理文件结构、重命名文件时。\n"
-        "**💡 记忆提示：** 移动文件后，原有的记忆关联仍然基于旧路径。"
-        "如果该文件有重要关联，在移动后用 nucleus_relate_file 重新建立。"
+        "**💡 记忆提示：** 本工具会在移动后自动迁移对应的记忆路径映射（节点/关联/索引）。"
+        "如果迁移失败，会在返回里给出失败数量，建议随后手动检查。"
     )
     chatter_allow: list[str] = ["life_engine_internal"]
 
@@ -648,14 +634,61 @@ class LifeEngineMoveFileTool(BaseTool):
             return False, f"源文件/目录不存在: {source}"
 
         try:
+            workspace = _get_workspace(self.plugin)
+            src_is_dir = src_path.is_dir()
+            files_before_move: list[Path] = []
+            if src_is_dir:
+                files_before_move = [p for p in src_path.rglob("*") if p.is_file()]
+            elif src_path.is_file():
+                files_before_move = [src_path]
+
             dst_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(src_path), str(dst_path))
+            moved_to = Path(shutil.move(str(src_path), str(dst_path))).resolve()
+
+            migrated_count = 0
+            failed_count = 0
+            failed_items: list[str] = []
+            try:
+                from .service import LifeEngineService
+
+                life_service = LifeEngineService.get_instance()
+                memory_service = getattr(life_service, "_memory_service", None) if life_service else None
+                if memory_service:
+                    for old_file in files_before_move:
+                        try:
+                            if src_is_dir:
+                                suffix = old_file.relative_to(src_path)
+                                new_file = moved_to / suffix
+                            else:
+                                new_file = moved_to
+
+                            old_rel = old_file.relative_to(workspace).as_posix()
+                            new_rel = new_file.relative_to(workspace).as_posix()
+
+                            migrated = await memory_service.migrate_file_path(old_rel, new_rel)
+                            if migrated:
+                                migrated_count += 1
+                        except Exception as item_exc:  # noqa: BLE001
+                            failed_count += 1
+                            failed_items.append(f"{old_file}: {item_exc}")
+                    if failed_count > 0:
+                        logger.warning(
+                            f"move 后记忆迁移部分失败: failed={failed_count}, details={failed_items[:3]}"
+                        )
+            except Exception as mem_exc:  # noqa: BLE001
+                logger.warning(f"move 后记忆迁移流程异常（不影响文件移动）: {mem_exc}")
+
             return True, {
                 "action": "move_file",
                 "source": source,
                 "destination": destination,
                 "source_absolute": str(src_path),
-                "destination_absolute": str(dst_path),
+                "destination_absolute": str(moved_to),
+                "memory_migration": {
+                    "attempted_files": len(files_before_move),
+                    "migrated_files": migrated_count,
+                    "failed_files": failed_count,
+                },
             }
         except Exception as e:
             logger.error(f"移动文件失败 {source} -> {destination}: {e}", exc_info=True)

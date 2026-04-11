@@ -146,7 +146,27 @@ class LifeEngineConfig(BaseConfig):
             description="特征提取窗口大小（秒）。决定 SNN 从多长时间的事件中提取输入。",
         )
 
+    @config_section("neuromod")
+    class NeuromodSection(SectionBase):
+        """神经调质层配置。"""
+
+        enabled: bool = Field(
+            default=True,
+            description="是否启用神经调质层。调质层在 SNN 之上提供慢时间尺度的驱动调节。",
+        )
+
+        inject_to_heartbeat: bool = Field(
+            default=True,
+            description="是否将调质状态注入心跳 prompt。",
+        )
+
+        habit_tracking: bool = Field(
+            default=True,
+            description="是否启用习惯追踪。",
+        )
+
     settings: SettingsSection = Field(default_factory=SettingsSection)
     model: ModelSection = Field(default_factory=ModelSection)
     web: WebSection = Field(default_factory=WebSection)
     snn: SNNSection = Field(default_factory=SNNSection)
+    neuromod: NeuromodSection = Field(default_factory=NeuromodSection)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import posixpath
 import random
 import sqlite3
 import time
@@ -128,9 +129,25 @@ class LifeMemoryService:
     
     def __init__(self, plugin: Any):
         self.plugin = plugin
+        self._workspace_override: Optional[Path] = None
+        if isinstance(plugin, (str, Path)):
+            self._workspace_override = Path(plugin)
         self._db: Optional[sqlite3.Connection] = None
         self._initialized = False
         self._chroma_collection = None
+
+    @staticmethod
+    def _normalize_file_path(file_path: str) -> str:
+        """规范化文件路径字符串，避免同一路径多种写法导致的节点分裂。"""
+        raw = str(file_path or "").strip().replace("\\", "/")
+        if not raw:
+            return ""
+        normalized = posixpath.normpath(raw)
+        if normalized == ".":
+            return ""
+        if normalized.startswith("./"):
+            normalized = normalized[2:]
+        return normalized.lstrip("/")
     
     def _get_config(self):
         """获取配置。"""
@@ -142,14 +159,20 @@ class LifeMemoryService:
     
     def _get_db_path(self) -> Path:
         """获取数据库路径。"""
-        config = self._get_config()
-        workspace = Path(config.settings.workspace_path)
+        if self._workspace_override is not None:
+            workspace = self._workspace_override
+        else:
+            config = self._get_config()
+            workspace = Path(config.settings.workspace_path)
         return workspace / ".memory" / "memory.db"
-    
+
     def _get_vector_db_path(self) -> str:
         """获取向量数据库路径。"""
-        config = self._get_config()
-        workspace = Path(config.settings.workspace_path)
+        if self._workspace_override is not None:
+            workspace = self._workspace_override
+        else:
+            config = self._get_config()
+            workspace = Path(config.settings.workspace_path)
         return str(workspace / ".memory" / "chroma")
     
     async def initialize(self) -> None:
@@ -239,7 +262,13 @@ class LifeMemoryService:
     
     def _generate_file_node_id(self, file_path: str) -> str:
         """根据文件路径生成节点 ID。"""
-        return f"file:{hashlib.md5(file_path.encode()).hexdigest()[:12]}"
+        normalized = self._normalize_file_path(file_path)
+        return f"file:{hashlib.md5(normalized.encode()).hexdigest()[:12]}"
+
+    @staticmethod
+    def _generate_legacy_file_node_id(file_path: str) -> str:
+        """兼容旧实现（直接使用原始字符串）的节点 ID 生成规则。"""
+        return f"file:{hashlib.md5(str(file_path).encode()).hexdigest()[:12]}"
     
     def _generate_concept_node_id(self, concept: str) -> str:
         """根据概念名称生成节点 ID。"""
@@ -256,11 +285,26 @@ class LifeMemoryService:
         content: str = ""
     ) -> MemoryNode:
         """获取或创建文件节点。"""
-        node_id = self._generate_file_node_id(file_path)
+        normalized_path = self._normalize_file_path(file_path)
+        if not normalized_path:
+            raise ValueError("file_path 不能为空")
+        node_id = self._generate_file_node_id(normalized_path)
+        legacy_node_id = self._generate_legacy_file_node_id(file_path)
         
         cursor = self._db.cursor()
         cursor.execute("SELECT * FROM memory_nodes WHERE node_id = ?", (node_id,))
         row = cursor.fetchone()
+        if row is None and legacy_node_id != node_id:
+            cursor.execute("SELECT * FROM memory_nodes WHERE node_id = ?", (legacy_node_id,))
+            legacy_row = cursor.fetchone()
+            if legacy_row is not None:
+                await self._migrate_node_identity(
+                    old_node_id=legacy_node_id,
+                    new_node_id=node_id,
+                    new_file_path=normalized_path,
+                )
+                cursor.execute("SELECT * FROM memory_nodes WHERE node_id = ?", (node_id,))
+                row = cursor.fetchone()
         
         now = time.time()
         content_hash = self._compute_content_hash(content) if content else None
@@ -291,11 +335,11 @@ class LifeMemoryService:
         node = MemoryNode(
             node_id=node_id,
             node_type=NodeType.FILE,
-            file_path=file_path,
+            file_path=normalized_path,
             content_hash=content_hash,
             title=title,
             created_at=now,
-            updated_at=now
+            updated_at=now,
         )
         
         cursor.execute("""
@@ -322,11 +366,274 @@ class LifeMemoryService:
     
     async def get_node_by_file_path(self, file_path: str) -> Optional[MemoryNode]:
         """根据文件路径获取节点。"""
-        node_id = self._generate_file_node_id(file_path)
+        normalized_path = self._normalize_file_path(file_path)
+        if not normalized_path:
+            return None
+        node_id = self._generate_file_node_id(normalized_path)
         cursor = self._db.cursor()
         cursor.execute("SELECT * FROM memory_nodes WHERE node_id = ?", (node_id,))
         row = cursor.fetchone()
+        if row is None:
+            legacy_node_id = self._generate_legacy_file_node_id(file_path)
+            if legacy_node_id != node_id:
+                cursor.execute("SELECT * FROM memory_nodes WHERE node_id = ?", (legacy_node_id,))
+                row = cursor.fetchone()
+                if row is not None:
+                    await self._migrate_node_identity(
+                        old_node_id=legacy_node_id,
+                        new_node_id=node_id,
+                        new_file_path=normalized_path,
+                    )
+                    cursor.execute("SELECT * FROM memory_nodes WHERE node_id = ?", (node_id,))
+                    row = cursor.fetchone()
         return self._row_to_node(row) if row else None
+
+    async def _migrate_node_identity(
+        self,
+        old_node_id: str,
+        new_node_id: str,
+        new_file_path: str,
+    ) -> bool:
+        """将节点身份从 old_node_id 迁移到 new_node_id，并保留关联与检索数据。"""
+        if old_node_id == new_node_id:
+            cursor = self._db.cursor()
+            cursor.execute(
+                "UPDATE memory_nodes SET file_path = ?, updated_at = ? WHERE node_id = ?",
+                (new_file_path, time.time(), old_node_id),
+            )
+            self._db.commit()
+            return cursor.rowcount > 0
+
+        cursor = self._db.cursor()
+        cursor.execute("SELECT * FROM memory_nodes WHERE node_id = ?", (old_node_id,))
+        old_row = cursor.fetchone()
+        if not old_row:
+            return False
+
+        cursor.execute("SELECT * FROM memory_nodes WHERE node_id = ?", (new_node_id,))
+        new_row = cursor.fetchone()
+        now = time.time()
+
+        if new_row:
+            merged_title = (new_row["title"] or "").strip() or (old_row["title"] or "")
+            merged_content_hash = new_row["content_hash"] or old_row["content_hash"]
+            merged_activation = max(
+                float(new_row["activation_strength"] or 0.0),
+                float(old_row["activation_strength"] or 0.0),
+            )
+            merged_access_count = int(new_row["access_count"] or 0) + int(old_row["access_count"] or 0)
+            new_last = new_row["last_accessed_at"]
+            old_last = old_row["last_accessed_at"]
+            merged_last_accessed = max(v for v in (new_last, old_last) if v is not None) if (new_last is not None or old_last is not None) else None
+            merged_emotional_valence = (
+                float(new_row["emotional_valence"] or 0.0) + float(old_row["emotional_valence"] or 0.0)
+            ) / 2.0
+            merged_emotional_arousal = max(
+                float(new_row["emotional_arousal"] or 0.0),
+                float(old_row["emotional_arousal"] or 0.0),
+            )
+            merged_importance = max(
+                float(new_row["importance"] or 0.0),
+                float(old_row["importance"] or 0.0),
+            )
+            merged_created_at = min(
+                float(new_row["created_at"] or now),
+                float(old_row["created_at"] or now),
+            )
+
+            cursor.execute(
+                """
+                UPDATE memory_nodes
+                SET file_path = ?,
+                    content_hash = ?,
+                    title = ?,
+                    activation_strength = ?,
+                    access_count = ?,
+                    last_accessed_at = ?,
+                    emotional_valence = ?,
+                    emotional_arousal = ?,
+                    importance = ?,
+                    created_at = ?,
+                    updated_at = ?,
+                    embedding_synced = 0
+                WHERE node_id = ?
+                """,
+                (
+                    new_file_path,
+                    merged_content_hash,
+                    merged_title,
+                    merged_activation,
+                    merged_access_count,
+                    merged_last_accessed,
+                    merged_emotional_valence,
+                    merged_emotional_arousal,
+                    merged_importance,
+                    merged_created_at,
+                    now,
+                    new_node_id,
+                ),
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO memory_nodes
+                (node_id, node_type, file_path, content_hash, title,
+                 activation_strength, access_count, last_accessed_at,
+                 emotional_valence, emotional_arousal, importance,
+                 created_at, updated_at, embedding_synced)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    new_node_id,
+                    old_row["node_type"],
+                    new_file_path,
+                    old_row["content_hash"],
+                    old_row["title"],
+                    old_row["activation_strength"],
+                    old_row["access_count"],
+                    old_row["last_accessed_at"],
+                    old_row["emotional_valence"],
+                    old_row["emotional_arousal"],
+                    old_row["importance"],
+                    old_row["created_at"],
+                    now,
+                    0,
+                ),
+            )
+
+        cursor.execute(
+            "SELECT * FROM memory_edges WHERE source_id = ? OR target_id = ?",
+            (old_node_id, old_node_id),
+        )
+        old_edges = cursor.fetchall()
+        for edge in old_edges:
+            mapped_source = new_node_id if edge["source_id"] == old_node_id else edge["source_id"]
+            mapped_target = new_node_id if edge["target_id"] == old_node_id else edge["target_id"]
+            if mapped_source == mapped_target:
+                continue
+
+            cursor.execute(
+                """
+                INSERT INTO memory_edges
+                (edge_id, source_id, target_id, edge_type, weight, base_strength,
+                 reinforcement, activation_count, last_activated_at, reason, created_at, bidirectional)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_id, target_id, edge_type) DO UPDATE SET
+                    weight = MAX(weight, excluded.weight),
+                    base_strength = MAX(base_strength, excluded.base_strength),
+                    reinforcement = reinforcement + excluded.reinforcement,
+                    activation_count = activation_count + excluded.activation_count,
+                    last_activated_at = CASE
+                        WHEN last_activated_at IS NULL THEN excluded.last_activated_at
+                        WHEN excluded.last_activated_at IS NULL THEN last_activated_at
+                        ELSE MAX(last_activated_at, excluded.last_activated_at)
+                    END,
+                    reason = CASE
+                        WHEN reason IS NULL OR reason = '' THEN excluded.reason
+                        ELSE reason
+                    END,
+                    bidirectional = MAX(bidirectional, excluded.bidirectional)
+                """,
+                (
+                    str(uuid.uuid4())[:8],
+                    mapped_source,
+                    mapped_target,
+                    edge["edge_type"],
+                    edge["weight"],
+                    edge["base_strength"],
+                    edge["reinforcement"],
+                    edge["activation_count"],
+                    edge["last_activated_at"],
+                    edge["reason"],
+                    edge["created_at"],
+                    edge["bidirectional"],
+                ),
+            )
+
+        cursor.execute("SELECT title, content FROM memory_fts WHERE node_id = ? LIMIT 1", (old_node_id,))
+        old_fts_row = cursor.fetchone()
+        if old_fts_row:
+            cursor.execute("DELETE FROM memory_fts WHERE node_id = ?", (new_node_id,))
+            cursor.execute(
+                "INSERT INTO memory_fts (node_id, title, content) VALUES (?, ?, ?)",
+                (new_node_id, old_fts_row["title"], old_fts_row["content"]),
+            )
+
+        cursor.execute(
+            "DELETE FROM memory_edges WHERE source_id = ? OR target_id = ?",
+            (old_node_id, old_node_id),
+        )
+        cursor.execute("DELETE FROM memory_fts WHERE node_id = ?", (old_node_id,))
+        cursor.execute("DELETE FROM memory_nodes WHERE node_id = ?", (old_node_id,))
+        self._db.commit()
+
+        await self._migrate_vector_identity(
+            old_node_id=old_node_id,
+            new_node_id=new_node_id,
+            new_file_path=new_file_path,
+        )
+        return True
+
+    async def _migrate_vector_identity(
+        self,
+        old_node_id: str,
+        new_node_id: str,
+        new_file_path: str,
+    ) -> None:
+        """迁移向量库中的节点 ID（尽力而为，不阻塞主流程）。"""
+        try:
+            collection = await self._get_chroma_collection()
+            old_data = collection.get(
+                ids=[old_node_id],
+                include=["embeddings", "documents", "metadatas"],
+            )
+            ids = old_data.get("ids") or []
+            if not ids:
+                return
+
+            embeddings = old_data.get("embeddings") or []
+            documents = old_data.get("documents") or []
+            metadatas = old_data.get("metadatas") or []
+            if not embeddings:
+                return
+
+            metadata = metadatas[0] if metadatas else {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["file_path"] = new_file_path
+
+            upsert_kwargs: Dict[str, Any] = {
+                "ids": [new_node_id],
+                "embeddings": [embeddings[0]],
+                "metadatas": [metadata],
+            }
+            if documents:
+                upsert_kwargs["documents"] = [documents[0]]
+
+            collection.upsert(**upsert_kwargs)
+            collection.delete(ids=[old_node_id])
+        except Exception as e:
+            logger.debug(f"向量身份迁移失败 {old_node_id} -> {new_node_id}: {e}")
+
+    async def migrate_file_path(self, old_path: str, new_path: str) -> bool:
+        """迁移文件路径对应的记忆身份，避免移动文件后节点断裂。"""
+        old_norm = self._normalize_file_path(old_path)
+        new_norm = self._normalize_file_path(new_path)
+        if not old_norm or not new_norm:
+            return False
+        if old_norm == new_norm:
+            return True
+
+        old_node_id = self._generate_file_node_id(old_norm)
+        new_node_id = self._generate_file_node_id(new_norm)
+        migrated = await self._migrate_node_identity(
+            old_node_id=old_node_id,
+            new_node_id=new_node_id,
+            new_file_path=new_norm,
+        )
+        if migrated:
+            logger.info(f"已迁移记忆路径: {old_norm} -> {new_norm}")
+        return migrated
     
     def _row_to_node(self, row: sqlite3.Row) -> MemoryNode:
         """将数据库行转换为 MemoryNode。"""

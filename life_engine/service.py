@@ -247,6 +247,8 @@ class LifeEngineService(BaseService):
         self._snn_network: Any = None
         self._snn_bridge: Any = None
         self._snn_tick_task_id: str | None = None
+        # 神经调质层
+        self._inner_state: Any = None
 
     def _get_lock(self) -> asyncio.Lock:
         """获取懒加载锁。"""
@@ -423,6 +425,12 @@ class LifeEngineService(BaseService):
                     payload["snn_state"] = self._snn_network.serialize()
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(f"SNN 状态序列化失败: {exc}")
+            # 调质层状态持久化
+            if self._inner_state is not None:
+                try:
+                    payload["neuromod_state"] = self._inner_state.serialize()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"调质层状态序列化失败: {exc}")
 
         path = self._runtime_context_path()
         temp_path = path.with_suffix(path.suffix + ".tmp")
@@ -490,6 +498,8 @@ class LifeEngineService(BaseService):
 
         # 恢复 SNN 状态（延迟到 _init_snn 中执行）
         self._snn_persisted_state = raw.get("snn_state")
+        # 恢复调质层状态
+        self._neuromod_persisted_state = raw.get("neuromod_state")
 
         logger.info(
             "life_engine 上下文恢复完成: "
@@ -673,6 +683,11 @@ class LifeEngineService(BaseService):
         data["snn_enabled"] = self._cfg().snn.enabled
         if self._snn_network is not None:
             data["snn_health"] = self._snn_network.get_health()
+        # 调质层状态
+        neuromod_cfg = getattr(self._cfg(), "neuromod", None)
+        data["neuromod_enabled"] = neuromod_cfg.enabled if neuromod_cfg else False
+        if self._inner_state is not None:
+            data["neuromod_state"] = self._inner_state.get_full_state()
         return data
 
     def health(self) -> dict[str, Any]:
@@ -1333,7 +1348,6 @@ class LifeEngineService(BaseService):
         
         # 计算空闲心跳数（距上次有工具调用的心跳数）
         idle_heartbeats = self._state.idle_heartbeat_count
-        minutes_since_tell = self._minutes_since_tell_dfc()
         
         # 根据外部消息间隔判断外界活跃度
         if minutes_since_external is None:
@@ -1394,6 +1408,20 @@ class LifeEngineService(BaseService):
             )
             if drive_text:
                 lines.extend([f"**{drive_text}**", ""])
+
+        # 调质层状态注入
+        cfg = self._cfg()
+        if (
+            self._inner_state is not None
+            and getattr(cfg, "neuromod", None) is not None
+            and cfg.neuromod.enabled
+            and cfg.neuromod.inject_to_heartbeat
+        ):
+            from datetime import datetime as _dt
+            today_str = _dt.now().strftime("%Y-%m-%d")
+            neuromod_text = self._inner_state.format_full_state_for_prompt(today_str)
+            if neuromod_text:
+                lines.extend([neuromod_text, ""])
         
         # 添加空闲警告
         if idle_warning:
@@ -1431,7 +1459,6 @@ class LifeEngineService(BaseService):
             "- 没有信息差，只是在复述已知内容",
             "- 只是把动作要求丢给 DFC（任务分配）",
             "- 直接转发用户对 life 的命令原句",
-            f"- 距上次 tell_dfc 少于 10 分钟（当前: {minutes_since_tell if minutes_since_tell is not None else '未知'} 分钟），除非 importance=critical",
             "",
             "简化决策：",
             "- 有信息差 → tell_dfc",
@@ -2004,6 +2031,8 @@ class LifeEngineService(BaseService):
         try:
             self._state.heartbeat_count += 1
             self._state.last_heartbeat_at = _now_iso()
+            await self._maybe_run_daily_decay()
+            await self._snn_heartbeat_pre()
             injected_content = await self.inject_wake_context()
             
             log_heartbeat_event(
@@ -2016,6 +2045,7 @@ class LifeEngineService(BaseService):
             
             model_reply = await self._run_heartbeat_model(injected_content)
             await self._record_model_reply(model_reply)
+            await self._snn_heartbeat_post()
             
             logger.info(
                 f"life_engine 手动心跳完成 #{self._state.heartbeat_count}: "
@@ -2131,18 +2161,37 @@ class LifeEngineService(BaseService):
             self._snn_network = None
             self._snn_bridge = None
 
+        # 初始化调质层（独立于 SNN，SNN 禁用时调质层也能独立运行）
+        try:
+            neuromod_cfg = getattr(cfg, "neuromod", None)
+            if neuromod_cfg and neuromod_cfg.enabled:
+                from .neuromod import InnerStateEngine
+                self._inner_state = InnerStateEngine()
+
+                # 恢复持久化状态
+                neuromod_persisted = getattr(self, "_neuromod_persisted_state", None)
+                if neuromod_persisted and isinstance(neuromod_persisted, dict):
+                    self._inner_state.deserialize(neuromod_persisted)
+                self._neuromod_persisted_state = None
+
+                logger.info(
+                    f"调质层已初始化: inject={neuromod_cfg.inject_to_heartbeat} "
+                    f"habits={neuromod_cfg.habit_tracking}"
+                )
+            else:
+                logger.debug("调质层未启用")
+        except Exception as e:
+            logger.error(f"调质层初始化失败: {e}", exc_info=True)
+            self._inner_state = None
+
     async def _snn_tick_loop(self, interval: float) -> None:
-        """SNN 独立 tick 循环。
+        """SNN 独立 tick 循环 v2。
 
-        在心跳间隔之间持续运行，让 SNN 的膜电位自然衰减。
-        只做衰减（零输入），不注入新特征——特征在心跳时才注入。
-        这正是"连续存在"的物理基础：即使没有事件，时间的流逝仍然在改变内在状态。
+        只做膜电位衰减和 trace 衰减，不执行完整 step()。
+        这避免了零输入 tick 淹没 STDP 信号的问题。
         """
-        import numpy as np
-
-        persist_interval = max(1, int(60 / interval))  # 约每 60 秒持久化一次
-        snapshot_interval = max(1, int(300 / interval))  # 约每 5 分钟快照一次
-        zero_input = np.zeros(8, dtype=np.float64)
+        persist_interval = max(1, int(60 / interval))
+        snapshot_interval = max(1, int(300 / interval))
 
         while self._state.running:
             try:
@@ -2152,16 +2201,14 @@ class LifeEngineService(BaseService):
                 if self._snn_network is None:
                     break
 
-                # 纯衰减 tick（零输入，零奖赏）
-                self._snn_network.step(zero_input, reward=0.0)
+                # v2: 仅衰减，不学习
+                self._snn_network.decay_only()
 
                 tick = self._snn_network.tick_count
 
-                # 定期持久化
                 if tick % persist_interval == 0:
                     await self._save_runtime_context()
 
-                # 定期审计快照
                 if tick % snapshot_interval == 0:
                     log_snn_snapshot(
                         action="periodic",
@@ -2173,20 +2220,59 @@ class LifeEngineService(BaseService):
                 break
             except Exception as e:
                 logger.warning(f"SNN tick 异常: {e}")
-                # 短暂等待后继续，不让单次异常杀死循环
                 await asyncio.sleep(interval)
 
         logger.info("SNN tick 循环已停止")
 
+    async def _snapshot_events_for_snn(self) -> list[LifeEngineEvent]:
+        """获取 SNN 分析用事件快照（历史 + pending）。"""
+        async with self._get_lock():
+            events = list(self._event_history)
+            if self._pending_events:
+                events.extend(self._pending_events)
+
+        events.sort(key=lambda event: (event.sequence, event.timestamp))
+        return events
+
+    @staticmethod
+    def _is_real_heartbeat_event(event: LifeEngineEvent) -> bool:
+        """判断是否为真实心跳（排除压缩摘要事件）。"""
+        if event.event_type != EventType.HEARTBEAT:
+            return False
+        heartbeat_index = getattr(event, "heartbeat_index", None)
+        if heartbeat_index is None:
+            return True
+        return heartbeat_index >= 0
+
+    @staticmethod
+    def _collect_tool_metrics(events: list[LifeEngineEvent]) -> tuple[int, int, int]:
+        """统计事件段中的工具调用指标。"""
+        tool_event_count = 0
+        tool_success_count = 0
+        tool_fail_count = 0
+
+        for event in events:
+            if event.event_type == EventType.TOOL_CALL:
+                tool_event_count += 1
+            elif event.event_type == EventType.TOOL_RESULT:
+                tool_event_count += 1
+                if getattr(event, "tool_success", False):
+                    tool_success_count += 1
+                else:
+                    tool_fail_count += 1
+
+        return tool_event_count, tool_success_count, tool_fail_count
+
     async def _snn_heartbeat_pre(self) -> None:
-        """心跳前 SNN 更新：从事件中提取特征，推进 SNN 一步。"""
+        """心跳前 SNN + 调质层更新。"""
         if self._snn_network is None or self._snn_bridge is None:
             return
 
         try:
             cfg = self._cfg()
+            events = await self._snapshot_events_for_snn()
             features = self._snn_bridge.extract_features_from_events(
-                self._event_history,
+                events,
                 window_seconds=cfg.snn.feature_window_seconds,
             )
             reward = self._snn_bridge.get_last_reward()
@@ -2195,11 +2281,19 @@ class LifeEngineService(BaseService):
             log_snn_tick(
                 action="heartbeat_pre",
                 tick_count=self._snn_network.tick_count,
+                real_steps=self._snn_network._real_step_count,
                 features=features.tolist(),
                 reward=round(reward, 4),
                 output=output.tolist(),
                 drives=self._snn_network.get_drive_dict(),
             )
+
+            # 更新调质层
+            if self._inner_state is not None:
+                snn_drives = self._snn_network.get_drive_dict()
+                event_stats = self._snn_bridge.get_last_event_stats()
+                self._inner_state.tick(snn_drives=snn_drives, event_stats=event_stats)
+
         except Exception as e:
             logger.warning(f"SNN heartbeat_pre 异常: {e}")
 
@@ -2209,31 +2303,46 @@ class LifeEngineService(BaseService):
             return
 
         try:
-            # 从当前状态提取心跳结果指标
-            tool_event_count = 0
-            tool_success_count = 0
-            tool_fail_count = 0
+            events = await self._snapshot_events_for_snn()
+            if not events:
+                return
 
-            # 检查最近的事件获取工具调用统计
-            for event in reversed(self._event_history[-20:]):
-                etype = getattr(event, "event_type", None)
-                etype_val = getattr(etype, "value", str(etype)) if etype else ""
-                if etype_val == "heartbeat":
-                    break  # 到上一个心跳就停
-                if etype_val == "tool_call":
-                    tool_event_count += 1
-                elif etype_val == "tool_result":
-                    tool_event_count += 1
-                    if getattr(event, "tool_success", False):
-                        tool_success_count += 1
+            heartbeat_positions = [
+                idx
+                for idx, event in enumerate(events)
+                if self._is_real_heartbeat_event(event)
+            ]
+
+            segment: list[LifeEngineEvent]
+            if heartbeat_positions:
+                current_hb_idx = heartbeat_positions[-1]
+                current_hb = events[current_hb_idx]
+                current_hb_round = getattr(current_hb, "heartbeat_index", None)
+
+                if current_hb_round == self._state.heartbeat_count:
+                    # 标准路径：统计上一轮心跳之后，到本轮 heartbeat 事件之前
+                    if len(heartbeat_positions) >= 2:
+                        prev_hb_idx = heartbeat_positions[-2]
+                        segment = events[prev_hb_idx + 1 : current_hb_idx]
                     else:
-                        tool_fail_count += 1
+                        # 首轮统计时没有上一轮边界，限制窗口避免历史污染
+                        segment = events[max(0, current_hb_idx - 120) : current_hb_idx]
+                else:
+                    # 兜底：本轮没有 heartbeat 事件时，统计最近 heartbeat 之后的事件
+                    segment = events[current_hb_idx + 1 :]
+            else:
+                # 兜底：没有任何 heartbeat 边界，仅统计近期事件
+                segment = events[-120:]
+
+            tool_event_count, tool_success_count, tool_fail_count = self._collect_tool_metrics(segment)
+            had_text_reply = bool((self._state.last_model_reply or "").strip())
 
             reward = self._snn_bridge.record_heartbeat_result(
                 tool_event_count=tool_event_count,
                 tool_success_count=tool_success_count,
                 tool_fail_count=tool_fail_count,
                 idle_count=self._state.idle_heartbeat_count,
+                had_text_reply=had_text_reply,
             )
 
             log_snn_tick(
@@ -2242,6 +2351,19 @@ class LifeEngineService(BaseService):
                 reward=round(reward, 4),
                 idle_count=self._state.idle_heartbeat_count,
                 tool_events=tool_event_count,
+                tool_success=tool_success_count,
+                tool_fail=tool_fail_count,
             )
+
+            # 习惯追踪：记录本轮使用的工具
+            if self._inner_state is not None:
+                from datetime import datetime as _dt
+                today_str = _dt.now().strftime("%Y-%m-%d")
+                for event in segment:
+                    if event.event_type == EventType.TOOL_CALL:
+                        tool_name = str(getattr(event, "tool_name", "") or "")
+                        if tool_name:
+                            self._inner_state.record_tool_use(tool_name, today_str)
+
         except Exception as e:
             logger.warning(f"SNN heartbeat_post 异常: {e}")
