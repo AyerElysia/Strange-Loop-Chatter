@@ -45,6 +45,28 @@ async def _on_message_received(_: str, params: dict) -> tuple[EventDecision, dic
         logger.warning("ON_MESSAGE_RECEIVED 事件缺少 message 参数")
         return EventDecision.PASS, params
 
+    # ── 命令优先检查：若消息是已注册命令，直接分发执行，不进入 Chatter ──
+    content = getattr(message, "content", None)
+    text: str = content if isinstance(content, str) else ""
+    if text:
+        from src.core.managers.command_manager import get_command_manager
+
+        cmd_mgr = get_command_manager()
+        if cmd_mgr.is_command(text):
+            try:
+                success, result = await cmd_mgr.execute_command(message=message)
+                if not result.startswith("未知命令:"):
+                    # 已知命令（成功或执行出错）：不进入会话流
+                    logger.debug(
+                        f"命令已分发: text={text[:60]!r}, "
+                        f"success={success}, result={result[:60]!r}"
+                    )
+                    return EventDecision.SUCCESS, params
+                # 未知命令：放行，由 Chatter 处理
+            except Exception as e:
+                logger.error(f"命令分发异常: text={text[:60]!r}, error={e}", exc_info=True)
+                # 分发出错时放行，避免消息丢失
+
     try:
         # 1. 获取或创建 ChatStream
         # message.stream_id 已经是标准哈希格式（由 extract_stream_id 生成）
