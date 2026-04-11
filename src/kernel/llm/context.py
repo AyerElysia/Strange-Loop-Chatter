@@ -226,8 +226,26 @@ class LLMContextManager:
             text_part = Text(text)
             self._reminders.append(text_part)
 
+    def update_reminder(
+        self,
+        content: str | Text | list[str | Text],
+        *,
+        wrap_with_system_tag: bool = True,
+    ) -> None:
+        """替换全部已登记的 reminder 内容，保持注入语义不变。
+
+        用于在 enhanced runner 长生命周期内刷新来自 SystemReminderStore 的
+        最新潜意识状态，避免 runner 启动时的快照长期过期。
+        """
+        self._reminders = []
+        self.reminder(content, wrap_with_system_tag=wrap_with_system_tag)
+
     def _apply_reminders(self, payloads: list[LLMPayload]) -> list[LLMPayload]:
-        """将 reminder 固定注入首个 USER 消息首段。"""
+        """将 reminder 注入首个 USER 消息**末尾**。
+
+        将动态内容（如 Life 潜意识状态）放在 USER block 尾部而非头部，
+        确保前面的静态内容（聊天历史等）可被 prefix caching 命中。
+        """
 
         if not self._reminders:
             return payloads
@@ -242,18 +260,31 @@ class LLMContextManager:
         first_user = updated[user_index]
         existing = first_user.content
 
-        matched_prefix_len = 0
+        # 检查尾部是否已包含相同 reminder（去重）
+        tail_start = len(existing) - len(reminder_parts)
+        if tail_start >= 0:
+            already_appended = all(
+                self._is_same_text_part(existing[tail_start + i], reminder_parts[i])
+                for i in range(len(reminder_parts))
+            )
+            if already_appended:
+                return updated
+
+        # 如果旧版 reminder 在头部（兼容升级），先移除旧前缀
+        prefix_match = 0
         while (
-            matched_prefix_len < len(reminder_parts)
-            and matched_prefix_len < len(existing)
-            and self._is_same_text_part(existing[matched_prefix_len], reminder_parts[matched_prefix_len])
+            prefix_match < len(reminder_parts)
+            and prefix_match < len(existing)
+            and self._is_same_text_part(existing[prefix_match], reminder_parts[prefix_match])
         ):
-            matched_prefix_len += 1
+            prefix_match += 1
+        if prefix_match == len(reminder_parts):
+            # 旧 reminder 完整存在于头部，移除后追加到尾部
+            clean_existing = existing[prefix_match:]
+        else:
+            clean_existing = list(existing)
 
-        if matched_prefix_len == len(reminder_parts):
-            return updated
-
-        rebuilt = reminder_parts + existing[matched_prefix_len:]
+        rebuilt = clean_existing + reminder_parts
         updated[user_index] = LLMPayload(ROLE.USER, rebuilt)
         return updated
 

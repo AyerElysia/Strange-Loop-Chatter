@@ -1205,15 +1205,23 @@ class LifeEngineService(BaseService):
             recent_tool_actions = self._collect_recent_tool_actions(max_count=5)
             active_concerns = self._collect_active_concerns()
 
-            # === 2. 构造潜意识摘要 ===
+            # === 2. 收集结构化状态 ===
+            snn_summary = self._collect_snn_summary()
+            neuromod_summary = self._collect_neuromod_summary()
+            todo_summary = self._collect_active_todos_summary()
+
+            # === 3. 构造潜意识摘要 ===
             subconscious_text = self._build_subconscious_summary(
                 latest_monologue=latest_monologue,
                 recent_monologues=recent_monologues,
                 recent_tool_actions=recent_tool_actions,
                 active_concerns=active_concerns,
+                snn_summary=snn_summary,
+                neuromod_summary=neuromod_summary,
+                todo_summary=todo_summary,
             )
 
-            # === 3. 写入 SystemReminderStore（DFC 的 Chatter 会自动读取） ===
+            # === 4. 写入 SystemReminderStore（DFC 的 Chatter 会自动读取） ===
             from src.core.prompt import get_system_reminder_store
 
             store = get_system_reminder_store()
@@ -1223,14 +1231,16 @@ class LifeEngineService(BaseService):
                 content=subconscious_text,
             )
 
-            # === 4. 持久化到 workspace/SUBCONSCIOUS.md（供中枢回顾） ===
+            # === 5. 持久化到 workspace/SUBCONSCIOUS.md（供中枢回顾） ===
             await self._persist_subconscious_file(subconscious_text)
 
             logger.debug(
                 f"潜意识状态已同步: "
                 f"monologues={len(recent_monologues)} "
                 f"actions={len(recent_tool_actions)} "
-                f"concerns={len(active_concerns)}"
+                f"concerns={len(active_concerns)} "
+                f"snn={'yes' if snn_summary else 'no'} "
+                f"todos={len(todo_summary) if todo_summary else 0}"
             )
         except Exception as e:
             # 潜意识同步失败不应影响心跳主流程
@@ -1273,17 +1283,81 @@ class LifeEngineService(BaseService):
             concerns.append(last_reply[:200])
         return concerns
 
+    def _collect_snn_summary(self) -> str:
+        """收集 SNN 驱动状态的可读摘要。"""
+        if self._snn_network is None:
+            return ""
+        try:
+            discrete = self._snn_network.get_drive_discrete()
+            # 映射为中文标签
+            label_map = {
+                "arousal": "唤醒",
+                "valence": "情绪效价",
+                "social_drive": "社交欲",
+                "task_drive": "做事欲",
+                "exploration_drive": "探索欲",
+                "rest_drive": "休息欲",
+            }
+            parts = []
+            for key, level in discrete.items():
+                cn = label_map.get(key, key)
+                parts.append(f"{cn}={level}")
+            return "、".join(parts)
+        except Exception:
+            return ""
+
+    def _collect_neuromod_summary(self) -> str:
+        """收集调质层状态摘要。"""
+        if self._inner_state is None:
+            return ""
+        try:
+            if hasattr(self._inner_state, "format_for_prompt"):
+                return self._inner_state.format_for_prompt()
+            return ""
+        except Exception:
+            return ""
+
+    def _collect_active_todos_summary(self) -> list[str]:
+        """收集活跃的 TODO 列表摘要。"""
+        try:
+            from .todo_tools import TodoStorage, TodoStatus
+            cfg = self._cfg()
+            workspace = Path(cfg.settings.workspace_path)
+            storage = TodoStorage(workspace)
+            all_todos = storage.load()
+
+            inactive = {
+                TodoStatus.COMPLETED.value,
+                TodoStatus.RELEASED.value,
+                TodoStatus.CHERISHED.value,
+            }
+            active = [t for t in all_todos if t.status not in inactive]
+            # 只取前5个，避免过长
+            summaries = []
+            for t in active[:5]:
+                status_emoji = {
+                    "idea": "💡", "planning": "📝", "waiting": "⏳",
+                    "enjoying": "🎵", "paused": "⏸️",
+                }.get(t.status, "·")
+                summaries.append(f"{status_emoji} {t.title} ({t.status})")
+            return summaries
+        except Exception:
+            return []
+
     def _build_subconscious_summary(
         self,
         latest_monologue: str,
         recent_monologues: list[str],
         recent_tool_actions: list[str],
         active_concerns: list[str],
+        snn_summary: str = "",
+        neuromod_summary: str = "",
+        todo_summary: list[str] | None = None,
     ) -> str:
         """构建写入 SystemReminderStore 的潜意识摘要文本。
 
-        这段文字会以系统提示的形式呈现给 DFC，
-        因此措辞要像"第六感暗示"，而不是"工作报告"。
+        结构化 Briefing，包含内心状态、SNN 驱动、调质状态、活跃 TODO、
+        最近行动和对话引导。信息密度高但紧凑（目标 ~300-500 tokens）。
         """
         parts: list[str] = []
 
@@ -1293,9 +1367,17 @@ class LifeEngineService(BaseService):
             "你不需要复述它们，但它们会自然地影响你说话的语气和关注点。"
         )
 
+        # 内心状态 = SNN 驱动 + 调质状态
+        state_parts = []
+        if snn_summary:
+            state_parts.append(snn_summary)
+        if neuromod_summary:
+            state_parts.append(neuromod_summary)
+        if state_parts:
+            parts.append(f"\n【内心状态】{' | '.join(state_parts)}")
+
         # 当前情绪/独白
         if latest_monologue:
-            # 截取核心情绪（避免太长污染上下文）
             mood_text = latest_monologue[:300]
             parts.append(f"\n【此刻的内心】\n{mood_text}")
 
@@ -1303,6 +1385,10 @@ class LifeEngineService(BaseService):
         if recent_tool_actions:
             actions_summary = "、".join(recent_tool_actions[:3])
             parts.append(f"\n【最近在做的事】\n{actions_summary}")
+
+        # 活跃 TODO
+        if todo_summary:
+            parts.append(f"\n【活跃TODO】\n" + "\n".join(todo_summary))
 
         # 最近的思考轨迹（只取最后 2 条，避免过长）
         if len(recent_monologues) > 1:

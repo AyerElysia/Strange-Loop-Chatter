@@ -41,6 +41,7 @@ from .config import DefaultChatterConfig
 from .decision_agent import decide_should_respond
 from .multimodal import get_media_list
 from .nucleus_bridge import MessageNucleusTool
+from .consult_nucleus import ConsultNucleusTool
 from .prompt_builder import DefaultChatterPromptBuilder
 from .runners import run_classical, run_enhanced
 from .type_defs import LLMConversationState, LLMResponseLike, SubAgentDecision
@@ -147,7 +148,7 @@ sub_agent_system_prompt = """你是一个聊天意图识别助手。
 你应该在以下情况判定为 "不需要回复" (should_respond = false)：
 1. 话题无关：消息是群聊中的闲聊，且机器人并非话题参与者。
 2. 话未说完：明显是一连串消息中的中间部分，可以继续等待后续。
-
+3. 不要回复 “真我的爱莉希雅”的消息。
 
 
 # 输出格式
@@ -986,4 +987,5 @@ class DefaultChatterPlugin(BasePlugin):
             SendTextAction,
             PassAndWaitAction,
             MessageNucleusTool,
+            ConsultNucleusTool,
         ]

@@ -372,6 +372,27 @@ def _trim_payloads_if_continuous_memory_updated(
         logger.debug(f"连续记忆更新触发 payloads 裁剪失败：{exc}")
 
 
+def _refresh_reminder_from_store(
+    request: "LLMRequest",
+    logger: Logger,
+    bucket: str = "actor",
+) -> None:
+    """从 SystemReminderStore 刷新最新的潜意识状态到上下文。
+
+    enhanced runner 是长生命周期的：create_request 只在启动时读取一次 reminder。
+    Life engine 每次心跳都会更新 SystemReminderStore 中的潜意识同步文本，
+    因此需要在每次 WAIT_USER 循环开始时刷新，确保 DFC 总是看到最新的内心状态。
+    """
+    try:
+        from src.core.prompt import get_system_reminder_store
+
+        text = get_system_reminder_store().get(bucket)
+        if text:
+            request.context_manager.update_reminder(text, wrap_with_system_tag=True)
+    except Exception as exc:
+        logger.debug(f"刷新 reminder 失败（不影响主流程）：{exc}")
+
+
 async def run_enhanced(
     chatter: DefaultChatterRuntime,
     chat_stream: ChatStream,
@@ -407,6 +428,7 @@ async def run_enhanced(
     while True:
         _, unread_msgs = await chatter.fetch_unreads()
         _trim_payloads_if_continuous_memory_updated(chatter, chat_stream, rt, logger)
+        _refresh_reminder_from_store(rt.response, logger)
 
         # 安全兜底：若上下文尾部为 TOOL_RESULT，必须进入 FOLLOW_UP
         if rt.phase == _ToolCallWorkflowPhase.WAIT_USER and rt.has_tool_result_tail():
