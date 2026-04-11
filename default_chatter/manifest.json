@@ -27,6 +27,11 @@
             "component_type": "tool",
             "component_name": "message_nucleus",
             "dependencies": []
+        },
+        {
+            "component_type": "tool",
+            "component_name": "consult_nucleus",
+            "dependencies": []
         }
     ],
     "entry_point": "plugin.py",
