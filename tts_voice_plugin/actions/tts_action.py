@@ -105,10 +105,9 @@ class TTSVoiceAction(BaseAction):
             str | None,
             (
                 "指定用于合成的语言模式，请根据文本内容选择最精确的选项。\n"
-                "【重要】填写时只填括号前的代码本身，**不要**包含括号及括号内的**说明文字！**\n"
-                "可用选项：zh(中英混合)、ja(日英混合)、yue(粤英混合)、ko(韩英混合)、"
-                "en(纯英文)、all_zh(纯中文)、all_ja(纯日文)、all_yue(纯粤语)、all_ko(纯韩文)、"
-                "auto(多语种自动识别)、auto_yue(含粤语自动识别)"
+                "仅填写语言代码本身，不要包含括号说明（例如填 zh，不要填 zh(中英混合)）。\n"
+                "可用语言以插件配置 `tts.supported_text_languages` 为准；"
+                "常见值包括：zh、en、ja、yue、auto、auto_yue。"
             ),
         ] = None,
     ) -> tuple[bool, str]:

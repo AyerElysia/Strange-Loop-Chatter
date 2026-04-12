@@ -610,12 +610,35 @@ class DiaryService(BaseService):
     def _save_continuous_memory(self, memory: ContinuousMemory) -> None:
         """保存连续记忆。"""
 
+        self._enforce_continuous_memory_top_level_limit(memory)
         memory.updated_at = _now_iso()
         path = self._get_continuous_memory_path(memory.stream_id, memory.chat_type)
         path.write_text(
             json.dumps(memory.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    def _enforce_continuous_memory_top_level_limit(
+        self,
+        memory: ContinuousMemory,
+    ) -> bool:
+        """按配置裁剪最高压缩层条目数，返回是否发生变更。"""
+
+        max_items = max(0, int(self._cfg().continuous_memory.max_items_top_level))
+        if max_items <= 0:
+            return False
+
+        top_level = max(1, int(self._cfg().continuous_memory.max_levels))
+        top_summaries = memory.summaries_by_level.get(top_level)
+        if not top_summaries or len(top_summaries) <= max_items:
+            return False
+
+        overflow = len(top_summaries) - max_items
+        del top_summaries[:overflow]
+        logger.debug(
+            f"[{memory.stream_id[:8]}] L{top_level} 超限，已裁剪 {overflow} 条最旧摘要"
+        )
+        return True
 
     def _get_lock(self, stream_id: str) -> asyncio.Lock:
         """按聊天流获取连续记忆锁。"""
@@ -625,6 +648,43 @@ class DiaryService(BaseService):
             lock = asyncio.Lock()
             _MEMORY_LOCKS[stream_id] = lock
         return lock
+
+    def _trim_runtime_history_messages_on_memory_update(self, stream_id: str) -> int:
+        """连续记忆更新后，裁剪聊天流历史中的最旧消息。"""
+
+        trim_count = max(
+            0,
+            int(self._cfg().continuous_memory.payload_history_trim_count_on_update),
+        )
+        if trim_count <= 0:
+            return 0
+
+        try:
+            from src.core.managers import get_stream_manager
+
+            stream = get_stream_manager()._streams.get(stream_id)
+            if stream is None:
+                return 0
+
+            context = getattr(stream, "context", None)
+            if context is None:
+                return 0
+
+            history_messages = getattr(context, "history_messages", None)
+            if not isinstance(history_messages, list) or not history_messages:
+                return 0
+
+            # 仅在“可裁剪空间”足够时裁剪，避免小窗口被一次清空。
+            removable = max(0, len(history_messages) - trim_count)
+            if removable <= 0:
+                return 0
+
+            dropped = min(trim_count, removable)
+            del history_messages[:dropped]
+            return dropped
+        except Exception as exc:
+            logger.debug(f"[{stream_id[:8]}] 裁剪历史消息失败：{exc}")
+            return 0
 
     async def _call_llm_for_continuous_memory_compression(
         self,
@@ -866,8 +926,11 @@ class DiaryService(BaseService):
                 bot_nickname=bot_nickname,
             )
             self._save_continuous_memory(memory)
+        dropped = self._trim_runtime_history_messages_on_memory_update(stream_id)
 
-        logger.info(f"[{stream_id[:8]}] 连续记忆原始条目已同步")
+        logger.info(
+            f"[{stream_id[:8]}] 连续记忆原始条目已同步，历史裁剪={dropped}"
+        )
         return True, "连续记忆已同步"
 
     def _format_continuous_memory_time(self, iso_time: str) -> str:

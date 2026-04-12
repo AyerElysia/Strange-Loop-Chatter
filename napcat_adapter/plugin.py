@@ -268,6 +268,7 @@ class NapcatAdapter(BaseAdapter):
             await self.send_handler.handle_message(envelope)
         except Exception as e:
             logger.error(f"发送 Napcat 消息失败: {e}")
+            raise
 
     async def send_napcat_api(self, action: str, params: dict[str, Any], timeout: float = 30.0) -> dict[str, Any]:
         """

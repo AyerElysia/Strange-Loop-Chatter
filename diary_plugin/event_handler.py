@@ -17,6 +17,46 @@ from .service import DiaryService
 
 logger = get_logger("diary_plugin")
 
+_PENDING_RUNTIME_USER_PROMPT_INJECTIONS: dict[str, list[str]] = {}
+_CONTINUOUS_MEMORY_BLOCK_START = "<continuous_memory_block>"
+_CONTINUOUS_MEMORY_BLOCK_END = "</continuous_memory_block>"
+
+
+def _push_runtime_user_prompt_injection(stream_id: str, content: str) -> None:
+    sid = str(stream_id or "").strip()
+    text = str(content or "").strip()
+    if not sid or not text:
+        return
+    queue = _PENDING_RUNTIME_USER_PROMPT_INJECTIONS.setdefault(sid, [])
+    queue.append(text)
+    # 仅保留最新 3 条，防止极端情况下队列堆积
+    if len(queue) > 3:
+        del queue[:-3]
+
+
+def _consume_runtime_user_prompt_injection(stream_id: str) -> str | None:
+    sid = str(stream_id or "").strip()
+    if not sid:
+        return None
+    queue = _PENDING_RUNTIME_USER_PROMPT_INJECTIONS.get(sid)
+    if not queue:
+        return None
+    item = queue.pop(0)
+    if not queue:
+        _PENDING_RUNTIME_USER_PROMPT_INJECTIONS.pop(sid, None)
+    return item
+
+
+def _wrap_continuous_memory_block(content: str) -> str:
+    text = str(content or "").strip()
+    if not text:
+        return ""
+    return (
+        f"{_CONTINUOUS_MEMORY_BLOCK_START}\n"
+        f"{text}\n"
+        f"{_CONTINUOUS_MEMORY_BLOCK_END}"
+    )
+
 
 class AutoDiaryEventHandler(BaseEventHandler):
     """自动写日记事件处理器。"""
@@ -152,8 +192,35 @@ class AutoDiaryEventHandler(BaseEventHandler):
                     f"[{stream_id[:8]}] 连续记忆同步失败，但自动日记已成功：{continuous_msg}"
                 )
 
+            self._queue_runtime_user_prompt_injection(chat_stream, summary)
+
         except Exception as exc:
             logger.error(f"自动总结失败：{exc}", exc_info=True)
+
+    def _queue_runtime_user_prompt_injection(self, chat_stream: Any, summary: str) -> None:
+        """把自动日记摘要排队为“一次性 user prompt 注入”。"""
+
+        config = self._get_config()
+        if config is None or not config.auto_diary.inject_runtime_user_prompt_once:
+            return
+
+        stream_id = str(getattr(chat_stream, "stream_id", "") or "").strip()
+        if not stream_id:
+            return
+
+        text = str(summary or "").strip()
+        if not text:
+            return
+
+        max_len = int(config.auto_diary.runtime_user_prompt_max_length)
+        if max_len > 0 and len(text) > max_len:
+            text = text[:max_len].rstrip() + "..."
+        prefix = str(config.auto_diary.runtime_user_prompt_prefix or "").strip()
+        guidance = str(config.auto_diary.runtime_user_prompt_guidance or "").strip()
+        content = f"{prefix} {text}".strip() if prefix else text
+        payload = f"{content}\n使用提示：{guidance}".strip() if guidance else content
+        _push_runtime_user_prompt_injection(stream_id, payload)
+        logger.debug(f"[{stream_id[:8]}] 已排队一次性 user prompt 注入")
 
     async def _llm_summarize(
         self,
@@ -321,7 +388,7 @@ class ContinuousMemoryPromptInjector(BaseEventHandler):
     """在 prompt 构建时注入连续记忆。"""
 
     handler_name: str = "continuous_memory_prompt_injector"
-    handler_description: str = "在目标 system prompt 的连续记忆区块中注入当前聊天流连续记忆"
+    handler_description: str = "在目标 user prompt 开头注入当前聊天流连续记忆"
     weight: int = 10
     init_subscribe: list[str] = ["on_prompt_build"]
 
@@ -333,16 +400,10 @@ class ContinuousMemoryPromptInjector(BaseEventHandler):
         """处理 on_prompt_build 事件。"""
 
         config = self._get_config()
-        if (
-            config is None
-            or not config.continuous_memory.enabled
-            or not config.continuous_memory.inject_prompt
-        ):
+        if config is None:
             return EventDecision.SUCCESS, params
 
         prompt_name = str(params.get("name", ""))
-        if prompt_name not in config.continuous_memory.target_prompt_names:
-            return EventDecision.SUCCESS, params
 
         values = params.get("values")
         if not isinstance(values, dict):
@@ -350,6 +411,22 @@ class ContinuousMemoryPromptInjector(BaseEventHandler):
 
         stream_id = str(values.get("stream_id", "")).strip()
         if not stream_id:
+            return EventDecision.SUCCESS, params
+
+        self._inject_runtime_user_prompt_once(
+            config=config,
+            prompt_name=prompt_name,
+            stream_id=stream_id,
+            values=values,
+        )
+
+        if (
+            not config.continuous_memory.enabled
+            or not config.continuous_memory.inject_prompt
+            or prompt_name not in config.continuous_memory.target_prompt_names
+        ):
+            return EventDecision.SUCCESS, params
+        if prompt_name != "default_chatter_user_prompt":
             return EventDecision.SUCCESS, params
 
         service = self._get_service()
@@ -363,9 +440,30 @@ class ContinuousMemoryPromptInjector(BaseEventHandler):
         if not memory_block:
             return EventDecision.SUCCESS, params
 
-        values["continuous_memory"] = memory_block
+        values["continuous_memory"] = _wrap_continuous_memory_block(memory_block)
 
         return EventDecision.SUCCESS, params
+
+    def _inject_runtime_user_prompt_once(
+        self,
+        *,
+        config: DiaryConfig,
+        prompt_name: str,
+        stream_id: str,
+        values: dict[str, Any],
+    ) -> None:
+        if not config.auto_diary.inject_runtime_user_prompt_once:
+            return
+        if prompt_name not in config.auto_diary.runtime_user_prompt_target_names:
+            return
+        pending = _consume_runtime_user_prompt_injection(stream_id)
+        if not pending:
+            return
+        current_extra = str(values.get("extra", "") or "").strip()
+        values["extra"] = (
+            f"{current_extra}\n{pending}".strip() if current_extra else pending
+        )
+        logger.debug(f"[{stream_id[:8]}] 已消费一次性 user prompt 注入")
 
     def _get_service(self) -> DiaryService | None:
         """获取 DiaryService 实例。"""

@@ -125,31 +125,85 @@ class TTSService(BaseService):
     # 语言检测与规范化
     # ------------------------------------------------------------------
 
-    def _normalize_language_code(self, language_str: str) -> str:
-        """从语言配置字符串中提取标准语言代码（去掉描述部分）。
-
-        处理形如 "zh(中英混合)"、"en(English)" 这样的配置格式。
-
-        Args:
-            language_str: 原始语言配置字符串
-
-        Returns:
-            标准语言代码 (zh/en/ja/yue 等)
-        """
+    @staticmethod
+    def _extract_language_code(language_str: str | None) -> str:
+        """提取括号前语言代码并统一为小写。"""
         if not language_str:
+            return ""
+        return language_str.split("(")[0].strip().lower()
+
+    def _get_supported_language_codes(self) -> set[str]:
+        """从配置加载支持的 text_lang 代码集合。"""
+        raw_codes = self._config.tts.supported_text_languages or []
+        supported_codes = {
+            code
+            for code in (self._extract_language_code(item) for item in raw_codes)
+            if code
+        }
+        if supported_codes:
+            return supported_codes
+
+        fallback_code = self._extract_language_code(self._config.tts.fallback_text_language)
+        if fallback_code:
+            logger.warning(
+                "配置项 tts.supported_text_languages 为空，将临时使用 fallback_text_language 作为支持语言。"
+            )
+            return {fallback_code}
+
+        logger.warning(
+            "配置项 tts.supported_text_languages 与 fallback_text_language 均为空，使用内置兜底语言: zh"
+        )
+        return {"zh"}
+
+    def _get_fallback_language_code(self, supported_codes: set[str] | None = None) -> str:
+        """获取有效的兜底语言代码。"""
+        supported = supported_codes or self._get_supported_language_codes()
+        configured_fallback = self._extract_language_code(self._config.tts.fallback_text_language)
+        if configured_fallback and configured_fallback in supported:
+            return configured_fallback
+
+        if configured_fallback and configured_fallback not in supported:
+            logger.warning(
+                f"配置的 fallback_text_language='{configured_fallback}' 不在 supported_text_languages 中，"
+                "将回退到可用语言。"
+            )
+
+        if "zh" in supported:
             return "zh"
 
-        # 提取括号前的部分
-        base_code = language_str.split("(")[0].strip().lower()
+        if supported:
+            fallback = sorted(supported)[0]
+            logger.warning(f"无法使用中文兜底，改为使用首个可用语言: {fallback}")
+            return fallback
 
-        # 有效的语言代码白名单
-        valid_codes = {"zh", "en", "ja", "yue", "auto", "auto_yue"}
-        if base_code in valid_codes:
+        return "zh"
+
+    def _normalize_language_code(self, language_str: str) -> str:
+        """规范化语言代码，并确保在配置允许的集合内。"""
+        supported_codes = self._get_supported_language_codes()
+        fallback_code = self._get_fallback_language_code(supported_codes)
+        base_code = self._extract_language_code(language_str)
+        if not base_code:
+            return fallback_code
+        if base_code in supported_codes:
             return base_code
 
-        # 如果提取后仍非法，默认中文
-        logger.warning(f"无效的语言代码 '{language_str}'，已规范化为: zh")
-        return "zh"
+        logger.warning(
+            f"无效或不受支持的语言代码 '{language_str}'，已规范化为兜底语言: {fallback_code}"
+        )
+        return fallback_code
+
+    def _sanitize_language_hint(self, language_hint: str | None) -> str | None:
+        """清洗决策模型给出的语言提示。"""
+        raw_code = self._extract_language_code(language_hint)
+        if not raw_code:
+            return None
+        normalized_code = self._normalize_language_code(raw_code)
+        if normalized_code != raw_code:
+            logger.warning(
+                f"决策模型指定语言 '{language_hint}' 不受支持，已回退为: {normalized_code}"
+            )
+        return normalized_code
 
     def _analyze_text_language(self, text: str) -> tuple[str, str]:
         """分析文本内容，自动检测语言类型。
@@ -230,17 +284,20 @@ class TTSService(BaseService):
 
         # 特殊处理 auto_yue 模式
         if normalized_mode == "auto_yue":
-            logger.info(f"auto_yue 模式 - {detection_info}，最终语言: {detected_lang}")
-            return detected_lang
+            final_lang = self._normalize_language_code(detected_lang)
+            logger.info(f"auto_yue 模式 - {detection_info}，最终语言: {final_lang}")
+            return final_lang
 
         # 通用 auto 模式
         if detected_lang == "zh" and "中英混合" in detection_info:
             # 中英混合时优先用中文（大多数API支持更好）
-            logger.info(f"auto 模式 - {detection_info}，以中文处理，最终语言: zh")
-            return "zh"
+            final_lang = self._normalize_language_code("zh")
+            logger.info(f"auto 模式 - {detection_info}，以中文处理，最终语言: {final_lang}")
+            return final_lang
         else:
-            logger.info(f"auto 模式 - {detection_info}，最终语言: {detected_lang}")
-            return detected_lang
+            final_lang = self._normalize_language_code(detected_lang)
+            logger.info(f"auto 模式 - {detection_info}，最终语言: {final_lang}")
+            return final_lang
 
     # ------------------------------------------------------------------
     # 文本清洗
@@ -503,8 +560,9 @@ class TTSService(BaseService):
             return None
 
         # 语言决策：优先 language_hint → 风格配置策略 → 自动检测
-        if language_hint:
-            final_language = language_hint
+        sanitized_hint = self._sanitize_language_hint(language_hint)
+        if sanitized_hint:
+            final_language = sanitized_hint
             logger.info(f"使用决策模型指定的语言: {final_language}")
         else:
             language_policy = server_config.get("text_language", "auto")

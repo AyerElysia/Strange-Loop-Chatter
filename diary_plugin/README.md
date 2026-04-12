@@ -27,6 +27,8 @@
 - 自动总结后写入今天的日记文件。
 - 支持只在私聊触发，默认不在群聊触发。
 - 自动总结时会复用主回复模型的完整人设提示词。
+- 每次自动写入成功后，会把“自动日记摘要”排队为下一次 user prompt 的 `extra` 一次性注入。
+- 注入内容会附带使用提示：它是前面对话的小总结，仅用于快速了解发生了什么，不要求必须逐句引用。
 
 ### 3. 连续记忆
 
@@ -131,6 +133,7 @@ diary_plugin/
 | `discuss_subdir` | `"discuss"` | 讨论组子目录 |
 | `batch_size` | `5` | 压缩批大小 |
 | `max_levels` | `3` | 最大压缩层级 |
+| `max_items_top_level` | `0` | 最高压缩层（`Lmax_levels`）最大保留条目数（`0` 表示不限制，超出会裁剪最旧条目） |
 | `inject_prompt` | `true` | 是否注入到目标 prompt |
 | `include_recent_entries_in_prompt` | `false` | 是否注入近期原始条目 |
 | `target_prompt_names` | `["default_chatter_user_prompt"]` | 允许注入的 prompt 名称 |
@@ -173,6 +176,7 @@ diary_plugin/
 3. 检查是否与今天已有内容重复。
 4. 写入当天日记。
 5. 同步到连续记忆。
+6. 把摘要一次性注入到下一次 user prompt（`extra`）后自动清空，避免重复注入。
 
 ### 4. 连续记忆注入
 

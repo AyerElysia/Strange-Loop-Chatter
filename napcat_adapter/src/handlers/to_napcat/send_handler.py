@@ -115,7 +115,7 @@ class SendHandler:
         if response.get("status") == "ok":
             logger.info("消息发送成功")
         else:
-            logger.warning(f"消息发送失败，napcat返回：{response!s}")
+            raise RuntimeError(f"Napcat 消息发送失败: {response!s}")
 
     async def send_command(self, envelope: MessageEnvelope) -> None:
         """
@@ -168,7 +168,7 @@ class SendHandler:
         if response.get("status") == "ok":
             logger.info(f"命令 {command_name} 执行成功")
         else:
-            logger.warning(f"命令 {command_name} 执行失败，napcat返回：{response!s}")
+            raise RuntimeError(f"命令 {command_name} 执行失败，napcat返回：{response!s}")
 
     async def handle_adapter_command(self, envelope: MessageEnvelope) -> None:
         """
@@ -601,4 +601,3 @@ class SendHandler:
         except Exception as e:
             logger.error(f"发送消息失败: {e}")
             return {"status": "error", "message": str(e)}
-

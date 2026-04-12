@@ -114,6 +114,26 @@ class AutoDiarySection(SectionBase):
         default=False,
         description="是否允许群聊自动写日记（False=仅私聊触发）",
     )
+    inject_runtime_user_prompt_once: bool = Field(
+        default=True,
+        description="自动写日记成功后，是否将摘要一次性注入到下一次 user prompt 的 extra 字段",
+    )
+    runtime_user_prompt_target_names: list[str] = Field(
+        default_factory=lambda: ["default_chatter_user_prompt"],
+        description="允许注入自动日记摘要的一次性 user prompt 模板名列表",
+    )
+    runtime_user_prompt_prefix: str = Field(
+        default="【自动日记摘要】",
+        description="一次性注入到 user prompt 时的前缀",
+    )
+    runtime_user_prompt_guidance: str = Field(
+        default="可将其视为前面对话的小总结，知道发生了什么即可，不必强制引用其中表述。",
+        description="一次性注入到 user prompt 时附带的使用提示",
+    )
+    runtime_user_prompt_max_length: int = Field(
+        default=240,
+        description="一次性注入摘要的最大长度（超出会截断）",
+    )
 
 
 @config_section("model")
@@ -158,6 +178,10 @@ class ContinuousMemorySection(SectionBase):
         default=3,
         description="最大连续记忆压缩层级（L1-L3）",
     )
+    max_items_top_level: int = Field(
+        default=0,
+        description="最高压缩层（Lmax_levels）最大保留条目数（0=不限制，超出时会裁剪最旧条目）",
+    )
     inject_prompt: bool = Field(
         default=True,
         description="是否将当前聊天流的连续记忆动态注入主回复 prompt 的专用 continuous_memory 区块",
@@ -167,8 +191,8 @@ class ContinuousMemorySection(SectionBase):
         description="是否在 prompt 中注入近期详细记忆条目；默认只注入压缩层摘要",
     )
     target_prompt_names: list[str] = Field(
-        default_factory=lambda: ["default_chatter_system_prompt"],
-        description="允许注入连续记忆的 system prompt 模板名列表",
+        default_factory=lambda: ["default_chatter_user_prompt"],
+        description="允许注入连续记忆的 prompt 模板名列表",
     )
     recent_entry_limit: int = Field(
         default=5,
@@ -181,6 +205,10 @@ class ContinuousMemorySection(SectionBase):
     compression_model_task: str = Field(
         default="",
         description="压缩连续记忆使用的任务模型名称，留空则复用 model.task_name",
+    )
+    payload_history_trim_count_on_update: int = Field(
+        default=20,
+        description="每次连续记忆更新后，裁剪聊天流历史中最旧消息条数（0=不裁剪）",
     )
 
 

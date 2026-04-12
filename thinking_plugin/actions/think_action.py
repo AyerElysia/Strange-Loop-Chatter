@@ -38,10 +38,6 @@ class ThinkAction(BaseAction):
 
     async def execute(
         self,
-        thought: Annotated[
-            str,
-            "你的心理活动，写下你此刻的想法和分析过程。请真诚地反映你的思考，不要敷衍。"
-        ],
         mood: Annotated[
             str,
             "此刻的心情/情绪状态（必填）。例如：开心、疑惑、担心、期待等。"
@@ -54,9 +50,28 @@ class ThinkAction(BaseAction):
             str,
             "你预期用户看到回复后的反应（必填）。例如：'应该会满意吧'、'可能会继续追问'等。"
         ],
+        thought: Annotated[
+            str | None,
+            "你的心理活动，写下你此刻的想法和分析过程。请真诚地反映你的思考，不要敷衍。"
+        ] = None,
         **extra_kwargs: object,
     ) -> tuple[bool, str]:
         """执行思考动作。"""
+        legacy_content = extra_kwargs.pop("content", None)
+        normalized_thought = (thought or "").strip()
+        if not normalized_thought and isinstance(legacy_content, str):
+            normalized_thought = legacy_content.strip()
+            if normalized_thought:
+                logger.warning(
+                    "action-think 收到兼容字段 content，已映射到 thought"
+                )
+
+        if not normalized_thought:
+            # 保底容错：避免参数漂移导致整轮 action 链路报错。
+            logger.warning(
+                "action-think 缺少 thought/content，已按 mood/decision/expected_response 降级记录"
+            )
+
         if extra_kwargs:
             # 模型偶发会把 send_text 的字段（如 content）误塞到 action-think。
             # 这里选择容错忽略，避免整轮 tool call 因未知参数失败。

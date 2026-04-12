@@ -406,7 +406,7 @@ class ProactiveMessagePlugin(BasePlugin):
                 chat_stream=chat_stream,
                 elapsed_minutes=elapsed,
                 user_name=user_name,
-                model_set="life",
+                model_set="actor",
             )
 
             if result is None:

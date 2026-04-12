@@ -151,7 +151,7 @@ async def generate_inner_monologue(
     chat_stream: "ChatStream",
     elapsed_minutes: float,
     user_name: str,
-    model_set: str = "life",
+    model_set: str = "actor",
 ) -> InnerMonologueResult | None:
     """生成内心独白并获取决策。
 

@@ -53,6 +53,17 @@ class TTSSection(SectionBase):
     server: str = Field(default="http://127.0.0.1:9880", description="GPT-SoVITS 服务地址")
     timeout: int = Field(default=180, description="TTS 请求超时秒数")
     max_text_length: int = Field(default=1000, description="最大合成文本长度")
+    supported_text_languages: list[str] = Field(
+        default_factory=lambda: ["zh", "en", "ja", "yue", "auto", "auto_yue"],
+        description=(
+            "允许发送给 TTS API 的 text_lang 语言代码列表。"
+            "支持带说明格式（如 zh(中英混合)），服务端会自动提取括号前代码。"
+        ),
+    )
+    fallback_text_language: str = Field(
+        default="zh",
+        description="当输入语言非法或不受支持时的兜底语言代码",
+    )
 
 
 @config_section("tts_styles")
