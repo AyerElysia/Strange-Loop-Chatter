@@ -14,6 +14,7 @@ from .initialization_router import InitializationRouter
 from .git_env_router import GitEnvRouter
 from .git_update_router import GitUpdateRouter
 from .ui_update_router import UIUpdateRouter
+from .life_engine_panel_router import LifeEnginePanelRouter
 
 
-__all__ = ["FrontendRouter", "ApiRouter", "StatsRouter", "SettingRouter", "CoreConfigRouter", "ModelConfigRouter", "PluginConfigRouter", "PluginManageRouter", "LogViewerRouter", "RealtimeLogRouter", "LiveChatRouter", "ChatroomRouter", "InitializationRouter", "GitEnvRouter", "GitUpdateRouter", "UIUpdateRouter"]
+__all__ = ["FrontendRouter", "ApiRouter", "StatsRouter", "SettingRouter", "CoreConfigRouter", "ModelConfigRouter", "PluginConfigRouter", "PluginManageRouter", "LogViewerRouter", "RealtimeLogRouter", "LiveChatRouter", "ChatroomRouter", "InitializationRouter", "GitEnvRouter", "GitUpdateRouter", "UIUpdateRouter", "LifeEnginePanelRouter"]

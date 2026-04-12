@@ -5,7 +5,7 @@
 
 from src.kernel.logger import get_logger
 from src.core.components.base.plugin import BasePlugin
-from .backend.router import FrontendRouter, CoreConfigRouter, ApiRouter, StatsRouter, SettingRouter, ModelConfigRouter, PluginConfigRouter, PluginManageRouter, LogViewerRouter, RealtimeLogRouter, LiveChatRouter, ChatroomRouter, InitializationRouter, GitEnvRouter, GitUpdateRouter, UIUpdateRouter
+from .backend.router import FrontendRouter, CoreConfigRouter, ApiRouter, StatsRouter, SettingRouter, ModelConfigRouter, PluginConfigRouter, PluginManageRouter, LogViewerRouter, RealtimeLogRouter, LiveChatRouter, ChatroomRouter, InitializationRouter, GitEnvRouter, GitUpdateRouter, UIUpdateRouter, LifeEnginePanelRouter
 from .backend.adapter import ChatroomAdapter
 from .backend.event_handler import LogEventHandler, LiveChatEventHandler
 from src.core.components.loader import register_plugin
@@ -54,6 +54,7 @@ class MoFoxCoreWebui(BasePlugin):
             GitEnvRouter,
             GitUpdateRouter,
             UIUpdateRouter,
+            LifeEnginePanelRouter,
             ChatroomAdapter,
             LogEventHandler,
             LiveChatEventHandler
@@ -64,5 +65,4 @@ class MoFoxCoreWebui(BasePlugin):
 
     async def on_plugin_unloaded(self) -> None:
         """插件卸载时的钩子。"""
-
 
