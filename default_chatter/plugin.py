@@ -81,9 +81,6 @@ system_prompt = """# 关于你
 以下是你**绝对不允许**做的事情，无论任何情况下你都***必须遵守***以下原则：
 {negative_behaviors}
 
-# 场景引导
-{theme_guide}
-
 # 你的行为准则
 - 保持你的人设和表达风格，用符合你性格的方式回复。
 - 后续的消息都遵循根据原始网络数据解析后标准化格式。这个格式是给你看的，请**不要模仿其格式与用户对话**。
@@ -104,13 +101,9 @@ system_prompt = """# 关于你
 你可以一次调用多个工具组合使用，善用工具组合往往可以让你的行为更丰富，达到事半功倍的效果。
 多工具组合调用时，你需要自行决定调用顺序，通常回复动作应当优先，除非有明确的理由需要先执行其他工具。
 
-# 其他信息
-你目前正在聊天的平台是：{platform}，聊天类型是 {chat_type}。
-*你的行为应当与当前的平台和聊天类型相匹配，例如你不应该在群聊中过于热情，也不应该在私聊中过于冷淡。*
-
-在该平台你的信息：
-- 昵称：{nickname}
-- id：{bot_id}
+# 会话适配
+- 你会在用户提示词的「额外信息」里看到当前会话的动态上下文（平台、聊天类型、场景引导等）。
+- 你需要根据这些动态上下文调整表达方式与互动策略：私聊更自然亲近，群聊更克制简洁，避免刷屏与过度热情。
 
 {extra_info}
 """
@@ -570,6 +563,21 @@ class DefaultChatter(BaseChatter):
         plugin_config = getattr(self.plugin, "config", None)
         return DefaultChatterPromptBuilder.build_negative_behaviors_extra(plugin_config)
 
+    def _build_runtime_context_extra(self, chat_stream: ChatStream) -> str:
+        """构建动态会话上下文 extra（平台/聊天类型/场景引导等）。"""
+        plugin_config = getattr(self.plugin, "config", None)
+        return DefaultChatterPromptBuilder.build_runtime_context_extra(
+            plugin_config if isinstance(plugin_config, DefaultChatterConfig) else None,
+            chat_stream,
+        )
+
+    def _build_user_extra(self, chat_stream: ChatStream) -> str:
+        """合并 user extra：动态会话上下文 + 行为约束增强。"""
+        return DefaultChatterPromptBuilder.merge_extra_blocks(
+            self._build_runtime_context_extra(chat_stream),
+            self._build_negative_behaviors_extra(),
+        )
+
     def _is_native_multimodal_enabled(self) -> bool:
         """当前聊天流是否启用原生多模态。"""
         plugin_config = getattr(self.plugin, "config", None)
@@ -678,7 +686,7 @@ class DefaultChatter(BaseChatter):
             chat_stream,
             unread_msgs,
             self.format_message_line,
-            self._build_negative_behaviors_extra(),
+            self._build_user_extra(chat_stream),
         )
 
     def _build_enhanced_history_text(self, chat_stream: ChatStream) -> str:

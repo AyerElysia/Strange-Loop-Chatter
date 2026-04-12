@@ -40,6 +40,55 @@ class DefaultChatterPromptBuilder:
         return "行为提醒：请在本轮回复中严格遵守以下约束：\n" f"{lines}"
 
     @staticmethod
+    def _select_theme_guide(
+        plugin_config: DefaultChatterConfig | None,
+        chat_stream: ChatStream,
+    ) -> str:
+        """根据 chat_type 选择场景引导文本。"""
+        if plugin_config is None:
+            return ""
+
+        chat_type_raw = str(chat_stream.chat_type or "").lower()
+        if chat_type_raw == ChatType.PRIVATE.value:
+            return plugin_config.plugin.theme_guide.private
+        if chat_type_raw == ChatType.GROUP.value:
+            return plugin_config.plugin.theme_guide.group
+        return ""
+
+    @staticmethod
+    def merge_extra_blocks(*blocks: str) -> str:
+        """合并多个 extra 文本块（忽略空块）。"""
+        parts = [str(block).strip() for block in blocks if str(block or "").strip()]
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def build_runtime_context_extra(
+        plugin_config: DefaultChatterConfig | None,
+        chat_stream: ChatStream,
+    ) -> str:
+        """构建 user extra 中的动态会话上下文块。"""
+        theme_guide = DefaultChatterPromptBuilder._select_theme_guide(
+            plugin_config,
+            chat_stream,
+        ).strip()
+        platform = str(chat_stream.platform or "unknown")
+        chat_type = str(chat_stream.chat_type or "unknown")
+        nickname = str(chat_stream.bot_nickname or "unknown")
+        bot_id = str(chat_stream.bot_id or "unknown")
+
+        lines = [
+            "会话上下文（动态）：",
+            f"- 平台：{platform}",
+            f"- 聊天类型：{chat_type}",
+            f"- 当前机器人昵称：{nickname}",
+            f"- 当前机器人ID：{bot_id}",
+        ]
+        if theme_guide:
+            lines.append("- 场景引导：")
+            lines.append(theme_guide)
+        return "\n".join(lines)
+
+    @staticmethod
     async def build_system_prompt(
         plugin_config: DefaultChatterConfig | None,
         chat_stream: ChatStream,
@@ -59,14 +108,10 @@ class DefaultChatterPromptBuilder:
             or "未知"
         )
 
-        selected_theme_guide = ""
-        if plugin_config is not None:
-            chat_type_raw = str(chat_stream.chat_type or "").lower()
-
-            if chat_type_raw == ChatType.PRIVATE.value:
-                selected_theme_guide = plugin_config.plugin.theme_guide.private
-            elif chat_type_raw == ChatType.GROUP.value:
-                selected_theme_guide = plugin_config.plugin.theme_guide.group
+        selected_theme_guide = DefaultChatterPromptBuilder._select_theme_guide(
+            plugin_config,
+            chat_stream,
+        )
 
         tmpl = get_prompt_manager().get_template("default_chatter_system_prompt")
         if not tmpl:
@@ -103,7 +148,6 @@ class DefaultChatterPromptBuilder:
             .set("reply_style", reply_style)
             .set("identity", identity)
             .set("background_story", background_story)
-            .set("stream_id", chat_stream.stream_id or "")
             .build()
         )
 

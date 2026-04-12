@@ -111,6 +111,10 @@ class DefaultChatterRuntime(Protocol):
         """构建附加负面行为约束。"""
         ...
 
+    def _build_user_extra(self, chat_stream: ChatStream) -> str:
+        """构建 user 提示词动态 extra。"""
+        ...
+
     async def sub_agent(
         self,
         unreads_text: str,
