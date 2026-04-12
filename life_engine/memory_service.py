@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import numpy as np
 import posixpath
 import random
 import sqlite3
@@ -1568,6 +1569,7 @@ class LifeMemoryService:
     async def dream_walk(
         self,
         num_seeds: int = 5,
+        seed_ids: Optional[List[str]] = None,
         max_depth: int = 3,
         decay_factor: float = 0.6,
         learning_rate: float = 0.05,
@@ -1599,16 +1601,44 @@ class LifeMemoryService:
 
         node_ids = [r["node_id"] for r in rows]
         strengths = np.array([r["activation_strength"] for r in rows], dtype=np.float64)
-        strengths /= strengths.sum()
+        total_strength = float(strengths.sum())
+        if total_strength <= 0:
+            strengths = np.ones(len(node_ids), dtype=np.float64) / max(len(node_ids), 1)
+        else:
+            strengths /= total_strength
 
-        actual_seeds = min(num_seeds, len(node_ids))
-        seed_indices = np.random.choice(len(node_ids), size=actual_seeds, replace=False, p=strengths)
-        seed_ids = [node_ids[i] for i in seed_indices]
+        requested_seed_ids = [
+            str(node_id or "").strip()
+            for node_id in (seed_ids or [])
+            if str(node_id or "").strip()
+        ]
+        actual_seed_ids = [node_id for node_id in requested_seed_ids if node_id in node_ids]
+        remaining_pool = [node_id for node_id in node_ids if node_id not in actual_seed_ids]
+
+        missing_count = max(0, min(num_seeds, len(node_ids)) - len(actual_seed_ids))
+        if missing_count > 0 and remaining_pool:
+            pool_indices = [node_ids.index(node_id) for node_id in remaining_pool]
+            pool_strengths = strengths[pool_indices]
+            pool_total = float(pool_strengths.sum())
+            if pool_total <= 0:
+                pool_strengths = np.ones(len(pool_indices), dtype=np.float64) / max(len(pool_indices), 1)
+            else:
+                pool_strengths = pool_strengths / pool_total
+            sampled_indices = np.random.choice(
+                len(pool_indices),
+                size=min(missing_count, len(pool_indices)),
+                replace=False,
+                p=pool_strengths,
+            )
+            actual_seed_ids.extend(remaining_pool[index] for index in sampled_indices)
+
+        if not actual_seed_ids:
+            return {"nodes_activated": 0, "new_edges_created": 0, "seed_ids": []}
 
         # 梦游走式激活扩散
-        activation: Dict[str, float] = {sid: 1.0 for sid in seed_ids}
-        visited = set(seed_ids)
-        frontier = list(seed_ids)
+        activation: Dict[str, float] = {sid: 1.0 for sid in actual_seed_ids}
+        visited = set(actual_seed_ids)
+        frontier = list(actual_seed_ids)
 
         for depth in range(max_depth):
             next_frontier: List[str] = []
@@ -1631,6 +1661,15 @@ class LifeMemoryService:
                         visited.add(neighbor)
 
             frontier = next_frontier
+            
+            # 广播阶段性可视化事件
+            self._emit_visual_event("memory.dream.walk", {
+                "depth": depth,
+                "seed_ids": actual_seed_ids,
+                "activated_ids": list(activation.keys()),
+                "frontier_ids": next_frontier
+            }, source="dream")
+
             if not frontier:
                 break
 
@@ -1688,15 +1727,57 @@ class LifeMemoryService:
         self._db.commit()
 
         logger.info(
-            f"REM dream_walk 完成: seeds={len(seed_ids)} "
+            f"REM dream_walk 完成: seeds={len(actual_seed_ids)} "
             f"activated={len(all_activated)} new_edges={new_edges}"
         )
 
         return {
             "nodes_activated": len(all_activated),
             "new_edges_created": new_edges,
-            "seed_ids": seed_ids,
+            "seed_ids": actual_seed_ids,
         }
+
+    async def list_dream_candidate_nodes(
+        self,
+        *,
+        limit: int = 12,
+    ) -> List[Dict[str, Any]]:
+        """列出适合做梦选种的长期主题候选节点。"""
+        if not self._initialized or not self._db:
+            return []
+
+        cursor = self._db.cursor()
+        cursor.execute(
+            """
+            SELECT node_id, file_path, title, activation_strength, access_count,
+                   emotional_valence, emotional_arousal, importance, updated_at
+            FROM memory_nodes
+            WHERE node_type = ?
+            ORDER BY importance DESC,
+                     emotional_arousal DESC,
+                     access_count DESC,
+                     activation_strength DESC,
+                     updated_at DESC
+            LIMIT ?
+            """,
+            (NodeType.FILE.value, max(1, int(limit))),
+        )
+        results: List[Dict[str, Any]] = []
+        for row in cursor.fetchall():
+            results.append(
+                {
+                    "node_id": row["node_id"],
+                    "file_path": row["file_path"],
+                    "title": row["title"] or "",
+                    "activation_strength": float(row["activation_strength"] or 0.0),
+                    "access_count": int(row["access_count"] or 0),
+                    "emotional_valence": float(row["emotional_valence"] or 0.0),
+                    "emotional_arousal": float(row["emotional_arousal"] or 0.0),
+                    "importance": float(row["importance"] or 0.0),
+                    "updated_at": float(row["updated_at"] or 0.0),
+                }
+            )
+        return results
 
     async def prune_weak_edges(
         self,

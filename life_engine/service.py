@@ -741,7 +741,18 @@ class LifeEngineService(BaseService):
                 except Exception as e:
                     logger.warning(f"获取调质层状态失败: {e}")
 
-            # 2. 最近思考（最近1-2条心跳独白）
+            # 2. 梦后余韵：通过当前轮 payload 注入，而不是写入固定 reminder
+            if self._dream_scheduler is not None:
+                try:
+                    dream_payload = str(
+                        self._dream_scheduler.get_active_residue_payload("dfc") or ""
+                    ).strip()
+                    if dream_payload:
+                        parts.append(f"【梦后余韵】{_shorten_text(dream_payload, max_length=180)}")
+                except Exception as e:
+                    logger.warning(f"获取梦后余韵失败: {e}")
+
+            # 3. 最近思考（最近1-2条心跳独白）
             heartbeat_events = [
                 e for e in self._event_history
                 if e.event_type == EventType.HEARTBEAT
@@ -757,7 +768,7 @@ class LifeEngineService(BaseService):
                     parts.append("【最近思考】")
                     parts.extend(thoughts)
 
-            # 3. 工具使用偏好（统计最近的工具调用）
+            # 4. 工具使用偏好（统计最近的工具调用）
             tool_events = [
                 e for e in self._event_history[-30:]  # 最近30个事件
                 if e.event_type == EventType.TOOL_CALL
@@ -1502,6 +1513,21 @@ class LifeEngineService(BaseService):
                 "",
             ])
 
+        if self._dream_scheduler is not None:
+            try:
+                dream_payload = str(
+                    self._dream_scheduler.get_active_residue_payload("life") or ""
+                ).strip()
+                if dream_payload:
+                    lines.extend([
+                        "### 梦后余韵",
+                        "",
+                        dream_payload,
+                        "",
+                    ])
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"读取梦后余韵失败：{exc}")
+
         lines.extend([
             "### 心跳状态",
             "",
@@ -2126,6 +2152,86 @@ class LifeEngineService(BaseService):
                 "heartbeat_count": self._state.heartbeat_count,
             }
 
+    async def trigger_dream_manually(self) -> dict[str, Any]:
+        """手动触发一次做梦周期（用于测试/调试）。"""
+        if not self._is_enabled():
+            return {
+                "success": False,
+                "error": "life_engine 未启用",
+            }
+
+        dream = self._dream_scheduler
+        if dream is None:
+            return {
+                "success": False,
+                "error": "做梦系统未启用",
+            }
+
+        if dream.is_dreaming:
+            return {
+                "success": False,
+                "error": "做梦系统正在运行中",
+            }
+
+        logger.info("life_engine 手动触发做梦")
+
+        try:
+            # 手动测试时主动进入睡眠态，尽量贴近完整的做梦链路。
+            dream.enter_sleep()
+            async with self._get_lock():
+                event_history = list(self._event_history)
+            report = await dream.run_dream_cycle(event_history)
+            await self._save_runtime_context()
+
+            logger.info(
+                "life_engine 手动做梦完成: "
+                f"dream_id={report.dream_id} duration={report.duration_seconds:.1f}s "
+                f"nrem={report.nrem.episodes_replayed}/{report.nrem.total_steps} "
+                f"rem_nodes={report.rem.nodes_activated} "
+                f"rem_new_edges={report.rem.new_edges_created} "
+                f"rem_pruned={report.rem.edges_pruned}"
+            )
+
+            return {
+                "success": True,
+                "dream_id": report.dream_id,
+                "duration_seconds": round(report.duration_seconds, 1),
+                "nrem_episodes": report.nrem.episodes_replayed,
+                "nrem_steps": report.nrem.total_steps,
+                "rem_nodes": report.rem.nodes_activated,
+                "rem_new_edges": report.rem.new_edges_created,
+                "rem_pruned_edges": report.rem.edges_pruned,
+                "seed_titles": [seed.title for seed in report.seed_report],
+                "seed_types": [seed.seed_type for seed in report.seed_report],
+                "dream_text": report.dream_text or report.narrative,
+                "dream_residue": (
+                    {
+                        "summary": report.dream_residue.summary,
+                        "life_payload": report.dream_residue.life_payload,
+                        "dfc_payload": report.dream_residue.dfc_payload,
+                        "dominant_affect": report.dream_residue.dominant_affect,
+                        "strength": report.dream_residue.strength,
+                        "tags": list(report.dream_residue.tags),
+                    }
+                    if report.dream_residue is not None
+                    else None
+                ),
+                "archive_path": report.archive_path,
+                "memory_effects": dict(report.memory_effects),
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"life_engine 手动做梦失败: {exc}\n{traceback.format_exc()}")
+            log_error(
+                "manual_dream_failed",
+                str(exc),
+                heartbeat_count=self._state.heartbeat_count,
+                heartbeat_at=self._state.last_heartbeat_at,
+            )
+            return {
+                "success": False,
+                "error": str(exc),
+            }
+
     async def _init_memory_service(self) -> None:
         """初始化仿生记忆服务。"""
         try:
@@ -2246,6 +2352,8 @@ class LifeEngineService(BaseService):
                     inner_state=self._inner_state,
                     memory_service=self._memory_service,
                     snn_bridge=self._snn_bridge,
+                    workspace_path=cfg.settings.workspace_path,
+                    model_task_name=cfg.model.task_name,
                     nrem_replay_episodes=dream_cfg.nrem_replay_episodes,
                     nrem_events_per_episode=dream_cfg.nrem_events_per_episode,
                     nrem_speed_multiplier=dream_cfg.nrem_speed_multiplier,

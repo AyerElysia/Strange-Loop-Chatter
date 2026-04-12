@@ -4,8 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Neo-MoFox · Memory Overview</title>
-  <script src="https://unpkg.com/d3-force@3"></script>
-  <script src="https://unpkg.com/force-graph"></script>
+  <script src="https://unpkg.com/force-graph@1.43.3/dist/force-graph.min.js"></script>
   <style>
     :root {
       --bg: #06101e;
@@ -302,7 +301,10 @@
         .nodeId('id')
         .nodeLabel(node => `${node.title}\n${node.path || node.type}`)
         .linkLabel(link => `${link.type} | weight=${fmt(link.weight, 3)} | activation=${link.activation_count || 0}${link.reason ? ` | ${link.reason}` : ''}`)
-        .nodeVal(node => 2 + Math.pow(Math.max(node.activation || 0.05, 0.05), 0.7) * 6 + Math.min(node.degree || 0, 12) * 0.12)
+        .nodeVal(node => {
+          const act = Math.max(node.activation || 0.05, 0.05);
+          return 2 + Math.pow(act, 0.7) * 6 + Math.min(node.degree || 0, 12) * 0.12;
+        })
         .nodeColor(node => {
           if (selectedNodes.has(node.id)) return '#ffffff';
           if (changedNodes.has(node.id)) return '#f59e0b';
@@ -313,7 +315,9 @@
           return colorWithAlpha(base, alpha);
         })
         .linkColor(link => {
-          const id = link.id || linkKey(getNodeId(link.source), getNodeId(link.target));
+          const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+          const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+          const id = link.id || `${sourceId}__${targetId}`;
           if (selectedEdges.has(id)) return '#ffffff';
           if (activatedEdges.has(id)) return '#f59e0b';
           const base = EDGE_COLORS[link.type] || '#94a3b8';
@@ -322,10 +326,11 @@
         .linkWidth(link => {
           const weight = Math.max(0, Number(link.weight || 0));
           const base = Math.max(0.5, Math.pow(weight, 1.5) * 5);
-          const id = link.id || linkKey(getNodeId(link.source), getNodeId(link.target));
+          const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+          const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+          const id = link.id || `${sourceId}__${targetId}`;
           return selectedEdges.has(id) ? base + 2 : base;
         })
-        .linkDirectionalParticleSpeed(0.01)
         .onNodeClick(node => selectNode(node))
         .onNodeHover(node => { hoverLink = null; hoverNode = node; renderHover(); document.getElementById('graph').style.cursor = node ? 'pointer' : 'default'; })
         .onLinkHover(link => { hoverNode = null; hoverLink = link; renderHover(); })
@@ -371,11 +376,9 @@
           }
         });
 
+      // 调整全局引力
       Graph.d3Force('charge').strength(-400);
       Graph.d3Force('link').distance(100);
-      if (window.d3?.forceCollide) {
-        Graph.d3Force('collide', window.d3.forceCollide(node => 15));
-      }
     }
 
     function renderHover() {
@@ -658,15 +661,24 @@
     }
 
     async function boot() {
-      bindUI();
-      document.getElementById('node-limit-val').textContent = String(nodeLimit());
-      document.getElementById('min-weight-val').textContent = minWeight().toFixed(2);
-      await loadStats();
-      await loadGraph();
-      connectLive();
+      try {
+        bindUI();
+        document.getElementById('node-limit-val').textContent = String(nodeLimit());
+        document.getElementById('min-weight-val').textContent = minWeight().toFixed(2);
+        await loadStats();
+        await loadGraph();
+        connectLive();
+      } catch (err) {
+        console.error("启动失败", err);
+        pushEvent("error", `初始化错误: ${err.message}`);
+      }
     }
 
-    boot();
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', boot);
+    } else {
+      boot();
+    }
   </script>
 </body>
 </html>
