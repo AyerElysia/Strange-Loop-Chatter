@@ -152,7 +152,7 @@ def test_context_manager_reminder_only_registers_until_next_payload() -> None:
     payloads = manager.add_payload(payloads, LLMPayload(ROLE.USER, Text("你好")))
     assert len(payloads) == 2
     assert payloads[1].role == ROLE.USER
-    # reminder 追加到 USER block 尾部（缓存友好：静态内容在前）
+    # reminder 注入到 USER block 末尾
     assert cast(Text, payloads[1].content[0]).text == "你好"
     assert cast(Text, payloads[1].content[1]).text == "你必须先输出结论"
 
@@ -171,7 +171,7 @@ def test_context_manager_register_reminder_defers_until_first_user() -> None:
     assert len(payloads) == 2
     assert payloads[0].role == ROLE.SYSTEM
     assert payloads[1].role == ROLE.USER
-    # reminder 追加到 USER block 尾部
+    # reminder 注入到 USER block 末尾
     assert cast(Text, payloads[1].content[0]).text == "你好"
     assert cast(Text, payloads[1].content[1]).text == "先给结论"
 
@@ -188,7 +188,7 @@ def test_context_manager_reminder_wraps_system_text() -> None:
     assert len(payloads) == 2
     assert payloads[0].role == ROLE.SYSTEM
     assert payloads[1].role == ROLE.USER
-    # reminder 追加到 USER block 尾部
+    # reminder 注入到 USER block 末尾
     assert cast(Text, payloads[1].content[0]).text == "你好"
     assert cast(Text, payloads[1].content[1]).text == "<system_reminder>\n[goal]\n先给结论\n</system_reminder>"
 
@@ -207,7 +207,7 @@ def test_context_manager_reminder_waits_through_tool_until_first_user() -> None:
     payloads = manager.add_payload(payloads, LLMPayload(ROLE.USER, Text("你好")))
     assert len(payloads) == 3
     assert payloads[2].role == ROLE.USER
-    # reminder 追加到 USER block 尾部
+    # reminder 注入到 USER block 末尾
     assert cast(Text, payloads[2].content[0]).text == "你好"
     assert cast(Text, payloads[2].content[1]).text == "<system_reminder>\n先给结论\n</system_reminder>"
 

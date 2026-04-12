@@ -165,9 +165,9 @@ class TestBaseAgent:
 
         assert request.payloads[0].role == ROLE.SYSTEM
         assert request.payloads[1].role == ROLE.USER
-        # reminder 追加到 USER block 尾部（缓存友好）
-        assert cast(Text, request.payloads[1].content[0]).text == "hello"
-        assert cast(Text, request.payloads[1].content[1]).text == "<system_reminder>\n[goal]\n先给结论\n</system_reminder>"
+        # reminder 注入到 USER block 首部
+        assert cast(Text, request.payloads[1].content[0]).text == "<system_reminder>\n[goal]\n先给结论\n</system_reminder>"
+        assert cast(Text, request.payloads[1].content[1]).text == "hello"
 
         reset_system_reminder_store()
 

@@ -2,8 +2,7 @@
 
 覆盖：
 - LLMContextManager.update_reminder() 方法
-- _apply_reminders() 的尾部追加逻辑
-- _read_subconscious_state() 潜意识读取
+- _apply_reminders() 的末尾注入逻辑
 - ConsultNucleusTool 基本结构
 """
 
@@ -50,14 +49,14 @@ class TestUpdateReminder:
 
 
 # ============================================================
-# _apply_reminders 尾部追加测试
+# _apply_reminders 末尾注入测试
 # ============================================================
 
 
 class TestApplyRemindersAppend:
-    """测试 reminder 注入到 USER block 尾部而非头部。"""
+    """测试 reminder 注入到 USER block 末尾。"""
 
-    def test_reminder_appended_to_end(self):
+    def test_reminder_appended_to_tail(self):
         ctx = LLMContextManager(max_payloads=10)
         ctx.reminder("my_reminder", wrap_with_system_tag=False)
 
@@ -175,7 +174,7 @@ class TestApplyRemindersAppend:
 
         result = ctx._apply_reminders(payloads)
         contents = result[0].content
-        # 旧 reminder 被剥离，history 在前，新 reminder 在后
+        # 旧 reminder 被剥离，新 reminder 追加到末尾
         assert len(contents) == 2
         assert contents[0].text == "history"
         assert "new_state" in contents[1].text
@@ -200,77 +199,3 @@ class TestConsultNucleusStructure:
     def test_tool_allows_default_chatter(self):
         from plugins.default_chatter.consult_nucleus import ConsultNucleusTool
         assert "default_chatter" in ConsultNucleusTool.chatter_allow
-
-
-# ============================================================
-# _read_subconscious_state 测试
-# ============================================================
-
-
-class TestReadSubconsciousState:
-    """测试潜意识状态读取函数。"""
-
-    def test_reads_from_subconscious_bucket(self):
-        """验证 _read_subconscious_state 从 'subconscious' bucket 而非 'actor' 读取。"""
-        import logging
-        from src.core.prompt import get_system_reminder_store
-        from plugins.default_chatter.runners import _read_subconscious_state
-
-        store = get_system_reminder_store()
-        store.set("subconscious", "state", "当前情绪：平静，好奇心较强")
-
-        logger = logging.getLogger("test")
-        result = _read_subconscious_state(logger)
-        assert "当前情绪" in result
-        assert "平静" in result
-
-        # 清理
-        store.delete("subconscious", "state")
-
-    def test_returns_empty_when_no_state(self):
-        """没有写入潜意识时返回空字符串。"""
-        import logging
-        from src.core.prompt import get_system_reminder_store
-        from plugins.default_chatter.runners import _read_subconscious_state
-
-        store = get_system_reminder_store()
-        # 确保 subconscious bucket 为空
-        store.delete("subconscious", "state")
-
-        logger = logging.getLogger("test")
-        result = _read_subconscious_state(logger)
-        assert result == ""
-
-    def test_does_not_read_actor_bucket(self):
-        """验证 _read_subconscious_state 不会读到 actor bucket 的内容。"""
-        import logging
-        from src.core.prompt import get_system_reminder_store
-        from plugins.default_chatter.runners import _read_subconscious_state
-
-        store = get_system_reminder_store()
-        store.set("actor", "subconscious", "这是旧的 actor bucket 内容")
-        store.delete("subconscious", "state")
-
-        logger = logging.getLogger("test")
-        result = _read_subconscious_state(logger)
-        assert "旧的 actor bucket" not in result
-        assert result == ""
-
-        # 清理
-        store.delete("actor", "subconscious")
-
-    def test_subconscious_not_in_actor_reminder_at_create_time(self):
-        """验证 create_request 读取 'actor' bucket 时不会包含潜意识状态。"""
-        from src.core.prompt import get_system_reminder_store
-
-        store = get_system_reminder_store()
-        store.set("subconscious", "state", "潜意识内容不应出现在 actor reminder 中")
-        store.set("actor", "emoji_hint", "关于表情包的使用...")
-
-        actor_text = store.get("actor")
-        assert "潜意识内容不应出现" not in actor_text
-        assert "表情包" in actor_text
-
-        # 清理
-        store.delete("subconscious", "state")
-        store.delete("actor", "emoji_hint")

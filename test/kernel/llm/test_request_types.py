@@ -85,9 +85,9 @@ def test_create_llm_request_registers_system_reminder(model_set: ModelSet) -> No
     assert len(request.payloads) == 2
     assert request.payloads[0].role == ROLE.SYSTEM
     assert request.payloads[1].role == ROLE.USER
-    # reminder 追加到 USER block 尾部（缓存友好）
-    assert cast(Text, request.payloads[1].content[0]).text == "你好"
-    assert cast(Text, request.payloads[1].content[1]).text == "<system_reminder>\n[goal]\n先给结论\n</system_reminder>"
+    # reminder 注入到 USER block 首部
+    assert cast(Text, request.payloads[1].content[0]).text == "<system_reminder>\n[goal]\n先给结论\n</system_reminder>"
+    assert cast(Text, request.payloads[1].content[1]).text == "你好"
 
     reset_system_reminder_store()
 

@@ -6,15 +6,15 @@ enabled = true
 
 # 心跳间隔（秒）。
 # 值类型：int, 默认值：30
-heartbeat_interval_seconds = 120
+heartbeat_interval_seconds = 180
 
 # 睡觉时间，格式 HH:MM（24小时制）。与 wake_time 同时配置后生效。
 # 值类型：str, 默认值：""
-sleep_time = "01:00"
+sleep_time = ""
 
 # 苏醒时间，格式 HH:MM（24小时制）。与 sleep_time 同时配置后生效。
 # 值类型：str, 默认值：""
-wake_time = "10:30"
+wake_time = ""
 
 # 是否在每次心跳时输出日志。
 # 值类型：bool, 默认值：true

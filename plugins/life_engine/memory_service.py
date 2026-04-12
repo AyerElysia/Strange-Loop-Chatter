@@ -185,7 +185,10 @@ class LifeMemoryService:
         
         self._db = sqlite3.connect(str(db_path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
-        
+
+        # 启用外键约束（SQLite 默认关闭）
+        self._db.execute("PRAGMA foreign_keys = ON")
+
         await self._create_tables()
         self._initialized = True
         logger.info(f"记忆服务初始化完成，数据库: {db_path}")
@@ -908,12 +911,25 @@ class LifeMemoryService:
                 return []
             
             # ChromaDB 返回的是距离，转换为相似度
-            pairs = []
+            raw_pairs: List[Tuple[str, float]] = []
             for node_id, distance in zip(results["ids"][0], results["distances"][0]):
                 similarity = 1.0 / (1.0 + distance)  # 转换为相似度
-                pairs.append((node_id, similarity))
+                raw_pairs.append((node_id, similarity))
+
+            # 与关系库做一致性校验：过滤掉“向量库存在但节点表不存在”的脏 ID，
+            # 避免后续 Hebbian 强化时触发外键错误。
+            filtered_pairs, stale_ids = await self._filter_existing_scores(raw_pairs)
+            if stale_ids:
+                logger.warning(
+                    f"向量检索命中 {len(stale_ids)} 个脏节点ID（节点表不存在），已忽略: {stale_ids[:5]}"
+                )
+                # 最佳努力清理，失败不影响主流程
+                try:
+                    collection.delete(ids=stale_ids)
+                except Exception as cleanup_err:
+                    logger.debug(f"清理向量库脏节点失败: {cleanup_err}")
             
-            return pairs
+            return filtered_pairs
         except Exception as e:
             logger.error(f"向量检索失败: {e}")
             return []
@@ -1078,6 +1094,32 @@ class LifeMemoryService:
             filtered.append((node_id, score))
         
         return filtered
+
+    async def _filter_existing_scores(
+        self,
+        scores: List[Tuple[str, float]],
+    ) -> Tuple[List[Tuple[str, float]], List[str]]:
+        """仅保留节点表中存在的结果，返回 (filtered_scores, stale_node_ids)。"""
+        if not scores:
+            return [], []
+
+        ordered_ids: List[str] = []
+        seen = set()
+        for node_id, _ in scores:
+            if node_id not in seen:
+                ordered_ids.append(node_id)
+                seen.add(node_id)
+
+        placeholders = ",".join("?" for _ in ordered_ids)
+        cursor = self._db.cursor()
+        cursor.execute(
+            f"SELECT node_id FROM memory_nodes WHERE node_id IN ({placeholders})",
+            ordered_ids,
+        )
+        existing_ids = {row["node_id"] for row in cursor.fetchall()}
+        stale_ids = [node_id for node_id in ordered_ids if node_id not in existing_ids]
+        filtered_scores = [(node_id, score) for node_id, score in scores if node_id in existing_ids]
+        return filtered_scores, stale_ids
     
     async def _get_node_by_id(self, node_id: str) -> Optional[MemoryNode]:
         """根据 ID 获取节点。"""
@@ -1167,11 +1209,28 @@ class LifeMemoryService:
         """
         强化共同激活的节点之间的边 (Hebbian Learning)。
         """
+        # 仅使用节点表存在的 ID，避免外键约束异常。
+        deduped_ids: List[str] = []
+        seen = set()
+        for node_id in node_ids:
+            if node_id not in seen:
+                deduped_ids.append(node_id)
+                seen.add(node_id)
+        _, stale_ids = await self._filter_existing_scores([(node_id, 1.0) for node_id in deduped_ids])
+        stale_set = set(stale_ids)
+        existing_ids = [node_id for node_id in deduped_ids if node_id not in stale_set]
+        if stale_ids:
+            logger.warning(
+                f"Hebbian 强化跳过 {len(stale_ids)} 个不存在节点ID，防止外键错误: {stale_ids[:5]}"
+            )
+        if len(existing_ids) < 2:
+            return
+
         cursor = self._db.cursor()
         now = time.time()
         
-        for i, node_a in enumerate(node_ids):
-            for node_b in node_ids[i+1:]:
+        for i, node_a in enumerate(existing_ids):
+            for node_b in existing_ids[i+1:]:
                 # 查找或创建 ASSOCIATES 边
                 cursor.execute("""
                     SELECT * FROM memory_edges 

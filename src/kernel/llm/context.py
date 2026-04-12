@@ -235,7 +235,7 @@ class LLMContextManager:
         """替换全部已登记的 reminder 内容，保持注入语义不变。
 
         用于在 enhanced runner 长生命周期内刷新来自 SystemReminderStore 的
-        最新潜意识状态，避免 runner 启动时的快照长期过期。
+        最新系统提醒，避免 runner 启动时的快照长期过期。
         """
         self._reminders = []
         self.reminder(content, wrap_with_system_tag=wrap_with_system_tag)
@@ -243,11 +243,8 @@ class LLMContextManager:
     def _apply_reminders(self, payloads: list[LLMPayload]) -> list[LLMPayload]:
         """将 reminder 注入首个 USER 消息**末尾**。
 
-        将动态内容（如 Life 潜意识状态）放在 USER block 尾部而非头部，
-        确保前面的静态内容（聊天历史等）可被 prefix caching 命中。
-
         关键：每次调用先**剥离**所有旧 reminder（通过 <system_reminder> 标签识别），
-        再追加当前最新 reminder，避免 reminder 随心跳更新在上下文中累积。
+        再注入当前最新 reminder，避免 reminder 随心跳更新在上下文中累积。
         """
 
         if not self._reminders:
@@ -263,16 +260,6 @@ class LLMContextManager:
         first_user = updated[user_index]
         existing = first_user.content
 
-        # 快速路径：尾部已是完全相同的 reminder → 无需改动
-        tail_start = len(existing) - len(reminder_parts)
-        if tail_start >= 0:
-            already_appended = all(
-                self._is_same_text_part(existing[tail_start + i], reminder_parts[i])
-                for i in range(len(reminder_parts))
-            )
-            if already_appended:
-                return updated
-
         # 剥离所有旧的 <system_reminder> 标签内容（心跳更新时内容会变化）
         clean = [
             part for part in existing
@@ -280,6 +267,11 @@ class LLMContextManager:
         ]
 
         rebuilt = clean + reminder_parts
+        if len(existing) == len(rebuilt) and all(
+            self._is_same_text_part(existing[i], rebuilt[i]) for i in range(len(rebuilt))
+        ):
+            return updated
+
         updated[user_index] = LLMPayload(ROLE.USER, rebuilt)
         return updated
 
