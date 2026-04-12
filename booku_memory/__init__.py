@@ -1,12 +1,10 @@
-"""Booku Memory Agent 插件包。
+"""Booku Memory 插件包。
 
-此包实现了基于 Agent 架构的 Booku 长期记忆系统，提供：
-- 写入 Agent（BookuMemoryWriteAgent）：将对话中包含的用户信息写入记忆库
-- 读取 Agent（BookuMemoryReadAgent）：根据语义查询检索相关记忆并汇总返回
-- 服务组件（BookuMemoryService）：对外暴露完整的记忆 CRUD/检索 API
+当前版本将 booku_memory 收缩为稳定的长期记忆层：
+- `BookuMemoryService` 负责长期记忆存储与 reminder 同步
+- `memory_edit_inherent` 负责整体改写固有长期记忆
 
-插件入口在 :mod:`plugin` 模块中由 ``@register_plugin`` 装饰的
-``BookuMemoryAgentPlugin`` 类注册，通过插件加载器自动发现。
+历史代码与数据仍保留在仓库中，但运行时只暴露最小长期记忆能力。
 """
 
 __all__: list[str] = []

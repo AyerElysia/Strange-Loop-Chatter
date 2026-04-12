@@ -29,12 +29,16 @@ async def _get_life_state_for_current_turn(logger: Logger) -> str:
         Life State 文本，如果获取失败则返回空字符串
     """
     try:
-        from src.app.plugin_system.api import plugin_api
-        life_service = plugin_api.get_service("life_engine:service:life_engine")
-        if not life_service:
+        from src.core.managers import get_plugin_manager
+
+        life_plugin = get_plugin_manager().get_plugin("life_engine")
+        if life_plugin is None:
             return ""
 
-        # 调用 life_engine 的方法生成状态摘要
+        life_service = getattr(life_plugin, "service", None)
+        if life_service is None:
+            return ""
+
         state_digest = await life_service.get_state_digest_for_dfc()
         return state_digest
     except Exception as e:
