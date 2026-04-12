@@ -45,6 +45,9 @@ def _should_skip_path(path: Path) -> bool:
     for part in path.parts:
         if part in _IGNORE_DIRS:
             return True
+    # 跳过隐藏文件（以 . 开头的文件名）
+    if path.name.startswith("."):
+        return True
     # 跳过特定扩展名
     if path.suffix.lower() in _IGNORE_EXTENSIONS:
         return True

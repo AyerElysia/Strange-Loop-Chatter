@@ -1065,7 +1065,7 @@ class LifeEngineRunAgentTool(BaseTool):
             from src.app.plugin_system.api.llm_api import create_llm_request, get_model_set_by_task
             from src.kernel.llm import LLMPayload, ROLE, Text, ToolRegistry, ToolResult
 
-            task_name = config.model.task_name or "life"
+            task_name = "sub_actor"
             model_set = get_model_set_by_task(task_name)
             if not model_set:
                 return False, f"找不到模型配置: {task_name}"

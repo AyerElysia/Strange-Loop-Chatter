@@ -136,6 +136,15 @@ class LifeMemoryService:
         self._initialized = False
         self._chroma_collection = None
 
+    def _emit_visual_event(self, event_type: str, payload: Dict[str, Any], source: str = "memory_service") -> None:
+        """向可视化层广播事件，不影响主流程。"""
+        try:
+            from .memory_router import MemoryRouter
+
+            MemoryRouter.broadcast(event_type, payload, source=source)
+        except Exception as e:
+            logger.debug(f"可视化事件广播失败 ({event_type}): {e}")
+
     @staticmethod
     def _normalize_file_path(file_path: str) -> str:
         """规范化文件路径字符串，避免同一路径多种写法导致的节点分裂。"""
@@ -185,7 +194,10 @@ class LifeMemoryService:
         
         self._db = sqlite3.connect(str(db_path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
-        
+
+        # 启用外键约束（SQLite 默认关闭）
+        self._db.execute("PRAGMA foreign_keys = ON")
+
         await self._create_tables()
         self._initialized = True
         logger.info(f"记忆服务初始化完成，数据库: {db_path}")
@@ -360,7 +372,20 @@ class LifeMemoryService:
         # 添加到 FTS
         if content:
             await self._update_fts(node_id, title, content[:2000])
-        
+
+        self._emit_visual_event(
+            "memory.nodes.created",
+            {
+                "node": {
+                    "id": node.node_id,
+                    "type": node.node_type.value.upper(),
+                    "title": node.title,
+                    "path": node.file_path,
+                    "activation": node.activation_strength,
+                    "importance": node.importance,
+                }
+            },
+        )
         logger.debug(f"创建文件节点: {file_path}")
         return node
     
@@ -678,6 +703,22 @@ class LifeMemoryService:
             WHERE node_id = ?
         """, (now, node_id))
         self._db.commit()
+        cursor.execute("SELECT activation_strength, access_count, last_accessed_at FROM memory_nodes WHERE node_id = ?", (node_id,))
+        row = cursor.fetchone()
+        if row:
+            self._emit_visual_event(
+                "memory.nodes.updated",
+                {
+                    "nodes": [
+                        {
+                            "id": node_id,
+                            "activation": float(row["activation_strength"] or 0.0),
+                            "access_count": int(row["access_count"] or 0),
+                            "last_accessed_at": row["last_accessed_at"],
+                        }
+                    ]
+                },
+            )
     
     # --------------------------------------------------------
     # 边操作
@@ -716,6 +757,20 @@ class LifeMemoryService:
             edge.weight = strength
             edge.reason = reason or edge.reason
             edge.last_activated_at = now
+            self._emit_visual_event(
+                "memory.edges.updated",
+                {
+                    "edge": {
+                        "id": edge.edge_id,
+                        "source": edge.source_id,
+                        "target": edge.target_id,
+                        "type": edge.edge_type.value,
+                        "weight": edge.weight,
+                        "reason": edge.reason,
+                        "last_activated_at": edge.last_activated_at,
+                    }
+                },
+            )
             return edge
         
         # 创建新边
@@ -760,6 +815,20 @@ class LifeMemoryService:
             ))
         
         self._db.commit()
+        self._emit_visual_event(
+            "memory.edges.created",
+            {
+                "edge": {
+                    "id": edge.edge_id,
+                    "source": edge.source_id,
+                    "target": edge.target_id,
+                    "type": edge.edge_type.value,
+                    "weight": edge.weight,
+                    "reason": edge.reason,
+                    "last_activated_at": edge.last_activated_at,
+                }
+            },
+        )
         logger.debug(f"创建边: {source_id} --[{edge_type.value}]--> {target_id}")
         return edge
     
@@ -908,12 +977,25 @@ class LifeMemoryService:
                 return []
             
             # ChromaDB 返回的是距离，转换为相似度
-            pairs = []
+            raw_pairs: List[Tuple[str, float]] = []
             for node_id, distance in zip(results["ids"][0], results["distances"][0]):
                 similarity = 1.0 / (1.0 + distance)  # 转换为相似度
-                pairs.append((node_id, similarity))
+                raw_pairs.append((node_id, similarity))
+
+            # 与关系库做一致性校验：过滤掉“向量库存在但节点表不存在”的脏 ID，
+            # 避免后续 Hebbian 强化时触发外键错误。
+            filtered_pairs, stale_ids = await self._filter_existing_scores(raw_pairs)
+            if stale_ids:
+                logger.warning(
+                    f"向量检索命中 {len(stale_ids)} 个脏节点ID（节点表不存在），已忽略: {stale_ids[:5]}"
+                )
+                # 最佳努力清理，失败不影响主流程
+                try:
+                    collection.delete(ids=stale_ids)
+                except Exception as cleanup_err:
+                    logger.debug(f"清理向量库脏节点失败: {cleanup_err}")
             
-            return pairs
+            return filtered_pairs
         except Exception as e:
             logger.error(f"向量检索失败: {e}")
             return []
@@ -964,6 +1046,14 @@ class LifeMemoryService:
         4. 激活扩散联想
         5. 强化共同激活的边
         """
+        self._emit_visual_event(
+            "memory.search.started",
+            {
+                "query": query,
+                "top_k": top_k,
+                "enable_association": enable_association,
+            },
+        )
         # Step 1 & 2: 并行执行关键词和语义检索
         fts_results = await self.fts_search(query, top_k * 2)
         vector_results = await self.vector_search(query, top_k * 2)
@@ -993,19 +1083,28 @@ class LifeMemoryService:
         
         # 构建结果
         results = []
-        
+        seed_payload = []
+        associated_payload = []
+
         # 直接命中
         for node_id, score in seeds:
             node = await self._get_node_by_id(node_id)
             if node and node.file_path:
+                snippet = await self._get_snippet(node_id)
                 results.append(SearchResult(
                     file_path=node.file_path,
                     title=node.title,
-                    snippet=await self._get_snippet(node_id),
+                    snippet=snippet,
                     relevance=score,
                     source="direct"
                 ))
-        
+                seed_payload.append({
+                    "id": node_id,
+                    "title": node.title,
+                    "path": node.file_path,
+                    "score": score,
+                })
+
         # 联想结果
         for node_id, score, path, reason in associated:
             node = await self._get_node_by_id(node_id)
@@ -1013,16 +1112,50 @@ class LifeMemoryService:
                 # 避免重复
                 if any(r.file_path == node.file_path for r in results):
                     continue
+                snippet = await self._get_snippet(node_id)
                 results.append(SearchResult(
                     file_path=node.file_path,
                     title=node.title,
-                    snippet=await self._get_snippet(node_id),
+                    snippet=snippet,
                     relevance=score * 0.8,  # 联想结果稍微降权
                     source="associated",
                     association_path=path,
                     association_reason=reason
                 ))
-        
+                associated_payload.append({
+                    "id": node_id,
+                    "title": node.title,
+                    "path": node.file_path,
+                    "score": score,
+                    "association_path": path,
+                    "association_reason": reason,
+                })
+
+        self._emit_visual_event(
+            "memory.search.seeds",
+            {
+                "query": query,
+                "seed_ids": seed_ids,
+                "results": seed_payload,
+            },
+        )
+        if associated_payload:
+            self._emit_visual_event(
+                "memory.activation.spread",
+                {
+                    "query": query,
+                    "seed_ids": seed_ids,
+                    "results": associated_payload,
+                },
+            )
+        self._emit_visual_event(
+            "memory.search.finished",
+            {
+                "query": query,
+                "total_found": len(results),
+            },
+        )
+
         return results[:top_k * 2]  # 返回更多结果供选择
     
     def _rrf_fusion(
@@ -1078,6 +1211,32 @@ class LifeMemoryService:
             filtered.append((node_id, score))
         
         return filtered
+
+    async def _filter_existing_scores(
+        self,
+        scores: List[Tuple[str, float]],
+    ) -> Tuple[List[Tuple[str, float]], List[str]]:
+        """仅保留节点表中存在的结果，返回 (filtered_scores, stale_node_ids)。"""
+        if not scores:
+            return [], []
+
+        ordered_ids: List[str] = []
+        seen = set()
+        for node_id, _ in scores:
+            if node_id not in seen:
+                ordered_ids.append(node_id)
+                seen.add(node_id)
+
+        placeholders = ",".join("?" for _ in ordered_ids)
+        cursor = self._db.cursor()
+        cursor.execute(
+            f"SELECT node_id FROM memory_nodes WHERE node_id IN ({placeholders})",
+            ordered_ids,
+        )
+        existing_ids = {row["node_id"] for row in cursor.fetchall()}
+        stale_ids = [node_id for node_id in ordered_ids if node_id not in existing_ids]
+        filtered_scores = [(node_id, score) for node_id, score in scores if node_id in existing_ids]
+        return filtered_scores, stale_ids
     
     async def _get_node_by_id(self, node_id: str) -> Optional[MemoryNode]:
         """根据 ID 获取节点。"""
@@ -1167,11 +1326,29 @@ class LifeMemoryService:
         """
         强化共同激活的节点之间的边 (Hebbian Learning)。
         """
+        # 仅使用节点表存在的 ID，避免外键约束异常。
+        deduped_ids: List[str] = []
+        seen = set()
+        for node_id in node_ids:
+            if node_id not in seen:
+                deduped_ids.append(node_id)
+                seen.add(node_id)
+        _, stale_ids = await self._filter_existing_scores([(node_id, 1.0) for node_id in deduped_ids])
+        stale_set = set(stale_ids)
+        existing_ids = [node_id for node_id in deduped_ids if node_id not in stale_set]
+        if stale_ids:
+            logger.warning(
+                f"Hebbian 强化跳过 {len(stale_ids)} 个不存在节点ID，防止外键错误: {stale_ids[:5]}"
+            )
+        if len(existing_ids) < 2:
+            return
+
         cursor = self._db.cursor()
         now = time.time()
-        
-        for i, node_a in enumerate(node_ids):
-            for node_b in node_ids[i+1:]:
+        reinforced_edges = []
+
+        for i, node_a in enumerate(existing_ids):
+            for node_b in existing_ids[i+1:]:
                 # 查找或创建 ASSOCIATES 边
                 cursor.execute("""
                     SELECT * FROM memory_edges 
@@ -1192,6 +1369,14 @@ class LifeMemoryService:
                             activation_count = activation_count + 1, last_activated_at = ?
                         WHERE edge_id = ?
                     """, (new_weight, delta, now, row["edge_id"]))
+                    reinforced_edges.append({
+                        "id": row["edge_id"],
+                        "source": node_a,
+                        "target": node_b,
+                        "type": EdgeType.ASSOCIATES.value,
+                        "weight": new_weight,
+                        "delta": delta,
+                    })
                 else:
                     # 创建新边
                     edge_id = str(uuid.uuid4())[:8]
@@ -1204,8 +1389,23 @@ class LifeMemoryService:
                         edge_id, node_a, node_b, EdgeType.ASSOCIATES.value,
                         0.2, 0.2, 0.0, 1, now, "共同检索激活", now, 1
                     ))
+                    reinforced_edges.append({
+                        "id": edge_id,
+                        "source": node_a,
+                        "target": node_b,
+                        "type": EdgeType.ASSOCIATES.value,
+                        "weight": 0.2,
+                        "delta": self.LEARNING_RATE,
+                    })
         
         self._db.commit()
+        if reinforced_edges:
+            self._emit_visual_event(
+                "memory.edges.reinforced",
+                {
+                    "edges": reinforced_edges,
+                },
+            )
     
     # --------------------------------------------------------
     # 遗忘与衰减

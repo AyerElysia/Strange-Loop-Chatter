@@ -250,6 +250,11 @@ class LifeEngineService(BaseService):
         # 神经调质层
         self._inner_state: Any = None
 
+    @property
+    def memory_service(self) -> "LifeMemoryService | None":
+        """兼容旧调用方的公开记忆服务访问入口。"""
+        return self._memory_service
+
     def _get_lock(self) -> asyncio.Lock:
         """获取懒加载锁。"""
         if self._lock is None:
@@ -694,6 +699,76 @@ class LifeEngineService(BaseService):
         """返回一个轻量健康信息。"""
         return self.snapshot()
 
+    async def get_state_digest_for_dfc(self) -> str:
+        """生成给 DFC 的状态摘要（简单模板，不调用 LLM）。
+
+        设计原则：
+        1. 控制在 150-200 tokens
+        2. 只包含对当前对话有用的信息
+        3. 使用简单模板，不调用 LLM
+        4. 不会保存到历史消息中
+
+        Returns:
+            格式化的状态摘要文本
+        """
+        async with self._get_lock():
+            parts = []
+
+            # 1. 调质层状态（如果启用）
+            if self._inner_state is not None:
+                try:
+                    mood_dict = self._inner_state.modulators.get_discrete_dict()
+                    mood_items = []
+                    # 只取前3个最显著的维度
+                    priority_dims = ["curiosity", "energy", "contentment"]
+                    for name in priority_dims:
+                        if name in mood_dict:
+                            mod = self._inner_state.modulators.get(name)
+                            if mod:
+                                mood_items.append(f"{mod.cn_name}{mood_dict[name]}")
+                    if mood_items:
+                        parts.append(f"【内在状态】{'、'.join(mood_items)}")
+                except Exception as e:
+                    logger.warning(f"获取调质层状态失败: {e}")
+
+            # 2. 最近思考（最近1-2条心跳独白）
+            heartbeat_events = [
+                e for e in self._event_history
+                if e.event_type == EventType.HEARTBEAT
+            ][-2:]
+
+            if heartbeat_events:
+                thoughts = []
+                for event in heartbeat_events:
+                    time_display = _format_time_display(event.timestamp)
+                    thought = _shorten_text(event.content, max_length=40)
+                    thoughts.append(f"  [{time_display}] {thought}")
+                if thoughts:
+                    parts.append("【最近思考】")
+                    parts.extend(thoughts)
+
+            # 3. 工具使用偏好（统计最近的工具调用）
+            tool_events = [
+                e for e in self._event_history[-30:]  # 最近30个事件
+                if e.event_type == EventType.TOOL_CALL
+            ]
+
+            if tool_events:
+                tool_counts: dict[str, int] = {}
+                for event in tool_events:
+                    name = event.tool_name
+                    if name and name.startswith("nucleus_"):
+                        # 简化工具名：nucleus_read_file → read_file
+                        short_name = name.replace("nucleus_", "")
+                        tool_counts[short_name] = tool_counts.get(short_name, 0) + 1
+
+                if tool_counts:
+                    top_tools = sorted(tool_counts.items(), key=lambda x: x[1], reverse=True)[:2]
+                    tool_names = [name for name, _ in top_tools]
+                    parts.append(f"【工具偏好】{', '.join(tool_names)}")
+
+            return "\n".join(parts) if parts else ""
+
     async def record_message(self, message: Message, direction: str = "received") -> None:
         """记录一条来自聊天流的消息事件。"""
         if not self._is_enabled():
@@ -950,8 +1025,8 @@ class LifeEngineService(BaseService):
         from uuid import uuid4
         summary_event = LifeEngineEvent(
             event_id=f"summary_{uuid4().hex[:12]}",
-            sequence=old_events[0].sequence if old_events else 0,
-            timestamp=old_events[0].timestamp if old_events else _now_iso(),
+            sequence=old_events[-1].sequence if old_events else 0,  # 使用最后一个旧事件的 sequence
+            timestamp=old_events[-1].timestamp if old_events else _now_iso(),  # 使用最后一个旧事件的时间
             event_type=EventType.HEARTBEAT,  # 用心跳类型表示摘要
             source="system",
             source_detail="上下文压缩系统",
@@ -1180,262 +1255,19 @@ class LifeEngineService(BaseService):
                 f"life_engine 心跳模型回复为空: #{self._state.heartbeat_count}"
             )
 
-        # 【潜意识透传】每次心跳后，将内在状态同步到 DFC 可感知的固定区域
-        await self._sync_subconscious_state(reply_text)
-
-    # ============================================================
-    # 潜意识状态透传 (Subconscious State Sync)
-    # ============================================================
-
-    async def _sync_subconscious_state(self, latest_monologue: str) -> None:
-        """将中枢当前的内在状态同步到全局 SystemReminderStore。
-
-        这是"润物细无声"的核心机制：
-        - 中枢（潜意识）不需要主动"发消息"给 DFC（表意识）
-        - 它只是默默更新自己的状态，就像人的潜意识持续运转
-        - 当 DFC 的 Chatter 在构建 LLM 请求时，会自动从 SystemReminderStore
-          读取 "actor" bucket 下的 "subconscious" 条目
-        - 这段文字会以系统提示的形式，像"第六感"一样影响 DFC 的回复语气和内容
-        
-        同时将状态写入 workspace/SUBCONSCIOUS.md，供中枢自身回顾。
-        """
-        try:
-            # === 1. 收集最近的内在活动 ===
-            recent_monologues = self._collect_recent_monologues(max_count=3)
-            recent_tool_actions = self._collect_recent_tool_actions(max_count=5)
-            active_concerns = self._collect_active_concerns()
-
-            # === 2. 收集结构化状态 ===
-            snn_summary = self._collect_snn_summary()
-            neuromod_summary = self._collect_neuromod_summary()
-            todo_summary = self._collect_active_todos_summary()
-
-            # === 3. 构造潜意识摘要 ===
-            subconscious_text = self._build_subconscious_summary(
-                latest_monologue=latest_monologue,
-                recent_monologues=recent_monologues,
-                recent_tool_actions=recent_tool_actions,
-                active_concerns=active_concerns,
-                snn_summary=snn_summary,
-                neuromod_summary=neuromod_summary,
-                todo_summary=todo_summary,
-            )
-
-            # === 4. 写入 SystemReminderStore（DFC 的 Chatter 会自动读取） ===
-            from src.core.prompt import get_system_reminder_store
-
-            store = get_system_reminder_store()
-            store.set(
-                bucket="actor",
-                name="subconscious",
-                content=subconscious_text,
-            )
-
-            # === 5. 持久化到 workspace/SUBCONSCIOUS.md（供中枢回顾） ===
-            await self._persist_subconscious_file(subconscious_text)
-
-            logger.debug(
-                f"潜意识状态已同步: "
-                f"monologues={len(recent_monologues)} "
-                f"actions={len(recent_tool_actions)} "
-                f"concerns={len(active_concerns)} "
-                f"snn={'yes' if snn_summary else 'no'} "
-                f"todos={len(todo_summary) if todo_summary else 0}"
-            )
-        except Exception as e:
-            # 潜意识同步失败不应影响心跳主流程
-            logger.warning(f"潜意识状态同步失败（不影响心跳）: {e}")
-
-    def _collect_recent_monologues(self, max_count: int = 3) -> list[str]:
-        """从事件历史中提取最近的内心独白。"""
-        monologues: list[str] = []
-        for event in reversed(self._event_history):
-            if event.event_type == EventType.HEARTBEAT and event.content:
-                text = event.content.strip()
-                if text and len(text) > 5:  # 过滤太短的独白
-                    monologues.append(text)
-                if len(monologues) >= max_count:
-                    break
-        monologues.reverse()  # 恢复时间正序
-        return monologues
-
-    def _collect_recent_tool_actions(self, max_count: int = 5) -> list[str]:
-        """从事件历史中提取最近的工具操作摘要。"""
-        actions: list[str] = []
-        for event in reversed(self._event_history):
-            if event.event_type == EventType.TOOL_CALL and event.content:
-                # 只取工具名和简要描述
-                content = event.content.strip()
-                if content:
-                    actions.append(content[:80])
-                if len(actions) >= max_count:
-                    break
-        actions.reverse()
-        return actions
-
-    def _collect_active_concerns(self) -> list[str]:
-        """从最近的独白中提取活跃关注点（简单关键词提取）。"""
-        concerns: list[str] = []
-        last_reply = self._state.last_model_reply or ""
-        # 提取最后独白中包含的情绪和主题关键词
-        if last_reply:
-            # 截取前 200 字作为关注点摘要
-            concerns.append(last_reply[:200])
-        return concerns
-
-    def _collect_snn_summary(self) -> str:
-        """收集 SNN 驱动状态的可读摘要。"""
-        if self._snn_network is None:
-            return ""
-        try:
-            discrete = self._snn_network.get_drive_discrete()
-            # 映射为中文标签
-            label_map = {
-                "arousal": "唤醒",
-                "valence": "情绪效价",
-                "social_drive": "社交欲",
-                "task_drive": "做事欲",
-                "exploration_drive": "探索欲",
-                "rest_drive": "休息欲",
-            }
-            parts = []
-            for key, level in discrete.items():
-                cn = label_map.get(key, key)
-                parts.append(f"{cn}={level}")
-            return "、".join(parts)
-        except Exception:
-            return ""
-
-    def _collect_neuromod_summary(self) -> str:
-        """收集调质层状态摘要。"""
-        if self._inner_state is None:
-            return ""
-        try:
-            if hasattr(self._inner_state, "format_for_prompt"):
-                return self._inner_state.format_for_prompt()
-            return ""
-        except Exception:
-            return ""
-
-    def _collect_active_todos_summary(self) -> list[str]:
-        """收集活跃的 TODO 列表摘要。"""
-        try:
-            from .todo_tools import TodoStorage, TodoStatus
-            cfg = self._cfg()
-            workspace = Path(cfg.settings.workspace_path)
-            storage = TodoStorage(workspace)
-            all_todos = storage.load()
-
-            inactive = {
-                TodoStatus.COMPLETED.value,
-                TodoStatus.RELEASED.value,
-                TodoStatus.CHERISHED.value,
-            }
-            active = [t for t in all_todos if t.status not in inactive]
-            # 只取前5个，避免过长
-            summaries = []
-            for t in active[:5]:
-                status_emoji = {
-                    "idea": "💡", "planning": "📝", "waiting": "⏳",
-                    "enjoying": "🎵", "paused": "⏸️",
-                }.get(t.status, "·")
-                summaries.append(f"{status_emoji} {t.title} ({t.status})")
-            return summaries
-        except Exception:
-            return []
-
-    def _build_subconscious_summary(
-        self,
-        latest_monologue: str,
-        recent_monologues: list[str],
-        recent_tool_actions: list[str],
-        active_concerns: list[str],
-        snn_summary: str = "",
-        neuromod_summary: str = "",
-        todo_summary: list[str] | None = None,
-    ) -> str:
-        """构建写入 SystemReminderStore 的潜意识摘要文本。
-
-        结构化 Briefing，包含内心状态、SNN 驱动、调质状态、活跃 TODO、
-        最近行动和对话引导。信息密度高但紧凑（目标 ~300-500 tokens）。
-        """
-        parts: list[str] = []
-
-        parts.append(
-            "以下是你的潜意识/内心深处此刻的状态。"
-            "这些不是外部消息，而是你内心深处的感受和直觉。"
-            "你不需要复述它们，但它们会自然地影响你说话的语气和关注点。"
-        )
-
-        # 内心状态 = SNN 驱动 + 调质状态
-        state_parts = []
-        if snn_summary:
-            state_parts.append(snn_summary)
-        if neuromod_summary:
-            state_parts.append(neuromod_summary)
-        if state_parts:
-            parts.append(f"\n【内心状态】{' | '.join(state_parts)}")
-
-        # 当前情绪/独白
-        if latest_monologue:
-            mood_text = latest_monologue[:300]
-            parts.append(f"\n【此刻的内心】\n{mood_text}")
-
-        # 最近在忙什么
-        if recent_tool_actions:
-            actions_summary = "、".join(recent_tool_actions[:3])
-            parts.append(f"\n【最近在做的事】\n{actions_summary}")
-
-        # 活跃 TODO
-        if todo_summary:
-            parts.append(f"\n【活跃TODO】\n" + "\n".join(todo_summary))
-
-        # 最近的思考轨迹（只取最后 2 条，避免过长）
-        if len(recent_monologues) > 1:
-            thoughts = "\n".join(
-                f"- {m[:120]}" for m in recent_monologues[-2:]
-            )
-            parts.append(f"\n【近期的思绪】\n{thoughts}")
-
-        return "\n".join(parts)
-
-    async def _persist_subconscious_file(self, content: str) -> None:
-        """将潜意识状态持久化到 workspace/SUBCONSCIOUS.md。"""
-        cfg = self._cfg()
-        workspace = Path(cfg.settings.workspace_path)
-
-        if not workspace.exists():
-            return
-
-        subconscious_path = workspace / "SUBCONSCIOUS.md"
-        try:
-            header = (
-                f"# 潜意识状态\n"
-                f"> 最后更新: {_format_current_time()}\n"
-                f"> 心跳序号: #{self._state.heartbeat_count}\n\n"
-            )
-            subconscious_path.write_text(
-                header + content,
-                encoding="utf-8",
-            )
-        except Exception as e:
-            logger.debug(f"写入 SUBCONSCIOUS.md 失败: {e}")
-
 
     def _build_heartbeat_model_prompt(self, wake_context: str) -> str:
         """构造心跳模型输入。
-        
-        结构：事件流在前，心跳指令在后（符合模型注意力分布）。
+
+        缓存友好策略：
+        1. 稳定的行为规则放在前面（提高前缀命中）
+        2. 每轮变化的动态上下文放在后面
         核心原则：行动是默认，安静是例外。
         """
-        # 计算关键的时间信息
         minutes_since_external = self._minutes_since_external_message()
         heartbeat_interval = self._cfg().settings.heartbeat_interval_seconds
-        
-        # 计算空闲心跳数（距上次有工具调用的心跳数）
         idle_heartbeats = self._state.idle_heartbeat_count
-        
-        # 根据外部消息间隔判断外界活跃度
+
         if minutes_since_external is None:
             external_activity = "暂无外部消息记录"
         elif minutes_since_external <= 5:
@@ -1446,78 +1278,16 @@ class LifeEngineService(BaseService):
             external_activity = f"外界有一段时间安静了（{minutes_since_external}分钟前有消息）"
         else:
             external_activity = f"外界长时间沉默（{minutes_since_external}分钟无消息）"
-        
-        # 获取时段标签和建议活动
+
         period_label, suggested_activities = self._get_period_info()
-        
-        # 生成空闲警告
+
         idle_warning = ""
         if idle_heartbeats >= 5:
             idle_warning = "⚠️ **你已经发呆太久了！这次必须做点什么。**"
         elif idle_heartbeats >= 2:
             idle_warning = f"💭 已经连续 {idle_heartbeats} 次心跳没有行动了，找点事做吧～"
-        
-        lines: list[str] = []
-        
-        # === Part 1: 事件流（放在前面）===
-        if wake_context.strip():
-            lines.extend([
-                "## 最近事件流",
-                "",
-                wake_context.strip(),
-                "",
-            ])
-        
-        # === Part 2: 心跳指令（放在最后，确保模型看到）===
-        lines.extend([
-            "---",
-            "",
-            "## 💖 心跳时刻",
-            "",
-            f"**当前时间**: {_format_current_time()}",
-            f"**时段**: {period_label}",
-            f"**心跳序号**: #{self._state.heartbeat_count}（每 {heartbeat_interval // 60} 分钟一次）",
-            f"**外界状态**: {external_activity}",
-            f"**连续空闲**: {idle_heartbeats} 次心跳",
-            "",
-        ])
-        
-        # SNN 驱动状态注入（仅在非影子模式且启用注入时生效）
-        if (
-            self._snn_network is not None
-            and self._snn_bridge is not None
-            and not self._cfg().snn.shadow_only
-            and self._cfg().snn.inject_to_heartbeat
-        ):
-            drive_text = self._snn_bridge.format_drive_for_prompt(
-                self._snn_network.get_drive_discrete()
-            )
-            if drive_text:
-                lines.extend([f"**{drive_text}**", ""])
 
-        # 调质层状态注入
-        cfg = self._cfg()
-        if (
-            self._inner_state is not None
-            and getattr(cfg, "neuromod", None) is not None
-            and cfg.neuromod.enabled
-            and cfg.neuromod.inject_to_heartbeat
-        ):
-            from datetime import datetime as _dt
-            today_str = _dt.now().strftime("%Y-%m-%d")
-            neuromod_text = self._inner_state.format_full_state_for_prompt(today_str)
-            if neuromod_text:
-                lines.extend([neuromod_text, ""])
-        
-        # 添加空闲警告
-        if idle_warning:
-            lines.extend([idle_warning, ""])
-        
-        lines.extend([
-            f"**本时段建议**: {suggested_activities}",
-            "",
-            "---",
-            "",
+        lines: list[str] = [
             "### 🎯 必须完成的事",
             "",
             "每次心跳**至少调用一个工具**，从以下选择：",
@@ -1600,8 +1370,71 @@ class LifeEngineService(BaseService):
             "- 截止时间逾期的 TODO：问自己还想做吗？不想就 released",
             "- 写了新东西要用 `nucleus_relate_file` 建立记忆联系",
             "",
+            "---",
+            "",
+            "## 💖 本轮动态上下文",
+            "",
+            "### 当前文件系统概览",
+            "",
+            "```",
+            f"{Path(self._cfg().settings.workspace_path).name}/",
+            self._build_workspace_tree(),
+            "```",
+            "",
+        ]
+
+        if wake_context.strip():
+            lines.extend([
+                "### 最近事件流",
+                "",
+                wake_context.strip(),
+                "",
+            ])
+
+        lines.extend([
+            "### 心跳状态",
+            "",
+            f"**当前时间**: {_format_current_time()}",
+            f"**时段**: {period_label}",
+            f"**心跳序号**: #{self._state.heartbeat_count}（每 {heartbeat_interval // 60} 分钟一次）",
+            f"**外界状态**: {external_activity}",
+            f"**连续空闲**: {idle_heartbeats} 次心跳",
+            "",
         ])
-        
+
+        if (
+            self._snn_network is not None
+            and self._snn_bridge is not None
+            and not self._cfg().snn.shadow_only
+            and self._cfg().snn.inject_to_heartbeat
+        ):
+            drive_text = self._snn_bridge.format_drive_for_prompt(
+                self._snn_network.get_drive_discrete()
+            )
+            if drive_text:
+                lines.extend([f"**{drive_text}**", ""])
+
+        cfg = self._cfg()
+        if (
+            self._inner_state is not None
+            and getattr(cfg, "neuromod", None) is not None
+            and cfg.neuromod.enabled
+            and cfg.neuromod.inject_to_heartbeat
+        ):
+            from datetime import datetime as _dt
+            today_str = _dt.now().strftime("%Y-%m-%d")
+            neuromod_text = self._inner_state.format_full_state_for_prompt(today_str)
+            if neuromod_text:
+                lines.extend([neuromod_text, ""])
+
+        if idle_warning:
+            lines.extend([idle_warning, ""])
+
+        lines.extend([
+            f"**本时段建议**: {suggested_activities}",
+            "",
+        ])
+
         return "\n".join(lines)
     
     def _get_period_info(self) -> tuple[str, str]:
@@ -1656,35 +1489,18 @@ class LifeEngineService(BaseService):
 
     def _build_heartbeat_system_prompt(self) -> str:
         """构造心跳模型系统提示词。
-        
-        结构：
-        1. 运行时信息（时间、文件树）
-        2. 灵魂文档（SOUL.md）
-        3. 记忆文档（MEMORY.md）
-        4. 工具规范（TOOL.md）
+
+        为了提高供应商 Prompt Caching 命中率，SYSTEM 中尽量只保留稳定内容：
+        1. 灵魂文档（SOUL.md）
+        2. 记忆文档（MEMORY.md）
+        3. 工具规范（TOOL.md）
+
+        运行时信息（当前时间、文件树等）放到 USER prompt，避免污染前缀缓存。
         """
         cfg = self._cfg()
         workspace = Path(cfg.settings.workspace_path)
-        
-        # === Part 1: 运行时信息 ===
-        runtime_parts = [
-            "# 运行时信息",
-            "",
-            f"**当前时间**: {_format_current_time()}",
-            f"**时区**: Asia/Shanghai",
-            "",
-            "## 你的文件系统",
-            "",
-            "```",
-            f"{workspace.name}/",
-            self._build_workspace_tree(),
-            "```",
-            "",
-            "---",
-            "",
-        ]
-        
-        # === Part 2: SOUL.md ===
+
+        # === Part 1: SOUL.md ===
         soul_file = workspace / "SOUL.md"
         soul_content = ""
         if soul_file.exists():
@@ -1696,8 +1512,8 @@ class LifeEngineService(BaseService):
         else:
             logger.warning("SOUL.md 不存在，使用默认人设")
             soul_content = "你是爱莉希雅，一个并行存在的生命中枢。"
-        
-        # === Part 3: MEMORY.md ===
+
+        # === Part 2: MEMORY.md ===
         memory_file = workspace / "MEMORY.md"
         memory_content = ""
         if memory_file.exists():
@@ -1706,7 +1522,7 @@ class LifeEngineService(BaseService):
             except Exception as e:
                 logger.warning(f"无法读取 MEMORY.md: {e}")
 
-        # === Part 4: TOOL.md ===
+        # === Part 3: TOOL.md ===
         tool_file = workspace / "TOOL.md"
         tool_content = ""
         if tool_file.exists():
@@ -1714,10 +1530,9 @@ class LifeEngineService(BaseService):
                 tool_content = tool_file.read_text(encoding="utf-8").strip()
             except Exception as e:
                 logger.warning(f"无法读取 TOOL.md: {e}")
-        
-        # 组装系统提示词
-        parts = runtime_parts + [soul_content]
-        
+
+        parts = [soul_content]
+
         if memory_content:
             parts.extend([
                 "",
@@ -1733,7 +1548,7 @@ class LifeEngineService(BaseService):
                 "",
                 tool_content,
             ])
-        
+
         return "\n".join(parts)
 
     def _get_nucleus_tools(self) -> list[type]:

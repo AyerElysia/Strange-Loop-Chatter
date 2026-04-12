@@ -82,9 +82,19 @@ class LifeEngineConfig(BaseConfig):
             description="Tavily API Key。请在 config/plugins/life_engine/config.toml 的 [web] 中配置。",
         )
 
+        tavily_api_keys: list[str] = Field(
+            default_factory=list,
+            description="多个 Tavily API Key。配置后 web_tools 会按轮询方式选择，用于负载均衡。",
+        )
+
         tavily_base_url: str = Field(
             default="https://api.tavily.com",
             description="Tavily API 基础地址。",
+        )
+
+        tavily_base_urls: list[str] = Field(
+            default_factory=list,
+            description="多个 Tavily API 基础地址。配置后 web_tools 会按轮询方式选择，用于负载均衡。",
         )
 
         search_timeout_seconds: int = Field(

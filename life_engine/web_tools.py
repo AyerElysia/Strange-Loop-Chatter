@@ -11,6 +11,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -38,6 +39,9 @@ _BLOCKED_HOSTS = {
     "::1",
 }
 
+_TAVILY_TARGET_LOCK = threading.Lock()
+_TAVILY_TARGET_CURSOR = 0
+
 
 def _get_life_config(plugin: Any) -> LifeEngineConfig | None:
     cfg = getattr(plugin, "config", None)
@@ -46,25 +50,75 @@ def _get_life_config(plugin: Any) -> LifeEngineConfig | None:
     return None
 
 
-def _resolve_tavily_api_key(plugin: Any) -> str:
+def _clean_string_list(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    """清洗字符串列表，移除空白项。"""
+    if not values:
+        return []
+    cleaned: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            cleaned.append(text)
+    return cleaned
+
+
+def _resolve_tavily_api_keys(plugin: Any) -> list[str]:
     cfg = _get_life_config(plugin)
     if cfg is not None:
+        keys = _clean_string_list(getattr(cfg.web, "tavily_api_keys", []))
+        if keys:
+            return keys
         key = str(cfg.web.tavily_api_key or "").strip()
         if key:
-            return key
-    return ""
+            return [key]
+    return []
 
 
-def _resolve_tavily_base_url(plugin: Any) -> str:
+def _resolve_tavily_base_urls(plugin: Any) -> list[str]:
     cfg = _get_life_config(plugin)
     if cfg is not None:
+        base_urls = _clean_string_list(getattr(cfg.web, "tavily_base_urls", []))
+        if base_urls:
+            return base_urls
         base = str(cfg.web.tavily_base_url or "").strip()
         if base:
-            return base
+            return [base]
+    env_bases = _clean_string_list(
+        [part.strip() for part in str(os.getenv("TAVILY_BASE_URLS") or "").split(",")]
+    )
+    if env_bases:
+        return env_bases
     env_base = str(os.getenv("TAVILY_BASE_URL") or "").strip()
     if env_base:
-        return env_base
-    return _DEFAULT_TAVILY_BASE_URL
+        return [env_base]
+    return [_DEFAULT_TAVILY_BASE_URL]
+
+
+def _pick_tavily_target(plugin: Any) -> tuple[str, str]:
+    """选择本次 Tavily 请求要使用的 key/base_url。
+
+    兼容旧配置（单 key / 单 base_url），也支持多 key / 多 base_url 轮询。
+    当 key 与 base_url 数量不同，二者分别按自己的长度循环。
+    """
+    keys = _resolve_tavily_api_keys(plugin)
+    if not keys:
+        raise RuntimeError(
+            "未配置 Tavily API Key。请在 config/plugins/life_engine/config.toml "
+            "中设置 [web].tavily_api_key，或 [web].tavily_api_keys。"
+        )
+
+    base_urls = _resolve_tavily_base_urls(plugin)
+    if not base_urls:
+        base_urls = [_DEFAULT_TAVILY_BASE_URL]
+
+    global _TAVILY_TARGET_CURSOR
+    with _TAVILY_TARGET_LOCK:
+        cursor = _TAVILY_TARGET_CURSOR
+        _TAVILY_TARGET_CURSOR += 1
+
+    api_key = keys[cursor % len(keys)]
+    base_url = base_urls[cursor % len(base_urls)]
+    return api_key, base_url
 
 
 def _resolve_search_timeout(plugin: Any) -> int:
@@ -205,15 +259,10 @@ async def _tavily_post_json(
     payload: dict[str, Any],
     timeout_seconds: int,
 ) -> dict[str, Any]:
-    api_key = _resolve_tavily_api_key(plugin)
-    if not api_key:
-        raise RuntimeError(
-            "未配置 Tavily API Key。请在 config/plugins/life_engine/config.toml "
-            "中设置 [web].tavily_api_key。"
-        )
+    api_key, base_url = _pick_tavily_target(plugin)
     body = dict(payload)
     body["api_key"] = api_key
-    url = _resolve_endpoint(_resolve_tavily_base_url(plugin), endpoint)
+    url = _resolve_endpoint(base_url, endpoint)
     return await asyncio.to_thread(_sync_post_json, url, body, timeout_seconds)
 
 
