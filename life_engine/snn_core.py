@@ -356,6 +356,111 @@ class DriveCoreNetwork:
             "syn_hid_out": self.syn_hid_out.get_weight_stats(),
         }
 
+    # ── 做梦系统接口 ────────────────────────────────────────
+
+    def replay_episodes(
+        self,
+        features_list: list[np.ndarray],
+        speed_multiplier: float = 5.0,
+        reward_signal: float = 0.0,
+    ) -> dict[str, Any]:
+        """NREM 回放：以加速时间常数重放特征序列，执行 STDP 学习。
+
+        与 step() 的区别：
+        - 使用缩短的 tau（加速回放）
+        - 不更新 EMA / 运行时统计（不影响实时驱动输出）
+        - 不执行自稳态阈值调整
+
+        Returns:
+            {"steps": int, "hidden_spikes": int, "output_spikes": int}
+        """
+        # 缩短 tau 实现加速回放
+        orig_hidden_tau = self.hidden.tau
+        orig_output_tau = self.output.tau
+        self.hidden.tau = max(orig_hidden_tau / speed_multiplier, 1.0)
+        self.output.tau = max(orig_output_tau / speed_multiplier, 1.0)
+
+        total_hidden_spikes = 0
+        total_output_spikes = 0
+        steps = 0
+
+        try:
+            for feat in features_list:
+                if feat.shape != (self.INPUT_DIM,):
+                    feat = np.zeros(self.INPUT_DIM, dtype=np.float64)
+                feat = np.clip(feat, -2.0, 2.0)
+
+                input_scaled = feat * self._input_gain
+                current_hidden = self.syn_in_hid.forward(input_scaled)
+                noise = np.random.normal(0, self._noise_std * 0.5, size=self.HIDDEN_DIM)
+                current_hidden += noise
+                spikes_hidden = self.hidden.step(current_hidden)
+
+                hidden_spike_signal = spikes_hidden.astype(np.float64) * self._hidden_spike_gain
+                current_output = self.syn_hid_out.forward(hidden_spike_signal)
+                spikes_output = self.output.step(current_output)
+
+                # 软 STDP（与 step() 相同的学习规则）
+                hidden_v = self.hidden.get_state()
+                output_v = self.output.get_state()
+                soft_hidden = _sigmoid(hidden_v, center=self.hidden.threshold * 0.5, steepness=10.0)
+                soft_output = _sigmoid(output_v, center=self.output.threshold * 0.5, steepness=10.0)
+                input_activity = np.abs(feat) / max(float(np.max(np.abs(feat))), 0.01)
+
+                self.syn_in_hid.update_soft(input_activity, soft_hidden, reward=reward_signal)
+                self.syn_hid_out.update_soft(soft_hidden, soft_output, reward=reward_signal)
+
+                total_hidden_spikes += int(np.sum(spikes_hidden))
+                total_output_spikes += int(np.sum(spikes_output))
+                steps += 1
+        finally:
+            # 恢复原始 tau
+            self.hidden.tau = orig_hidden_tau
+            self.output.tau = orig_output_tau
+
+        return {
+            "steps": steps,
+            "hidden_spikes": total_hidden_spikes,
+            "output_spikes": total_output_spikes,
+        }
+
+    def homeostatic_scaling(self, rate: float = 0.02) -> dict[str, Any]:
+        """SHY (突触稳态假说)：全局等比例缩减突触权重。
+
+        模拟慢波睡眠中的突触下调：
+        - 弱连接衰减至更弱（被清理）
+        - 强连接相对保留（信噪比提升）
+
+        Args:
+            rate: 缩减比例，0.02 意味着所有权重绝对值缩减 2%。
+
+        Returns:
+            {"before": weight_stats, "after": weight_stats, "scale_factor": float}
+        """
+        scale = 1.0 - np.clip(rate, 0.0, 0.1)
+        before = {
+            "syn_in_hid": self.syn_in_hid.get_weight_stats(),
+            "syn_hid_out": self.syn_hid_out.get_weight_stats(),
+        }
+
+        self.syn_in_hid.W *= scale
+        self.syn_hid_out.W *= scale
+        np.clip(self.syn_in_hid.W, self.syn_in_hid.w_min, self.syn_in_hid.w_max, out=self.syn_in_hid.W)
+        np.clip(self.syn_hid_out.W, self.syn_hid_out.w_min, self.syn_hid_out.w_max, out=self.syn_hid_out.W)
+
+        after = {
+            "syn_in_hid": self.syn_in_hid.get_weight_stats(),
+            "syn_hid_out": self.syn_hid_out.get_weight_stats(),
+        }
+
+        logger.info(
+            f"SHY 突触缩减完成: scale={scale:.4f} | "
+            f"in_hid norm {before['syn_in_hid']['w_norm']:.4f} → {after['syn_in_hid']['w_norm']:.4f} | "
+            f"hid_out norm {before['syn_hid_out']['w_norm']:.4f} → {after['syn_hid_out']['w_norm']:.4f}"
+        )
+
+        return {"before": before, "after": after, "scale_factor": scale}
+
     def serialize(self) -> dict[str, Any]:
         return {
             "version": 2,

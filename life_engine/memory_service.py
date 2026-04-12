@@ -1560,3 +1560,174 @@ class LifeMemoryService:
             "total_edges": edge_count,
             "avg_activation": round(avg_activation, 3)
         }
+
+    # --------------------------------------------------------
+    # 做梦系统接口
+    # --------------------------------------------------------
+
+    async def dream_walk(
+        self,
+        num_seeds: int = 5,
+        max_depth: int = 3,
+        decay_factor: float = 0.6,
+        learning_rate: float = 0.05,
+    ) -> Dict[str, Any]:
+        """REM 做梦游走：从随机种子出发进行激活扩散，Hebbian 强化共激活节点。
+
+        与搜索时的 spread_activation 的区别：
+        - 种子是随机选取的（不是查询驱动的）
+        - 衰减更慢（decay_factor=0.6 vs 0.7），扩散更远
+        - 学习率更低（0.05 vs 0.1），梦中学习更温和
+        - 不需要查询，不消耗 embedding API
+
+        Returns:
+            {"nodes_activated": int, "new_edges_created": int, "seed_ids": list}
+        """
+        if not self._initialized or not self._db:
+            return {"nodes_activated": 0, "new_edges_created": 0, "seed_ids": []}
+
+        cursor = self._db.cursor()
+
+        # 按 activation_strength 加权随机选取种子节点
+        cursor.execute(
+            "SELECT node_id, activation_strength FROM memory_nodes "
+            "WHERE activation_strength > 0.05 ORDER BY activation_strength DESC"
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            return {"nodes_activated": 0, "new_edges_created": 0, "seed_ids": []}
+
+        node_ids = [r["node_id"] for r in rows]
+        strengths = np.array([r["activation_strength"] for r in rows], dtype=np.float64)
+        strengths /= strengths.sum()
+
+        actual_seeds = min(num_seeds, len(node_ids))
+        seed_indices = np.random.choice(len(node_ids), size=actual_seeds, replace=False, p=strengths)
+        seed_ids = [node_ids[i] for i in seed_indices]
+
+        # 梦游走式激活扩散
+        activation: Dict[str, float] = {sid: 1.0 for sid in seed_ids}
+        visited = set(seed_ids)
+        frontier = list(seed_ids)
+
+        for depth in range(max_depth):
+            next_frontier: List[str] = []
+            decay = decay_factor ** (depth + 1)
+
+            for node_id in frontier:
+                current_act = activation[node_id]
+                edges = await self.get_edges_from(node_id, min_weight=0.05)
+
+                for edge in edges:
+                    neighbor = edge.target_id
+                    if neighbor in visited:
+                        continue
+
+                    propagated = current_act * edge.weight * decay
+                    # 梦中阈值更低，允许更远的联想
+                    if propagated >= 0.1:
+                        activation[neighbor] = activation.get(neighbor, 0) + propagated
+                        next_frontier.append(neighbor)
+                        visited.add(neighbor)
+
+            frontier = next_frontier
+            if not frontier:
+                break
+
+        # 所有被激活的节点（包括种子）
+        all_activated = list(activation.keys())
+
+        # Hebbian 强化共激活节点（使用更低的学习率）
+        new_edges = 0
+        now = time.time()
+
+        # 只对前 N 个最强激活的节点做 Hebbian（避免 O(n²) 爆炸）
+        top_activated = sorted(activation.items(), key=lambda x: -x[1])[:15]
+        top_ids = [nid for nid, _ in top_activated]
+
+        # 验证节点存在性
+        existing_ids: List[str] = []
+        for nid in top_ids:
+            cursor.execute("SELECT node_id FROM memory_nodes WHERE node_id = ?", (nid,))
+            if cursor.fetchone():
+                existing_ids.append(nid)
+
+        for i, node_a in enumerate(existing_ids):
+            for node_b in existing_ids[i + 1 :]:
+                cursor.execute(
+                    "SELECT edge_id, weight FROM memory_edges "
+                    "WHERE source_id = ? AND target_id = ? AND edge_type = ?",
+                    (node_a, node_b, EdgeType.ASSOCIATES.value),
+                )
+                row = cursor.fetchone()
+
+                if row:
+                    old_weight = row["weight"]
+                    delta = learning_rate * (1 - old_weight)
+                    new_weight = min(old_weight + delta, 1.0)
+                    cursor.execute(
+                        "UPDATE memory_edges SET weight = ?, reinforcement = reinforcement + ?, "
+                        "activation_count = activation_count + 1, last_activated_at = ? "
+                        "WHERE edge_id = ?",
+                        (new_weight, delta, now, row["edge_id"]),
+                    )
+                else:
+                    edge_id = str(uuid.uuid4())[:8]
+                    cursor.execute(
+                        "INSERT INTO memory_edges "
+                        "(edge_id, source_id, target_id, edge_type, weight, base_strength, "
+                        "reinforcement, activation_count, last_activated_at, reason, created_at, bidirectional) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            edge_id, node_a, node_b, EdgeType.ASSOCIATES.value,
+                            0.15, 0.15, 0.0, 1, now, "REM 做梦联想", now, 1,
+                        ),
+                    )
+                    new_edges += 1
+
+        self._db.commit()
+
+        logger.info(
+            f"REM dream_walk 完成: seeds={len(seed_ids)} "
+            f"activated={len(all_activated)} new_edges={new_edges}"
+        )
+
+        return {
+            "nodes_activated": len(all_activated),
+            "new_edges_created": new_edges,
+            "seed_ids": seed_ids,
+        }
+
+    async def prune_weak_edges(
+        self,
+        threshold: float = 0.08,
+    ) -> int:
+        """修剪弱 ASSOCIATES 边（仅自动生成的联想边，保护手动关联）。
+
+        Returns:
+            被修剪的边数量。
+        """
+        if not self._initialized or not self._db:
+            return 0
+
+        cursor = self._db.cursor()
+        cursor.execute(
+            "SELECT edge_id, weight FROM memory_edges "
+            "WHERE edge_type = ? AND weight < ?",
+            (EdgeType.ASSOCIATES.value, threshold),
+        )
+        rows = cursor.fetchall()
+
+        if not rows:
+            return 0
+
+        edge_ids = [r["edge_id"] for r in rows]
+        placeholders = ",".join("?" * len(edge_ids))
+        cursor.execute(
+            f"DELETE FROM memory_edges WHERE edge_id IN ({placeholders})",
+            edge_ids,
+        )
+        self._db.commit()
+
+        logger.info(f"REM 弱边修剪完成: pruned={len(edge_ids)} threshold={threshold}")
+        return len(edge_ids)

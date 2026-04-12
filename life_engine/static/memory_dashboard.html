@@ -1,609 +1,672 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Neo-MoFox · 仿生记忆图谱</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <script src="https://unpkg.com/force-graph"></script>
-    <style>
-        :root {
-            --bg-color: #020617;
-            --glass-bg: rgba(15, 23, 42, 0.6);
-            --glass-border: rgba(148, 163, 184, 0.1);
-            --text-main: #f8fafc;
-            --text-dim: #94a3b8;
-            --cyan: #06b6d4;
-            --cyan-glow: rgba(6, 182, 212, 0.5);
-            --indigo: #6366f1;
-            --indigo-glow: rgba(99, 102, 241, 0.5);
-            --pink: #ec4899;
-            --pink-glow: rgba(236, 72, 153, 0.5);
-            --emerald: #10b981;
-            --amber: #f59e0b;
-        }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: var(--bg-color);
-            background-image: 
-                radial-gradient(circle at 10% 20%, rgba(30, 27, 75, 0.4) 0%, transparent 40%),
-                radial-gradient(circle at 90% 80%, rgba(12, 74, 110, 0.3) 0%, transparent 40%);
-            color: var(--text-main);
-            height: 100vh;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-        }
-
-        header {
-            padding: 16px 32px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid var(--glass-border);
-            background: rgba(2, 6, 23, 0.8);
-            backdrop-filter: blur(12px);
-            z-index: 100;
-        }
-
-        .logo {
-            font-size: 1.1rem;
-            font-weight: 700;
-            letter-spacing: 0.05em;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .logo-box {
-            width: 32px;
-            height: 32px;
-            background: linear-gradient(135deg, var(--indigo), var(--cyan));
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 0 15px var(--indigo-glow);
-        }
-
-        main {
-            flex: 1;
-            position: relative;
-            display: flex;
-        }
-
-        #graph-container {
-            flex: 1;
-            cursor: grab;
-        }
-
-        #graph-container:active {
-            cursor: grabbing;
-        }
-
-        /* 侧边面板 */
-        .side-panel {
-            width: 380px;
-            background: var(--glass-bg);
-            border-left: 1px solid var(--glass-border);
-            backdrop-filter: blur(16px);
-            display: flex;
-            flex-direction: column;
-            z-index: 50;
-            transition: transform 0.3s ease;
-        }
-
-        .panel-content {
-            padding: 24px;
-            flex: 1;
-            overflow-y: auto;
-        }
-
-        .panel-content::-webkit-scrollbar { width: 4px; }
-        .panel-content::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 2px; }
-
-        .search-container {
-            margin-bottom: 24px;
-        }
-
-        #search-input {
-            width: 100%;
-            background: rgba(0, 0, 0, 0.3);
-            border: 1px solid var(--glass-border);
-            padding: 12px 16px;
-            border-radius: 12px;
-            color: white;
-            font-family: inherit;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-
-        #search-input:focus {
-            border-color: var(--indigo);
-        }
-
-        .stats-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            margin-bottom: 32px;
-        }
-
-        .stat-card {
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid var(--glass-border);
-            padding: 16px;
-            border-radius: 12px;
-            text-align: center;
-        }
-
-        .stat-val {
-            display: block;
-            font-size: 1.4rem;
-            font-weight: 700;
-            font-family: 'JetBrains Mono', monospace;
-            color: var(--cyan);
-        }
-
-        .stat-label {
-            font-size: 0.75rem;
-            color: var(--text-dim);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-
-        h3 {
-            font-size: 0.8rem;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            color: var(--text-dim);
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .node-detail-card {
-            background: rgba(99, 102, 241, 0.05);
-            border: 1px solid rgba(99, 102, 241, 0.2);
-            padding: 20px;
-            border-radius: 16px;
-            margin-top: 12px;
-            display: none;
-        }
-
-        .node-detail-card.active {
-            display: block;
-            animation: slideUp 0.3s ease-out;
-        }
-
-        @keyframes slideUp {
-            from { transform: translateY(10px); opacity: 0; }
-            to { transform: translateY(0); opacity: 1; }
-        }
-
-        .node-title {
-            font-size: 1.1rem;
-            font-weight: 600;
-            margin-bottom: 8px;
-            word-break: break-all;
-        }
-
-        .node-meta {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.8rem;
-            color: var(--text-dim);
-            margin-bottom: 16px;
-        }
-
-        .tag {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 0.7rem;
-            background: rgba(255,255,255,0.1);
-            margin-right: 4px;
-        }
-
-        .btn-activate {
-            width: 100%;
-            background: var(--indigo);
-            color: white;
-            border: none;
-            padding: 12px;
-            border-radius: 10px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            margin-top: 16px;
-        }
-
-        .btn-activate:hover {
-            box-shadow: 0 0 15px var(--indigo-glow);
-            transform: translateY(-1px);
-        }
-
-        .memory-log {
-            margin-top: 24px;
-        }
-
-        .log-item {
-            padding: 10px 0;
-            border-bottom: 1px solid var(--glass-border);
-            font-size: 0.85rem;
-        }
-
-        .log-item:last-child { border-bottom: none; }
-
-        .controls {
-            position: absolute;
-            bottom: 24px;
-            left: 24px;
-            display: flex;
-            gap: 12px;
-            z-index: 60;
-        }
-
-        .control-btn {
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border);
-            color: white;
-            width: 44px;
-            height: 44px;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            backdrop-filter: blur(8px);
-            transition: all 0.2s;
-        }
-
-        .control-btn:hover { background: rgba(255,255,255,0.15); }
-
-        #loading-overlay {
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: var(--bg-color);
-            z-index: 1000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-direction: column;
-            gap: 20px;
-        }
-
-        .spinner {
-            width: 40px;
-            height: 40px;
-            border: 3px solid rgba(99, 102, 241, 0.2);
-            border-top-color: var(--indigo);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Neo-MoFox · Memory Overview</title>
+  <script src="https://unpkg.com/d3-force@3"></script>
+  <script src="https://unpkg.com/force-graph"></script>
+  <style>
+    :root {
+      --bg: #06101e;
+      --panel: rgba(10, 18, 34, 0.88);
+      --panel-2: rgba(16, 28, 48, 0.88);
+      --line: rgba(148, 163, 184, 0.14);
+      --text: #e5eefc;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-2: #8b5cf6;
+      --gold: #f59e0b;
+      --danger: #fb7185;
+      --file: #6366f1;
+      --concept: #ec4899;
+      --ok: #10b981;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: radial-gradient(circle at top left, #102349, transparent 28%), radial-gradient(circle at bottom right, #0b3b45, transparent 28%), var(--bg); color: var(--text); font-family: Inter, system-ui, sans-serif; }
+    body { display: flex; flex-direction: column; overflow: hidden; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); background: rgba(4, 10, 20, 0.82); backdrop-filter: blur(18px); }
+    .brand { display: flex; align-items: center; gap: 12px; font-weight: 700; letter-spacing: .04em; }
+    .brand-badge { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px; background: linear-gradient(135deg, var(--file), var(--accent)); box-shadow: 0 0 20px rgba(56,189,248,.35); }
+    .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .toolbar-group { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px; background: rgba(255,255,255,.03); border: 1px solid var(--line); }
+    .toolbar label { font-size: 12px; color: var(--muted); }
+    .toolbar input[type="range"] { width: 120px; }
+    .toolbar .value { width: 46px; text-align: right; font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
+    .toolbar button { border: 1px solid var(--line); background: rgba(255,255,255,.04); color: var(--text); border-radius: 10px; padding: 8px 10px; cursor: pointer; }
+    .toolbar button:hover { border-color: rgba(56,189,248,.4); }
+    .toolbar button.active { background: rgba(56,189,248,.14); border-color: rgba(56,189,248,.45); }
+    main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 400px; min-height: 0; }
+    #graph-wrap { position: relative; min-width: 0; }
+    #graph { width: 100%; height: 100%; }
+    #hover-card { position: absolute; z-index: 10; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(16px); border-radius: 14px; box-shadow: 0 10px 35px rgba(0,0,0,.28); }
+    #hover-card { left: 18px; top: 18px; min-width: 260px; max-width: 360px; padding: 14px; pointer-events: none; opacity: 0; transition: opacity .15s ease; }
+    
+    #event-log { width: 100%; display: flex; flex-direction: column; }
+    #event-items { flex: 1; max-height: 180px; overflow-y: auto; padding-right: 4px; }
+    #event-items::-webkit-scrollbar { width: 4px; }
+    #event-items::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
+    
+    .side h3, .side h4 { margin: 0 0 10px; font-size: 12px; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+    .event-item { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+    .event-item:last-child { border-bottom: none; }
+    .event-type { color: var(--accent); font-weight: 700; }
+    .meta { color: var(--muted); font-size: 12px; }
+    .side { border-left: 1px solid var(--line); background: var(--panel); backdrop-filter: blur(18px); min-height: 0; display: flex; flex-direction: column; }
+    .side-scroll { overflow: auto; padding: 18px; }
+    .search-box { display: flex; gap: 8px; margin-bottom: 16px; }
+    .search-box input { flex: 1; background: rgba(255,255,255,.04); border: 1px solid var(--line); color: var(--text); border-radius: 12px; padding: 10px 12px; }
+    .search-box button { border: 1px solid var(--line); background: rgba(56,189,248,.12); color: var(--text); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
+    .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+    .stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 14px; padding: 12px; }
+    .stat b { display: block; font-size: 18px; margin-bottom: 4px; color: var(--accent); }
+    .card { background: rgba(255,255,255,.03); border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-bottom: 14px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+    .chip { padding: 4px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); color: var(--muted); }
+    .chip-file { color: #c7d2fe; }
+    .chip-concept { color: #fbcfe8; }
+    .chip-live { color: #fde68a; }
+    .detail-title { font-size: 18px; font-weight: 700; line-height: 1.4; word-break: break-word; }
+    .progress { height: 6px; background: rgba(255,255,255,.06); border-radius: 999px; overflow: hidden; }
+    .progress > div { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+    .detail-grid .item { background: rgba(255,255,255,.025); border-radius: 12px; padding: 10px; }
+    .detail-grid .label { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+    .detail-grid .value { font-size: 14px; font-weight: 700; }
+    .inline-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .inline-actions button { flex: 1; min-width: 120px; border: 1px solid var(--line); background: rgba(255,255,255,.04); color: var(--text); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
+    .edge-list, .result-list { display: flex; flex-direction: column; gap: 8px; }
+    .edge-item, .result-item { padding: 10px; border-radius: 12px; background: rgba(255,255,255,.025); border: 1px solid var(--line); }
+    .edge-item strong, .result-item strong { display: block; margin-bottom: 4px; font-size: 13px; }
+    .edge-bar { height: 5px; border-radius: 999px; background: rgba(255,255,255,.05); overflow: hidden; margin-top: 8px; }
+    .edge-bar > div { height: 100%; background: linear-gradient(90deg, var(--gold), var(--danger)); }
+    .empty { color: var(--muted); font-size: 13px; }
+    .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; color: var(--muted); }
+    .legend span::before { content: ''; display: inline-block; width: 10px; height: 10px; border-radius: 999px; margin-right: 8px; vertical-align: middle; }
+    .legend .file::before { background: var(--file); }
+    .legend .concept::before { background: var(--concept); }
+    .legend .search::before { background: var(--accent); }
+    .legend .changed::before { background: var(--gold); }
+  </style>
 </head>
 <body>
-
-    <div id="loading-overlay">
-        <div class="spinner"></div>
-        <p style="color: var(--text-dim); font-size: 0.9rem; letter-spacing: 0.1em;">正在同步仿生记忆图谱...</p>
+  <header>
+    <div class="brand">
+      <div class="brand-badge">∞</div>
+      <div>Neo-MoFox <span class="meta">| Memory Overview</span></div>
     </div>
+    <div class="toolbar">
+      <div class="toolbar-group">
+        <label>节点数</label>
+        <input id="node-limit" type="range" min="30" max="200" step="10" value="80" />
+        <span id="node-limit-val" class="value">80</span>
+      </div>
+      <div class="toolbar-group">
+        <label>边阈值</label>
+        <input id="min-weight" type="range" min="0" max="1" step="0.05" value="0.15" />
+        <span id="min-weight-val" class="value">0.15</span>
+      </div>
+      <div class="toolbar-group">
+        <button id="btn-global" class="active">全局总览</button>
+        <button id="btn-focus">局部聚焦</button>
+        <button id="btn-refresh">刷新</button>
+        <button id="btn-live" class="active">实时 ON</button>
+      </div>
+    </div>
+  </header>
 
-    <header>
-        <div class="logo">
-            <div class="logo-box">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v8"/><path d="m16 6-4 4-4-4"/><path d="M12 16v6"/><path d="m8 18 4-4 4 4"/></svg>
-            </div>
-            Neo-MoFox <span style="color:var(--text-dim); font-weight: 400">| Bionic Memory Map</span>
+  <main>
+    <section id="graph-wrap">
+      <div id="graph"></div>
+      <div id="hover-card"></div>
+    </section>
+
+    <aside class="side">
+      <div class="side-scroll">
+        <div id="event-log" class="card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <h3 style="margin:0;">实时事件</h3>
+            <div id="live-status" style="width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok);"></div>
+          </div>
+          <div id="event-items" class="empty">等待事件流...</div>
         </div>
-        <div style="display: flex; gap: 20px; align-items: center;">
-            <div id="status-tag" style="font-family:'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--emerald); display: flex; align-items: center; gap: 6px;">
-                <span style="width: 8px; height: 8px; background: var(--emerald); border-radius: 50%; display: inline-block;"></span>
-                SYNCED
-            </div>
-        </div>
-    </header>
 
-    <main>
-        <div id="graph-container"></div>
-
-        <div class="controls">
-            <div class="control-btn" onclick="Graph.zoomToFit(400)" title="自适应窗口">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M12 3v18"/></svg>
-            </div>
-            <div class="control-btn" id="btn-toggle-labels" title="显示/隐藏标签">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            </div>
+        <div class="search-box">
+          <input id="search-input" type="text" placeholder="搜索记忆主题 / 文件 / 概念..." />
+          <button id="btn-search">搜索</button>
         </div>
 
-        <div class="side-panel">
-            <div class="panel-content">
-                <div class="search-container">
-                    <input type="text" id="search-input" placeholder="搜索记忆内容、节点、概念...">
-                </div>
-
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <span class="stat-val" id="stat-nodes">---</span>
-                        <span class="stat-label">记忆节点</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-val" id="stat-edges">---</span>
-                        <span class="stat-label">关联边</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-val" id="stat-avg-act">-.---</span>
-                        <span class="stat-label">平均活跃度</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-val" id="stat-health">High</span>
-                        <span class="stat-label">记忆完整度</span>
-                    </div>
-                </div>
-
-                <div id="node-info-container">
-                    <h3><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg> 节点详情</h3>
-                    <div id="welcome-msg" style="color: var(--text-dim); font-size: 0.9rem; line-height: 1.6;">
-                        点击图谱中的节点以查看详细内容，或进行激活扩散分析。
-                    </div>
-                    
-                    <div class="node-detail-card" id="node-detail">
-                        <div class="tag" id="tag-type">FILE</div>
-                        <div class="node-title" id="detail-title">---</div>
-                        <div class="node-meta" id="detail-path">---</div>
-                        
-                        <div style="margin-top: 16px;">
-                            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 6px;">
-                                <span>激活强度 (Activation)</span>
-                                <span id="detail-activation" style="color: var(--cyan)">0.00</span>
-                            </div>
-                            <div style="height: 4px; background: rgba(255,255,255,0.05); border-radius: 2px;">
-                                <div id="detail-activation-bar" style="height: 100%; background: var(--cyan); width: 0%; border-radius: 2px;"></div>
-                            </div>
-                        </div>
-
-                        <div style="margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-                            <div style="font-size: 0.75rem; color: var(--text-dim);">重要性: <span id="detail-importance" style="color: white">0.5</span></div>
-                            <div style="font-size: 0.75rem; color: var(--text-dim);">访问次数: <span id="detail-access" style="color: white">0</span></div>
-                        </div>
-
-                        <button class="btn-activate" id="btn-ignite">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
-                            以此为中心激发联想
-                        </button>
-                    </div>
-                </div>
-
-                <div class="memory-log">
-                    <h3>最近演化记录</h3>
-                    <div id="log-list">
-                        <div class="log-item" style="color: var(--text-dim); font-size: 0.8rem;">尚未检测到最近变动...</div>
-                    </div>
-                </div>
-            </div>
+        <div class="stats">
+          <div class="stat"><b id="stat-nodes">0</b><span class="meta">节点</span></div>
+          <div class="stat"><b id="stat-edges">0</b><span class="meta">边</span></div>
+          <div class="stat"><b id="stat-avg">0</b><span class="meta">平均激活</span></div>
         </div>
-    </main>
 
-<script>
-    let graphData = { nodes: [], links: [] };
-    let Graph = null;
-    let selectedNode = null;
-    let showLabels = true;
-    let highlightNodes = new Set();
-    let highlightLinks = new Set();
-    let hoverNode = null;
+        <div class="card">
+          <h3>图例</h3>
+          <div class="legend">
+            <span class="file">FILE 节点</span>
+            <span class="concept">CONCEPT 节点</span>
+            <span class="search">搜索/扩散高亮</span>
+            <span class="changed">写入/强化高亮</span>
+          </div>
+        </div>
 
+        <div class="card" id="selection-card">
+          <h3>节点详情</h3>
+          <div id="selection-empty" class="empty">点击任意节点查看详情、相邻边和局部聚焦。</div>
+          <div id="selection-detail" style="display:none;">
+            <div class="detail-title" id="detail-title">-</div>
+            <div class="chips">
+              <span id="detail-type" class="chip">-</span>
+              <span id="detail-degree" class="chip">度数 -</span>
+              <span id="detail-live" class="chip chip-live">-</span>
+            </div>
+            <div class="meta" id="detail-path">-</div>
+            <div style="margin:12px 0 8px; font-size:12px; color:var(--muted);">激活强度</div>
+            <div class="progress"><div id="detail-activation-bar" style="width:0%"></div></div>
+            <div class="detail-grid">
+              <div class="item"><div class="label">Activation</div><div class="value" id="detail-activation">0</div></div>
+              <div class="item"><div class="label">Importance</div><div class="value" id="detail-importance">0</div></div>
+              <div class="item"><div class="label">Access</div><div class="value" id="detail-access">0</div></div>
+              <div class="item"><div class="label">Valence</div><div class="value" id="detail-valence">0</div></div>
+            </div>
+            <div class="inline-actions">
+              <button id="btn-node-focus">只看邻域</button>
+              <button id="btn-node-activate">触发联想</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>相邻边</h3>
+          <div id="edge-list" class="edge-list"><div class="empty">未选中节点</div></div>
+        </div>
+
+        <div class="card">
+          <h3>搜索结果</h3>
+          <div id="search-results" class="result-list"><div class="empty">输入关键词后可查看搜索命中与联想结果。</div></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <script>
     const COLORS = {
-        FILE: '#6366f1',    // Indigo
-        CONCEPT: '#ec4899'  // Pink
+      FILE: '#6366f1',
+      CONCEPT: '#ec4899'
     };
-
     const EDGE_COLORS = {
-        relates: '#94a3b8',
-        causes: '#f59e0b',
-        continues: '#10b981',
-        contrasts: '#ef4444',
-        mentions: '#06b6d4',
-        associates: '#8b5cf6'
+      relates: '#94a3b8',
+      causes: '#f59e0b',
+      continues: '#10b981',
+      contrasts: '#fb7185',
+      mentions: '#38bdf8',
+      associates: '#8b5cf6'
     };
 
-    // 初始化图谱
-    async function init() {
-        try {
-            const stats = await fetch('api/stats').then(res => res.json());
-            const data = await fetch('api/graph?limit_nodes=200').then(res => res.json());
-            
-            updateStats(stats);
-            graphData = data;
+    let Graph;
+    let graphData = { nodes: [], links: [], meta: {} };
+    let selectedNode = null;
+    let hoverNode = null;
+    let hoverLink = null;
+    let liveSource = null;
+    let currentMode = 'global';
+    let lastFocusId = null;
+    let searchResultCache = [];
 
-            renderGraph();
-            document.getElementById('loading-overlay').style.opacity = '0';
-            setTimeout(() => document.getElementById('loading-overlay').style.display = 'none', 500);
-        } catch (e) {
-            console.error("Failed to load memory graph:", e);
-        }
+    const selectedNodes = new Set();
+    const selectedEdges = new Set();
+    const searchNodes = new Set();
+    const activatedNodes = new Set();
+    const changedNodes = new Set();
+    const activatedEdges = new Set();
+
+    const hoverCard = document.getElementById('hover-card');
+    const eventItems = document.getElementById('event-items');
+
+    function nodeLimit() { return Number(document.getElementById('node-limit').value); }
+    function minWeight() { return Number(document.getElementById('min-weight').value); }
+    function getNodeId(v) { return typeof v === 'object' ? v?.id : v; }
+    function escapeHtml(v) { return String(v ?? '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
+    function linkKey(source, target) { return `${source}__${target}`; }
+    function fmt(num, digits = 3) { return Number(num || 0).toFixed(digits); }
+    function colorWithAlpha(hex, alpha) {
+      const m = hex.replace('#', '');
+      const full = m.length === 3 ? m.split('').map(x => x + x).join('') : m;
+      const n = parseInt(full, 16);
+      const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
     }
 
-    function updateStats(stats) {
-        document.getElementById('stat-nodes').textContent = stats.file_nodes + stats.concept_nodes;
-        document.getElementById('stat-edges').textContent = stats.total_edges;
-        document.getElementById('stat-avg-act').textContent = stats.avg_activation.toFixed(3);
+    function pushEvent(type, text) {
+      const row = document.createElement('div');
+      row.className = 'event-item';
+      row.innerHTML = `<div class="event-type">${escapeHtml(type)}</div><div>${escapeHtml(text)}</div>`;
+      if (eventItems.classList.contains('empty')) {
+        eventItems.classList.remove('empty');
+        eventItems.innerHTML = '';
+      }
+      eventItems.prepend(row);
+      while (eventItems.children.length > 10) eventItems.removeChild(eventItems.lastChild);
     }
 
-    function renderGraph() {
-        const elem = document.getElementById('graph-container');
-        Graph = ForceGraph()(elem)
-            .graphData(graphData)
-            .nodeId('id')
-            .nodeLabel(node => `${node.title}\n(${node.path || node.type})`)
-            .nodeColor(node => highlightNodes.has(node.id) ? '#ffffff' : COLORS[node.type] || '#ccc')
-            .nodeVal(node => Math.sqrt(node.activation + 0.1) * 3)
-            .linkColor(link => highlightLinks.has(link.id) ? '#ffffff' : (EDGE_COLORS[link.type] || '#444'))
-            .linkWidth(link => (highlightLinks.has(link.id) ? 3 : 1) + link.weight * 2)
-            .linkDirectionalArrowLength(3)
-            .linkDirectionalArrowRelPos(1)
-            .linkCurvature(0.1)
-            .onNodeClick(node => {
-                selectNode(node);
-            })
-            .onNodeHover(node => {
-                hoverNode = node;
-                elem.style.cursor = node ? 'pointer' : null;
-            })
-            .nodeCanvasObject((node, ctx, globalScale) => {
-                const label = node.title;
-                const fontSize = 12 / globalScale;
-                const size = Math.sqrt(node.activation + 0.1) * 5;
+    function flashSet(setObj, ids, duration = 4000) {
+      ids.filter(Boolean).forEach(id => setObj.add(id));
+      Graph?.refresh();
+      setTimeout(() => {
+        ids.filter(Boolean).forEach(id => setObj.delete(id));
+        Graph?.refresh();
+      }, duration);
+    }
 
-                // 绘制光圈
-                if (highlightNodes.has(node.id)) {
-                    ctx.beginPath();
-                    ctx.arc(node.x, node.y, size + 4, 0, 2 * Math.PI, false);
-                    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-                    ctx.fill();
-                }
+    function activateEdgePulse(edges, duration = 4500) {
+      edges.forEach(id => activatedEdges.add(id));
+      Graph?.refresh();
+      setTimeout(() => {
+        edges.forEach(id => activatedEdges.delete(id));
+        Graph?.refresh();
+      }, duration);
+    }
 
-                // 核心节点
-                ctx.beginPath();
-                ctx.arc(node.x, node.y, size, 0, 2 * Math.PI, false);
-                ctx.fillStyle = COLORS[node.type] || '#ccc';
-                ctx.fill();
+    async function fetchJSON(url, init) {
+      const res = await fetch(url, init);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    }
 
-                if (showLabels || highlightNodes.has(node.id) || node === hoverNode) {
-                    ctx.font = `${fontSize}px Inter`;
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'top';
-                    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-                    ctx.fillText(label, node.x, node.y + size + 2);
-                }
-            });
+    async function loadStats() {
+      const stats = await fetchJSON('api/stats');
+      document.getElementById('stat-nodes').textContent = (stats.file_nodes || 0) + (stats.concept_nodes || 0);
+      document.getElementById('stat-edges').textContent = stats.total_edges || 0;
+      document.getElementById('stat-avg').textContent = fmt(stats.avg_activation || 0, 3);
+    }
 
-        // 定制力导向参数
-        Graph.d3Force('charge').strength(-150);
-        Graph.d3Force('link').distance(80);
+    async function loadGraph() {
+      const params = new URLSearchParams({
+        limit_nodes: String(nodeLimit()),
+        min_weight: String(minWeight())
+      });
+      if (currentMode === 'focus' && lastFocusId) params.set('focus_id', lastFocusId);
+      graphData = await fetchJSON(`api/graph?${params.toString()}`);
+      if (!Graph) initGraph();
+      Graph.graphData(graphData);
+      Graph.zoomToFit(400, 50);
+      refreshSelectionPanel();
+    }
+
+    function initGraph() {
+      Graph = ForceGraph()(document.getElementById('graph'))
+        .backgroundColor('#06101e')
+        .graphData(graphData)
+        .nodeId('id')
+        .nodeLabel(node => `${node.title}\n${node.path || node.type}`)
+        .linkLabel(link => `${link.type} | weight=${fmt(link.weight, 3)} | activation=${link.activation_count || 0}${link.reason ? ` | ${link.reason}` : ''}`)
+        .nodeVal(node => 2 + Math.pow(Math.max(node.activation || 0.05, 0.05), 0.7) * 6 + Math.min(node.degree || 0, 12) * 0.12)
+        .nodeColor(node => {
+          if (selectedNodes.has(node.id)) return '#ffffff';
+          if (changedNodes.has(node.id)) return '#f59e0b';
+          if (activatedNodes.has(node.id)) return '#8b5cf6';
+          if (searchNodes.has(node.id)) return '#38bdf8';
+          const base = COLORS[node.type] || '#94a3b8';
+          const alpha = 0.45 + Math.min(0.45, (node.importance || 0.3) * 0.45);
+          return colorWithAlpha(base, alpha);
+        })
+        .linkColor(link => {
+          const id = link.id || linkKey(getNodeId(link.source), getNodeId(link.target));
+          if (selectedEdges.has(id)) return '#ffffff';
+          if (activatedEdges.has(id)) return '#f59e0b';
+          const base = EDGE_COLORS[link.type] || '#94a3b8';
+          return colorWithAlpha(base, Math.min(0.9, 0.15 + (link.weight || 0) * 0.75));
+        })
+        .linkWidth(link => {
+          const weight = Math.max(0, Number(link.weight || 0));
+          const base = Math.max(0.5, Math.pow(weight, 1.5) * 5);
+          const id = link.id || linkKey(getNodeId(link.source), getNodeId(link.target));
+          return selectedEdges.has(id) ? base + 2 : base;
+        })
+        .linkDirectionalParticleSpeed(0.01)
+        .onNodeClick(node => selectNode(node))
+        .onNodeHover(node => { hoverLink = null; hoverNode = node; renderHover(); document.getElementById('graph').style.cursor = node ? 'pointer' : 'default'; })
+        .onLinkHover(link => { hoverNode = null; hoverLink = link; renderHover(); })
+        .nodeCanvasObject((node, ctx, globalScale) => {
+          const size = 2 + Math.pow(Math.max(node.activation || 0.05, 0.05), 0.7) * 6;
+          if (selectedNodes.has(node.id) || searchNodes.has(node.id) || activatedNodes.has(node.id) || changedNodes.has(node.id)) {
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, size + 5, 0, 2 * Math.PI);
+            ctx.fillStyle = selectedNodes.has(node.id)
+              ? 'rgba(255,255,255,.18)'
+              : changedNodes.has(node.id)
+                ? 'rgba(245,158,11,.18)'
+                : activatedNodes.has(node.id)
+                  ? 'rgba(139,92,246,.18)'
+                  : 'rgba(56,189,248,.18)';
+            ctx.fill();
+          }
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
+          ctx.fillStyle = selectedNodes.has(node.id)
+            ? '#ffffff'
+            : changedNodes.has(node.id)
+              ? '#f59e0b'
+              : activatedNodes.has(node.id)
+                ? '#8b5cf6'
+                : searchNodes.has(node.id)
+                  ? '#38bdf8'
+                  : COLORS[node.type] || '#94a3b8';
+          ctx.fill();
+
+          const showLabel = globalScale > 1.8 || selectedNodes.has(node.id) || searchNodes.has(node.id) || hoverNode === node;
+          if (showLabel) {
+            const label = node.title || node.id;
+            const fontSize = Math.max(10 / globalScale, 3);
+            ctx.font = `${fontSize}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            const width = ctx.measureText(label).width;
+            ctx.fillStyle = 'rgba(3,8,18,.65)';
+            ctx.fillRect(node.x - width / 2 - 4, node.y + size + 2, width + 8, fontSize + 6);
+            ctx.fillStyle = 'rgba(229,238,252,.92)';
+            ctx.fillText(label, node.x, node.y + size + 5);
+          }
+        });
+
+      Graph.d3Force('charge').strength(-400);
+      Graph.d3Force('link').distance(100);
+      if (window.d3?.forceCollide) {
+        Graph.d3Force('collide', window.d3.forceCollide(node => 15));
+      }
+    }
+
+    function renderHover() {
+      if (!hoverNode && !hoverLink) {
+        hoverCard.style.opacity = '0';
+        hoverCard.innerHTML = '';
+        return;
+      }
+      hoverCard.style.opacity = '1';
+      if (hoverLink) {
+        hoverCard.innerHTML = `
+          <div class="meta">边详情</div>
+          <div style="font-size:15px;font-weight:700;margin:4px 0 10px;">${escapeHtml(hoverLink.type)}</div>
+          <div>weight: <b>${fmt(hoverLink.weight, 3)}</b></div>
+          <div>activation_count: <b>${hoverLink.activation_count || 0}</b></div>
+          <div style="margin-top:6px;">${escapeHtml(hoverLink.reason || '无 reason')}</div>
+          <div class="meta" style="margin-top:8px;">${escapeHtml(getNodeId(hoverLink.source))} → ${escapeHtml(getNodeId(hoverLink.target))}</div>
+        `;
+        return;
+      }
+      hoverCard.innerHTML = `
+        <div class="meta">节点详情</div>
+        <div style="font-size:15px;font-weight:700;margin:4px 0 10px;">${escapeHtml(hoverNode.title)}</div>
+        <div>type: <b>${escapeHtml(hoverNode.type)}</b></div>
+        <div>activation: <b>${fmt(hoverNode.activation, 3)}</b></div>
+        <div>degree: <b>${hoverNode.degree || 0}</b></div>
+        <div class="meta" style="margin-top:8px;">${escapeHtml(hoverNode.path || 'Virtual Concept')}</div>
+      `;
     }
 
     function selectNode(node) {
-        selectedNode = node;
-        
-        document.getElementById('welcome-msg').style.display = 'none';
-        const card = document.getElementById('node-detail');
-        card.classList.add('active');
-
-        document.getElementById('tag-type').textContent = node.type;
-        document.getElementById('detail-title').textContent = node.title;
-        document.getElementById('detail-path').textContent = node.path || 'Virtual Concept';
-        document.getElementById('detail-activation').textContent = node.activation.toFixed(3);
-        document.getElementById('detail-activation-bar').style.width = `${Math.min(100, node.activation * 100)}%`;
-        document.getElementById('detail-importance').textContent = node.importance.toFixed(2);
-        document.getElementById('detail-access').textContent = node.access_count;
-
-        // 聚焦节点
-        Graph.centerAt(node.x, node.y, 1000);
-        Graph.zoom(2.5, 1000);
-
-        // 高亮邻居
-        highlightNodes.clear();
-        highlightLinks.clear();
-        highlightNodes.add(node.id);
-        graphData.links.forEach(link => {
-            if (link.source.id === node.id || link.target.id === node.id) {
-                highlightLinks.add(link.id);
-                highlightNodes.add(link.source.id);
-                highlightNodes.add(link.target.id);
-            }
-        });
-        Graph.refresh();
+      selectedNode = node;
+      selectedNodes.clear();
+      selectedEdges.clear();
+      selectedNodes.add(node.id);
+      for (const link of graphData.links) {
+        const sourceId = getNodeId(link.source);
+        const targetId = getNodeId(link.target);
+        if (sourceId === node.id || targetId === node.id) {
+          selectedEdges.add(link.id || linkKey(sourceId, targetId));
+          selectedNodes.add(sourceId);
+          selectedNodes.add(targetId);
+        }
+      }
+      Graph.centerAt(node.x, node.y, 700);
+      Graph.zoom(2.2, 700);
+      refreshSelectionPanel();
+      Graph.refresh();
     }
 
-    async function igniteActivation() {
+    function getNeighborEdges(nodeId) {
+      return graphData.links
+        .filter(link => getNodeId(link.source) === nodeId || getNodeId(link.target) === nodeId)
+        .sort((a, b) => (b.weight || 0) - (a.weight || 0));
+    }
+
+    function refreshSelectionPanel() {
+      const empty = document.getElementById('selection-empty');
+      const detail = document.getElementById('selection-detail');
+      const edgeList = document.getElementById('edge-list');
+      if (!selectedNode) {
+        empty.style.display = 'block';
+        detail.style.display = 'none';
+        edgeList.innerHTML = '<div class="empty">未选中节点</div>';
+        return;
+      }
+      empty.style.display = 'none';
+      detail.style.display = 'block';
+      document.getElementById('detail-title').textContent = selectedNode.title || selectedNode.id;
+      const typeEl = document.getElementById('detail-type');
+      typeEl.textContent = selectedNode.type;
+      typeEl.className = `chip ${selectedNode.type === 'FILE' ? 'chip-file' : 'chip-concept'}`;
+      document.getElementById('detail-degree').textContent = `度数 ${selectedNode.degree || 0}`;
+      document.getElementById('detail-live').textContent = `updated ${selectedNode.updated_at ? new Date(selectedNode.updated_at * 1000).toLocaleTimeString() : '-'}`;
+      document.getElementById('detail-path').textContent = selectedNode.path || 'Virtual Concept';
+      document.getElementById('detail-activation').textContent = fmt(selectedNode.activation, 3);
+      document.getElementById('detail-activation-bar').style.width = `${Math.min(100, (selectedNode.activation || 0) * 100)}%`;
+      document.getElementById('detail-importance').textContent = fmt(selectedNode.importance, 2);
+      document.getElementById('detail-access').textContent = selectedNode.access_count || 0;
+      document.getElementById('detail-valence').textContent = fmt(selectedNode.valence, 2);
+
+      const edges = getNeighborEdges(selectedNode.id);
+      if (!edges.length) {
+        edgeList.innerHTML = '<div class="empty">当前节点没有可见相邻边</div>';
+      } else {
+        edgeList.innerHTML = edges.map(link => {
+          const sourceId = getNodeId(link.source);
+          const targetId = getNodeId(link.target);
+          const otherId = sourceId === selectedNode.id ? targetId : sourceId;
+          const otherNode = graphData.nodes.find(n => n.id === otherId);
+          return `
+            <div class="edge-item">
+              <strong>${escapeHtml(link.type)} → ${escapeHtml(otherNode?.title || otherId)}</strong>
+              <div class="meta">weight ${fmt(link.weight, 3)} · activation ${link.activation_count || 0}</div>
+              <div>${escapeHtml(link.reason || '无 reason')}</div>
+              <div class="edge-bar"><div style="width:${Math.min(100, (link.weight || 0) * 100)}%"></div></div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+
+    function upsertNode(node) {
+      const idx = graphData.nodes.findIndex(n => n.id === node.id);
+      if (idx >= 0) graphData.nodes[idx] = { ...graphData.nodes[idx], ...node };
+      else graphData.nodes.push(node);
+    }
+
+    function upsertEdge(edge) {
+      const idx = graphData.links.findIndex(l => l.id === edge.id || (getNodeId(l.source) === edge.source && getNodeId(l.target) === edge.target && l.type === edge.type));
+      if (idx >= 0) graphData.links[idx] = { ...graphData.links[idx], ...edge };
+      else graphData.links.push(edge);
+    }
+
+    function refreshGraphPreservingSelection() {
+      Graph.graphData(graphData);
+      if (selectedNode) {
+        const latest = graphData.nodes.find(n => n.id === selectedNode.id);
+        if (latest) selectedNode = latest;
+      }
+      refreshSelectionPanel();
+      Graph.refresh();
+    }
+
+    function connectLive() {
+      if (liveSource) liveSource.close();
+      liveSource = new EventSource('api/events');
+      liveSource.addEventListener('snapshot', e => {
+        pushEvent('snapshot', '已连接实时事件流');
+      });
+      liveSource.addEventListener('memory.search.started', e => {
+        const event = JSON.parse(e.data);
+        pushEvent('search', `开始搜索：${event.payload.query}`);
+      });
+      liveSource.addEventListener('memory.search.seeds', e => {
+        const event = JSON.parse(e.data);
+        const ids = (event.payload.results || []).map(item => item.id);
+        flashSet(searchNodes, ids, 5000);
+        pushEvent('search.seeds', `命中 ${ids.length} 个直接结果`);
+      });
+      liveSource.addEventListener('memory.activation.spread', e => {
+        const event = JSON.parse(e.data);
+        const ids = (event.payload.results || []).map(item => item.id);
+        flashSet(activatedNodes, ids, 5500);
+        const edgeIds = [];
+        for (const item of event.payload.results || []) {
+          const path = item.association_path || item.path || [];
+          for (let i = 0; i < path.length - 1; i++) {
+            const sourceId = path[i], targetId = path[i + 1];
+            const edge = graphData.links.find(l => getNodeId(l.source) === sourceId && getNodeId(l.target) === targetId);
+            if (edge) edgeIds.push(edge.id || linkKey(sourceId, targetId));
+          }
+        }
+        activateEdgePulse(edgeIds, 5500);
+        pushEvent('activation', `扩散到 ${ids.length} 个联想节点`);
+      });
+      liveSource.addEventListener('memory.nodes.created', e => {
+        const event = JSON.parse(e.data);
+        upsertNode(event.payload.node);
+        flashSet(changedNodes, [event.payload.node.id], 5000);
+        refreshGraphPreservingSelection();
+        pushEvent('node.created', `新增节点：${event.payload.node.title || event.payload.node.id}`);
+      });
+      liveSource.addEventListener('memory.nodes.updated', e => {
+        const event = JSON.parse(e.data);
+        for (const node of event.payload.nodes || []) upsertNode(node);
+        flashSet(changedNodes, (event.payload.nodes || []).map(n => n.id), 3500);
+        refreshGraphPreservingSelection();
+      });
+      liveSource.addEventListener('memory.edges.created', e => {
+        const event = JSON.parse(e.data);
+        upsertEdge(event.payload.edge);
+        activateEdgePulse([event.payload.edge.id], 4500);
+        refreshGraphPreservingSelection();
+        pushEvent('edge.created', `${event.payload.edge.type} weight=${fmt(event.payload.edge.weight, 3)}`);
+      });
+      liveSource.addEventListener('memory.edges.updated', e => {
+        const event = JSON.parse(e.data);
+        upsertEdge(event.payload.edge);
+        activateEdgePulse([event.payload.edge.id], 4500);
+        refreshGraphPreservingSelection();
+      });
+      liveSource.addEventListener('memory.edges.reinforced', e => {
+        const event = JSON.parse(e.data);
+        for (const edge of event.payload.edges || []) upsertEdge(edge);
+        activateEdgePulse((event.payload.edges || []).map(edge => edge.id), 5500);
+        pushEvent('reinforced', `强化 ${event.payload.edges?.length || 0} 条边`);
+        refreshGraphPreservingSelection();
+      });
+      liveSource.addEventListener('memory.search.finished', e => {
+        const event = JSON.parse(e.data);
+        pushEvent('search.finished', `搜索完成，总结果 ${event.payload.total_found}`);
+      });
+      liveSource.onerror = () => {
+        pushEvent('live', '实时连接中断，等待自动重连');
+      };
+    }
+
+    function disconnectLive() {
+      if (liveSource) {
+        liveSource.close();
+        liveSource = null;
+      }
+    }
+
+    async function runSearch() {
+      const query = document.getElementById('search-input').value.trim();
+      if (!query) return;
+      const box = document.getElementById('search-results');
+      box.innerHTML = '<div class="empty">搜索中...</div>';
+      try {
+        const data = await fetchJSON(`api/search?query=${encodeURIComponent(query)}&top_k=8`);
+        searchResultCache = data;
+        if (!data.length) {
+          box.innerHTML = '<div class="empty">未找到结果</div>';
+          return;
+        }
+        box.innerHTML = data.map(item => `
+          <div class="result-item">
+            <strong>${escapeHtml(item.title || item.file_path)}</strong>
+            <div class="meta">${escapeHtml(item.source)} · relevance ${fmt(item.relevance, 3)}</div>
+            <div>${escapeHtml(item.snippet || '')}</div>
+            ${item.association_reason ? `<div class="meta" style="margin-top:6px;">${escapeHtml(item.association_reason)}</div>` : ''}
+          </div>
+        `).join('');
+      } catch (e) {
+        box.innerHTML = `<div class="empty">搜索失败：${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    async function triggerActivation() {
+      if (!selectedNode) return;
+      await fetchJSON('api/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seed_ids: [selectedNode.id], max_depth: 2, max_results: 10 })
+      });
+    }
+
+    function bindUI() {
+      const nodeLimitInput = document.getElementById('node-limit');
+      const minWeightInput = document.getElementById('min-weight');
+      nodeLimitInput.addEventListener('input', () => document.getElementById('node-limit-val').textContent = nodeLimitInput.value);
+      minWeightInput.addEventListener('input', () => document.getElementById('min-weight-val').textContent = Number(minWeightInput.value).toFixed(2));
+      nodeLimitInput.addEventListener('change', loadGraph);
+      minWeightInput.addEventListener('change', loadGraph);
+      document.getElementById('btn-refresh').addEventListener('click', async () => { await loadStats(); await loadGraph(); });
+      document.getElementById('btn-global').addEventListener('click', async () => {
+        currentMode = 'global';
+        lastFocusId = null;
+        document.getElementById('btn-global').classList.add('active');
+        document.getElementById('btn-focus').classList.remove('active');
+        await loadGraph();
+      });
+      document.getElementById('btn-focus').addEventListener('click', async () => {
         if (!selectedNode) return;
-        
-        const btn = document.getElementById('btn-ignite');
-        const originalHtml = btn.innerHTML;
-        btn.innerHTML = '正在联想...';
-        btn.disabled = true;
-
-        try {
-            const results = await fetch('api/activate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ seed_ids: [selectedNode.id], max_depth: 2 })
-            }).then(res => res.json());
-
-            highlightNodes.clear();
-            highlightLinks.clear();
-            highlightNodes.add(selectedNode.id);
-
-            // 展示激活路径
-            results.forEach(res => {
-                highlightNodes.add(res.id);
-                // 简单的粒子效果模拟
-                Graph.emitParticle(graphData.links.find(l => l.target.id === res.id && l.source.id === selectedNode.id) || {});
-            });
-
-            // 更新日志
-            const logList = document.getElementById('log-list');
-            const item = document.createElement('div');
-            item.className = 'log-item';
-            item.innerHTML = `<span style="color:var(--indigo)">[ACTIVATE]</span> 从 "${selectedNode.title}" 联想到了 ${results.length} 个相关节点`;
-            logList.prepend(item);
-
-            Graph.refresh();
-
-        } catch (e) {
-            console.error(e);
-        } finally {
-            btn.innerHTML = originalHtml;
-            btn.disabled = false;
-        }
+        currentMode = 'focus';
+        lastFocusId = selectedNode.id;
+        document.getElementById('btn-focus').classList.add('active');
+        document.getElementById('btn-global').classList.remove('active');
+        await loadGraph();
+      });
+      document.getElementById('btn-node-focus').addEventListener('click', async () => {
+        if (!selectedNode) return;
+        currentMode = 'focus';
+        lastFocusId = selectedNode.id;
+        document.getElementById('btn-focus').classList.add('active');
+        document.getElementById('btn-global').classList.remove('active');
+        await loadGraph();
+      });
+      document.getElementById('btn-node-activate').addEventListener('click', triggerActivation);
+      document.getElementById('btn-search').addEventListener('click', runSearch);
+      document.getElementById('search-input').addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
+      document.getElementById('btn-live').addEventListener('click', () => {
+        const btn = document.getElementById('btn-live');
+        const on = btn.classList.toggle('active');
+        btn.textContent = on ? '实时 ON' : '实时 OFF';
+        if (on) connectLive(); else disconnectLive();
+      });
     }
 
-    // 事件绑定
-    document.getElementById('btn-toggle-labels').addEventListener('click', () => {
-        showLabels = !showLabels;
-        Graph.refresh();
-    });
+    async function boot() {
+      bindUI();
+      document.getElementById('node-limit-val').textContent = String(nodeLimit());
+      document.getElementById('min-weight-val').textContent = minWeight().toFixed(2);
+      await loadStats();
+      await loadGraph();
+      connectLive();
+    }
 
-    document.getElementById('btn-ignite').addEventListener('click', igniteActivation);
-
-    document.getElementById('search-input').addEventListener('input', e => {
-        const val = e.target.value.toLowerCase();
-        if (!val) {
-            highlightNodes.clear();
-            Graph.refresh();
-            return;
-        }
-        highlightNodes.clear();
-        graphData.nodes.forEach(n => {
-            if (n.title.toLowerCase().includes(val) || (n.path && n.path.toLowerCase().includes(val))) {
-                highlightNodes.add(n.id);
-            }
-        });
-        Graph.refresh();
-    });
-
-    // 自动刷新同步 (可选)
-    // setInterval(init, 30000);
-
-    init();
-</script>
+    boot();
+  </script>
 </body>
 </html>

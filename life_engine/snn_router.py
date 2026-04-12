@@ -72,6 +72,13 @@ class SNNRouter(BaseRouter):
             if bridge:
                 result["bridge"] = bridge.get_snapshot()
 
+            # 做梦系统
+            dream = service._dream_scheduler
+            if dream:
+                result["dream"] = dream.get_state()
+            else:
+                result["dream"] = {"status": "disabled"}
+
             return result
 
         @self.app.get("/api/weights")
@@ -86,4 +93,16 @@ class SNNRouter(BaseRouter):
                 "syn_hid_out_W": net.syn_hid_out.W.tolist(),
                 "syn_in_hid_stats": net.syn_in_hid.get_weight_stats(),
                 "syn_hid_out_stats": net.syn_hid_out.get_weight_stats(),
+            }
+
+        @self.app.get("/api/dream")
+        async def get_dream_state() -> Any:
+            """返回做梦系统状态。"""
+            plugin: "LifeEnginePlugin" = self.plugin  # type: ignore
+            dream = plugin.service._dream_scheduler
+            if not dream:
+                return JSONResponse(content={"status": "disabled"}, status_code=503)
+            return {
+                "state": dream.get_state(),
+                "history": dream.get_dream_history(limit=10),
             }

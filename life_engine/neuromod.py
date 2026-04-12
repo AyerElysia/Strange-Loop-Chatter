@@ -403,6 +403,63 @@ class InnerStateEngine:
             parts.append(habit_text)
         return "\n".join(parts)
 
+    # ── 做梦系统接口 ────────────────────────────────────────
+
+    def enter_sleep(self) -> None:
+        """进入睡眠状态：抑制外部刺激通路，降低精力基线。
+
+        生物学映射：
+        - 丘脑门控关闭（外部刺激被抑制）
+        - 副交感神经主导（精力/社交/好奇心降低）
+        """
+        energy = self.modulators.get("energy")
+        if energy:
+            energy.baseline = 0.25  # 睡眠时精力基线下降
+            energy.value = min(energy.value, 0.4)
+
+        sociability = self.modulators.get("sociability")
+        if sociability:
+            sociability.baseline = 0.2
+            sociability.value = min(sociability.value, 0.3)
+
+        curiosity = self.modulators.get("curiosity")
+        if curiosity:
+            curiosity.baseline = 0.3
+
+        logger.info("调质层进入睡眠状态: 精力/社交/好奇心基线已降低")
+
+    def wake_up(self) -> None:
+        """觉醒过渡：恢复精力、释放压力。
+
+        生物学映射：
+        - 皮质醇晨峰（精力恢复）
+        - 睡眠后情绪稳态重置
+        """
+        energy = self.modulators.get("energy")
+        if energy:
+            energy.value = min(energy.value + 0.25, 0.85)
+            energy.baseline = 0.55  # 恢复正常基线
+
+        sociability = self.modulators.get("sociability")
+        if sociability:
+            sociability.baseline = 0.50
+            sociability.value = max(sociability.value, 0.4)
+
+        curiosity = self.modulators.get("curiosity")
+        if curiosity:
+            curiosity.baseline = 0.55
+            curiosity.value = max(curiosity.value, 0.45)
+
+        contentment = self.modulators.get("contentment")
+        if contentment:
+            contentment.value = min(contentment.value + 0.1, 0.7)
+
+        logger.info(
+            f"调质层觉醒恢复: energy={energy.value:.2f} "
+            f"sociability={sociability.value:.2f} curiosity={curiosity.value:.2f}"
+            if energy and sociability and curiosity else "调质层觉醒恢复完成"
+        )
+
     def get_full_state(self) -> dict[str, Any]:
         """获取完整内在状态快照。"""
         from datetime import datetime

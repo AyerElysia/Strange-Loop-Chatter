@@ -316,6 +316,35 @@ canvas.heatmap-canvas { border-radius: 4px; image-rendering: pixelated; }
     </div>
   </div>
 
+  <!-- 做梦系统 -->
+  <div class="card">
+    <div class="card-title"><span class="icon">💤</span> 做梦系统</div>
+    <div id="dream-panel">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+        <div>
+          <div style="font-size:0.75em;color:var(--text-dim)">状态</div>
+          <div id="dream-status" style="font-size:1.1em;font-weight:600">待机</div>
+        </div>
+        <div>
+          <div style="font-size:0.75em;color:var(--text-dim)">当前阶段</div>
+          <div id="dream-phase" style="font-size:1.1em;font-weight:600">AWAKE</div>
+        </div>
+        <div>
+          <div style="font-size:0.75em;color:var(--text-dim)">已做梦次数</div>
+          <div id="dream-count" style="font-size:1.1em;font-weight:600">0</div>
+        </div>
+        <div>
+          <div style="font-size:0.75em;color:var(--text-dim)">距下次做梦</div>
+          <div id="dream-next" style="font-size:0.9em;color:var(--cyan)">--</div>
+        </div>
+      </div>
+      <div style="font-size:0.8em;color:var(--text-dim);margin-bottom:6px">最近梦境</div>
+      <div id="dream-history" style="max-height:180px;overflow-y:auto">
+        <span style="color:var(--text-dim);font-size:0.8em">暂无梦境记录</span>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -603,6 +632,10 @@ async function fetchState() {
     // Charts
     updateCharts(snn.drives, nm.modulators);
 
+    // Dream
+    const dream = data.dream || {};
+    updateDream(dream);
+
     // Weights (less frequent)
     if (snn.status === 'active') {
       const wResp = await fetch('/snn/api/weights');
@@ -617,11 +650,96 @@ async function fetchState() {
   }
 }
 
+function updateDream(dream) {
+  const statusEl = document.getElementById('dream-status');
+  const phaseEl = document.getElementById('dream-phase');
+  const countEl = document.getElementById('dream-count');
+  const nextEl = document.getElementById('dream-next');
+  const histEl = document.getElementById('dream-history');
+
+  if (!dream || dream.status === 'disabled') {
+    statusEl.textContent = '未启用';
+    statusEl.style.color = 'var(--text-dim)';
+    phaseEl.textContent = '--';
+    return;
+  }
+
+  const phaseMap = {
+    'awake': { text: '清醒', color: 'var(--green)', icon: '☀️' },
+    'nrem': { text: 'NREM 回放', color: 'var(--blue)', icon: '🌊' },
+    'rem': { text: 'REM 联想', color: 'var(--purple)', icon: '🌌' },
+    'waking': { text: '觉醒过渡', color: 'var(--orange)', icon: '🌅' },
+  };
+
+  const phase = (dream.current_phase || 'awake').toLowerCase();
+  const pi = phaseMap[phase] || phaseMap['awake'];
+
+  if (dream.is_dreaming) {
+    statusEl.textContent = '🌙 正在做梦';
+    statusEl.style.color = 'var(--purple)';
+  } else {
+    statusEl.textContent = '待机';
+    statusEl.style.color = 'var(--text)';
+  }
+
+  phaseEl.textContent = pi.icon + ' ' + pi.text;
+  phaseEl.style.color = pi.color;
+
+  countEl.textContent = dream.dream_count || 0;
+
+  // 距下次做梦
+  if (dream.last_dream_time && dream.last_dream_time > 0) {
+    const elapsed = Date.now() / 1000 - dream.last_dream_time;
+    const interval = (dream.dream_interval_seconds || 5400);
+    const remaining = Math.max(0, interval - elapsed);
+    if (remaining > 0) {
+      const mins = Math.floor(remaining / 60);
+      nextEl.textContent = `约 ${mins} 分钟`;
+    } else {
+      nextEl.textContent = '随时可能';
+      nextEl.style.color = 'var(--green)';
+    }
+  } else {
+    nextEl.textContent = '尚未做梦';
+  }
+}
+
+// 异步获取做梦历史
+async function fetchDreamHistory() {
+  try {
+    const resp = await fetch('/snn/api/dream');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const histEl = document.getElementById('dream-history');
+    const history = data.history || [];
+    if (history.length === 0) {
+      histEl.innerHTML = '<span style="color:var(--text-dim);font-size:0.8em">暂无梦境记录</span>';
+      return;
+    }
+    histEl.innerHTML = history.map(d => {
+      const t = new Date((d.start_time || 0) * 1000).toLocaleString('zh-CN', {
+        month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'
+      });
+      const dur = (d.duration_seconds || 0).toFixed(1);
+      const nrem = d.nrem ? `NREM: ${d.nrem.episodes_replayed || 0}集/${d.nrem.total_steps || 0}步` : '';
+      const rem = d.rem ? `REM: ${d.rem.seeds_activated || 0}种子/${d.rem.new_edges || 0}新边` : '';
+      return `<div style="background:var(--bg);padding:6px 8px;border-radius:6px;margin-bottom:4px;font-size:0.8em">
+        <div style="display:flex;justify-content:space-between;color:var(--text-dim)">
+          <span>🌙 ${t}</span><span>${dur}s</span>
+        </div>
+        <div style="margin-top:2px">${nrem}${nrem && rem ? ' · ' : ''}${rem}</div>
+      </div>`;
+    }).join('');
+  } catch(e) { /* ignore */ }
+}
+
 initCharts();
 updateClock();
 fetchState();
+fetchDreamHistory();
 setInterval(fetchState, 3000);
 setInterval(updateClock, 1000);
+setInterval(fetchDreamHistory, 15000);
 </script>
 </body>
 </html>

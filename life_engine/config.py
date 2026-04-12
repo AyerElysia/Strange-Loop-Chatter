@@ -175,8 +175,98 @@ class LifeEngineConfig(BaseConfig):
             description="是否启用习惯追踪。",
         )
 
+    @config_section("dream")
+    class DreamSection(SectionBase):
+        """做梦系统配置。三阶段做梦周期：NREM 回放 → REM 联想 → 觉醒过渡。"""
+
+        enabled: bool = Field(
+            default=True,
+            description="是否启用做梦系统。",
+        )
+
+        # NREM 参数
+        nrem_replay_episodes: int = Field(
+            default=3,
+            ge=1, le=10,
+            description="每次做梦 NREM 阶段回放的事件集数。",
+        )
+
+        nrem_events_per_episode: int = Field(
+            default=20,
+            ge=5, le=100,
+            description="每集回放包含的事件数量。",
+        )
+
+        nrem_speed_multiplier: float = Field(
+            default=5.0,
+            ge=1.0, le=20.0,
+            description="NREM 回放加速倍率（缩短 SNN tau）。",
+        )
+
+        nrem_homeostatic_rate: float = Field(
+            default=0.02,
+            ge=0.001, le=0.1,
+            description="SHY 突触稳态缩减比例（每次做梦全局权重缩减百分比）。",
+        )
+
+        # REM 参数
+        rem_walk_rounds: int = Field(
+            default=2,
+            ge=1, le=10,
+            description="REM 阶段记忆图谱随机游走轮数。",
+        )
+
+        rem_seeds_per_round: int = Field(
+            default=5,
+            ge=1, le=20,
+            description="每轮 REM 游走的随机种子数。",
+        )
+
+        rem_max_depth: int = Field(
+            default=3,
+            ge=1, le=5,
+            description="REM 游走激活扩散最大深度。",
+        )
+
+        rem_decay_factor: float = Field(
+            default=0.6,
+            ge=0.1, le=0.95,
+            description="REM 游走激活扩散衰减因子。",
+        )
+
+        rem_learning_rate: float = Field(
+            default=0.05,
+            ge=0.01, le=0.3,
+            description="REM 阶段 Hebbian 学习率（低于清醒时 0.1）。",
+        )
+
+        rem_edge_prune_threshold: float = Field(
+            default=0.08,
+            ge=0.01, le=0.3,
+            description="REM 阶段弱边修剪阈值（仅 ASSOCIATES 边）。",
+        )
+
+        # 调度参数
+        dream_interval_minutes: int = Field(
+            default=90,
+            ge=10, le=480,
+            description="两次做梦之间的最小间隔（分钟）。",
+        )
+
+        idle_trigger_heartbeats: int = Field(
+            default=10,
+            ge=3, le=50,
+            description="白天连续空闲心跳数触发小憩做梦。",
+        )
+
+        nap_enabled: bool = Field(
+            default=True,
+            description="是否启用白天小憩做梦（空闲触发）。",
+        )
+
     settings: SettingsSection = Field(default_factory=SettingsSection)
     model: ModelSection = Field(default_factory=ModelSection)
     web: WebSection = Field(default_factory=WebSection)
     snn: SNNSection = Field(default_factory=SNNSection)
     neuromod: NeuromodSection = Field(default_factory=NeuromodSection)
+    dream: DreamSection = Field(default_factory=DreamSection)

@@ -81,7 +81,8 @@ class MemoryRouter(BaseRouter):
                 for row in cursor.fetchall():
                     node_ids.add(row["source_id"])
                     node_ids.add(row["target_id"])
-                node_id_list = list(node_ids)[:safe_limit]
+                ordered_ids = [focus_id] + [node_id for node_id in node_ids if node_id != focus_id]
+                node_id_list = ordered_ids[:safe_limit]
                 if not node_id_list:
                     return {"nodes": [], "links": []}
                 placeholders = ",".join("?" for _ in node_id_list)
@@ -283,7 +284,6 @@ class MemoryRouter(BaseRouter):
             if not memory:
                 return JSONResponse(content={"status": "disabled"}, status_code=503)
 
-            self.broadcast("memory.search.started", {"query": query, "top_k": top_k}, source="api")
             results = await memory.search_memory(query, top_k=top_k)
             response = [
                 {
@@ -297,5 +297,4 @@ class MemoryRouter(BaseRouter):
                 }
                 for item in results
             ]
-            self.broadcast("memory.search.finished", {"query": query, "results": response}, source="api")
             return response
