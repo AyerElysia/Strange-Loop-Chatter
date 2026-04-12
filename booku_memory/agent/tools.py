@@ -87,7 +87,12 @@ class BookuMemoryEditInherentTool(BaseTool):
     """工具二：编辑固有记忆。"""
 
     tool_name: str = "memory_edit_inherent"
-    tool_description: str = "编辑全局固有记忆，content 为完整更新后文本。"
+    tool_description: str = (
+        "整体改写长期固有记忆。"
+        "只有当关系、长期偏好、长期目标、自我认知等稳定信息发生明确变化时才应调用。"
+        "content 必须是更新后的完整全文，不是增量补丁。"
+    )
+    chatter_allow: list[str] = ["default_chatter"]
 
     async def execute(
         self,
@@ -95,9 +100,9 @@ class BookuMemoryEditInherentTool(BaseTool):
     ) -> tuple[bool, str | dict]:
         """替换全局固有记忆的完整内容（全量覆写，非增量追加）。
 
-        固有记忆（inherent）是全局唯一的基础背景层，不按 folder 隔离。
-        每次调用均会用 content 完整替换原有内容，请调用前先通过
-        ``BookuMemoryGetInherentTool`` 读取现有内容后再合并编写。
+        固有记忆（inherent）是全局唯一的长期背景层，不按 folder 隔离。
+        default_chatter 会在提示词里直接看到当前长期记忆，因此调用时应提交
+        变更后的完整正文，而不是零碎追加片段。
 
         Args:
             content: 编辑后的完整固有记忆文本，将全量覆盖原有内容。

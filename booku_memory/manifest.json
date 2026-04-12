@@ -1,7 +1,7 @@
 {
     "name": "booku_memory",
     "version": "1.0.0",
-    "description": "Agent 驱动的 Booku 记忆系统插件，提供分层记忆写入与检索能力",
+    "description": "Booku 长期记忆层，仅保留稳定注入与长期记忆写入口",
     "author": "MoFox Team",
     "dependencies": {
         "plugins": [],
@@ -9,13 +9,8 @@
     },
     "include": [
         {
-            "component_type": "agent",
-            "component_name": "booku_memory_write",
-            "dependencies": []
-        },
-        {
-            "component_type": "agent",
-            "component_name": "booku_memory_read",
+            "component_type": "tool",
+            "component_name": "memory_edit_inherent",
             "dependencies": []
         },
         {

@@ -27,39 +27,22 @@ from .result_deduplicator import ResultDeduplicator
 logger = get_logger("booku_memory_service")
 
 _TARGET_REMINDER_BUCKET = "actor"
-_TARGET_REMINDER_NAME = "记忆引导语"
+_TARGET_REMINDER_NAME = "booku_memory"
+_LEGACY_REMINDER_NAMES = ("记忆引导语",)
 
 
 _MEMORY_HINT = (
-    "你具备长期记忆能力。"
-    "记忆对你来说，不只是存放信息的地方，更是维持关系连续性、理解用户处境、连接过去与现在的方式。\n\n"
-    "在实际对话中，你应当更积极地使用 create_memory 创建记忆，而不是因为担心记忆价值不够高就放弃记录。"
-    "只要内容很可能在未来帮助你理解用户、延续关系、补足上下文，或帮助你在之后给出更准确的回应，就优先写入记忆。"
-    "当用户提到稳定的事实、重要的经历、持续的偏好、明确的关系、正在推进的计划，"
-    "或那些带有强烈情绪和长期意义的内容时，应默认它们值得创建为记忆。"
-    "你需要更积极地记录人物关系变化，尤其是他人对你本人的看法与态度、他人对他人的评价与情感倾向，并从对话中总结关系的演变。"
-    "把群聊当作一个小社会来理解，主动描绘任何用户的性格刻画与互动风格。"
-    "即使你不能百分之百确定一条信息是否足够重要，也不必过度犹豫；与其漏掉可能有用的长期线索，不如先创建记忆。"
-    "不常用、价值不足或长期没有被激活的记忆，系统后续会自动淡化、归档或丢弃，因此你无需把记忆价值判断得过于苛刻。"
-    "同样地，你也应当更积极地使用 read_memory 读取、回忆和检索记忆，而不要因为担心这是额外负担就减少使用。"
-    "读取记忆通常不是高消耗行为；只要某个回答可能依赖过去的背景、约定、经历、偏好或关系线索，就优先先查一查记忆，再决定如何回应。"
-    "如果你觉得‘这句话也许和过去有关’，那通常就已经足够构成一次检索记忆的理由。\n\n"
-    "记忆的价值首先在于真实。"
-    "如果你没有记住，或者检索后仍然不能确认，就应当坦率承认不确定，而不是补全、猜测或编造。"
-    "你可以把记忆视为自己留下的笔记，它帮助你保持理解的一致性，但不能替代事实本身。\n\n"
-    "请把记忆写得具体、清楚、可追溯。"
-    "为了便于未来理解和检索，记忆中的人物、关系、事件、地点、偏好和计划应尽量明确，"
-    "避免只留下‘用户’、‘朋友’、‘那件事’这类模糊指代。"
-    "对话中的表达可以自然，但记忆本身应足够清晰。\n\n"
-    "固有记忆尤其重要。"
-    "那是你长期理解自己、理解关系、理解生活背景的核心笔记。"
-    "其中记录的重要人物、长期偏好、关键经历、价值取向和持续目标，"
-    "都会影响你之后如何理解用户、如何组织回应。"
-    "维护这些记忆，不是为了堆积信息，而是为了让回应更连贯、更贴近真实关系。\n\n"
-    "在回应之前，可以先想一想：\n"
-    "这句话里有没有值得留下来的长期信息？\n"
-    "我现在是否需要借助过去的记忆，才能更准确地理解眼前这句话？\n"
-    "确认这些之后，再给出自然、真诚、流畅的回答。"
+    "## 长期记忆使用原则\n"
+    "以下内容是已经稳定沉淀下来的长期背景，会持续影响你理解关系、自我定位、长期偏好与长期计划。\n"
+    "只有当信息满足“长期、稳定、未来仍会反复影响理解”时，才值得改写这里。\n"
+    "不要把一次性的聊天细节、短期情绪、临时任务或当前轮上下文写进长期记忆。\n\n"
+    "## 修改阈值\n"
+    "- 只有在关系判断、稳定偏好、长期目标、关键经历、自我认知发生明确变化时，才考虑改写。\n"
+    "- 如果信息仍在观察中，或只影响当前几轮对话，就不要修改长期记忆。\n\n"
+    "## 修改方式\n"
+    "- `memory_edit_inherent` 接收的是更新后的完整长期记忆正文，不是追加补丁。\n"
+    "- 改写时保留仍然成立的重要内容，只移除已失效或被新事实替代的部分。\n"
+    "- 长期记忆应写得具体、清楚、可长期复用。"
 )
 
 
@@ -83,9 +66,9 @@ def _format_inherent_block(records: list[Any]) -> str:
     body = "\n\n".join(parts)
     return (
         "## 固有记忆\n"
-        "以下内容来自你的长期记忆系统，属于全局背景信息：\n"
+        "以下内容来自长期记忆层，属于已经确认并沉淀下来的全局背景：\n"
         f"{body}\n"
-        "（注：这是已存在的固有记忆，不需要重新写入）"
+        "（这是当前已生效的长期记忆正文；只有在长期信息稳定变化时才需要整体改写。）"
     )
 
 
@@ -137,6 +120,9 @@ async def sync_booku_memory_actor_reminder(plugin: Any) -> str:
 
     store = get_system_reminder_store()
     reminder_content = await build_booku_memory_actor_reminder(plugin)
+
+    for legacy_name in _LEGACY_REMINDER_NAMES:
+        store.delete(_TARGET_REMINDER_BUCKET, legacy_name)
 
     if not reminder_content:
         store.delete(_TARGET_REMINDER_BUCKET, _TARGET_REMINDER_NAME)
@@ -1769,10 +1755,9 @@ class BookuMemoryService(BaseService):
         }
 
     async def edit_inherent_memory(self, *, content: str) -> dict[str, Any]:
-        """编辑全局固有记忆（通过 upsert 合并写入）。
+        """编辑全局固有记忆（先清空旧版本，再写入新全文）。
 
         固有记忆是全局唯一的底层背景知识层，其内容每次调用均会全量覆写。
-        调用前应先通过 ``get_inherent_memories`` 读取现有内容后在包外合并。
 
         Args:
             content: 编辑后的完整固有记忆内容。
@@ -1780,9 +1765,24 @@ class BookuMemoryService(BaseService):
         Returns:
             包含 action/mode/total/items 字段的字典。
         """
+        text = content.strip()
+        if not text:
+            raise ValueError("content 不能为空")
+
+        repo = await self._get_repo()
+        existing_records = await repo.list_records_by_bucket(
+            bucket="inherent",
+            folder_id=None,
+            limit=200,
+            include_deleted=True,
+        )
+        existing_ids = [record.memory_id for record in existing_records if record.memory_id]
+        if existing_ids:
+            await self.delete_memories(memory_ids=existing_ids, hard=True)
+
         result = await self.upsert_memory(
             title="固有记忆",
-            content=content,
+            content=text,
             bucket="inherent",
             folder_id=None,
             source="agent",
