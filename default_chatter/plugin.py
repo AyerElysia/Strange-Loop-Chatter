@@ -1,9 +1,11 @@
 """DefaultChatter 插件。
 
-提供默认的聊天对话逻辑，包含两个核心 Action 和一个中枢桥接 Tool：
+提供默认的聊天对话逻辑，包含两个核心 Action 与一组中枢桥接 Tool：
 - send_text: 发送文本消息给用户
 - pass_and_wait: 跳过本次动作，等待新消息
 - message_nucleus: 向生命中枢异步留言，不等待即时回复
+- consult_nucleus: 同步读取生命中枢当前状态层
+- search_life_memory: 深度检索生命中枢记忆
 
 使用 personality 配置动态构建系统提示词。
 """
@@ -41,7 +43,7 @@ from .config import DefaultChatterConfig
 from .decision_agent import decide_should_respond
 from .multimodal import get_media_list
 from .nucleus_bridge import MessageNucleusTool
-from .consult_nucleus import ConsultNucleusTool
+from .consult_nucleus import ConsultNucleusTool, SearchLifeMemoryTool
 from .prompt_builder import DefaultChatterPromptBuilder
 from .runners import run_classical, run_enhanced
 from .type_defs import LLMConversationState, LLMResponseLike, SubAgentDecision
@@ -996,4 +998,5 @@ class DefaultChatterPlugin(BasePlugin):
             PassAndWaitAction,
             MessageNucleusTool,
             ConsultNucleusTool,
+            SearchLifeMemoryTool,
         ]

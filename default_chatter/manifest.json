@@ -32,6 +32,11 @@
             "component_type": "tool",
             "component_name": "consult_nucleus",
             "dependencies": []
+        },
+        {
+            "component_type": "tool",
+            "component_name": "search_life_memory",
+            "dependencies": []
         }
     ],
     "entry_point": "plugin.py",
