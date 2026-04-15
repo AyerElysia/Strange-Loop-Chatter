@@ -37,6 +37,11 @@
             "component_type": "tool",
             "component_name": "search_life_memory",
             "dependencies": []
+        },
+        {
+            "component_type": "tool",
+            "component_name": "retrieve_memory",
+            "dependencies": []
         }
     ],
     "entry_point": "plugin.py",

@@ -103,6 +103,7 @@ class DefaultChatterRuntime(Protocol):
         history_text: str,
         unread_lines: str,
         extra: str = "",
+        include_continuous_memory: bool = True,
     ) -> str:
         """构建增强模式用户提示词。"""
         ...
@@ -113,6 +114,10 @@ class DefaultChatterRuntime(Protocol):
 
     def _build_user_extra(self, chat_stream: ChatStream) -> str:
         """构建 user 提示词动态 extra。"""
+        ...
+
+    def _build_scene_guide_system_block(self, chat_stream: ChatStream) -> str:
+        """构建会话场景引导的 SYSTEM 固定块。"""
         ...
 
     async def sub_agent(

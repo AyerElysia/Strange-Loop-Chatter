@@ -18,6 +18,257 @@ from .multimodal import build_multimodal_content, extract_media_from_messages
 from .type_defs import DefaultChatterRuntime, LLMConversationState, LLMResponseLike
 from .tool_flow import append_suspend_payload_if_action_only, process_tool_calls
 
+_LIFE_STATE_OPEN = "<life_state>\n"
+_LIFE_STATE_CLOSE = "\n</life_state>"
+_TEMP_SYSTEM_NOTE_OPEN = "<temp_system_note>\n"
+_TEMP_SYSTEM_NOTE_CLOSE = "\n</temp_system_note>"
+_CONTINUOUS_MEMORY_BLOCK_START = "<continuous_memory_block>"
+_CONTINUOUS_MEMORY_BLOCK_END = "</continuous_memory_block>"
+_SCENE_GUIDE_SYSTEM_OPEN = "<session_scene_guide>\n"
+_SCENE_GUIDE_SYSTEM_CLOSE = "\n</session_scene_guide>"
+
+
+def _build_life_state_block(text: str) -> str:
+    """构建临时 life state 文本块。"""
+    return f"{_LIFE_STATE_OPEN}{text}{_LIFE_STATE_CLOSE}"
+
+
+def _build_temp_system_note(text: str) -> str:
+    """构建一次性系统提示文本块。"""
+    return f"{_TEMP_SYSTEM_NOTE_OPEN}{text}{_TEMP_SYSTEM_NOTE_CLOSE}"
+
+
+def _is_life_state_part(part: object) -> bool:
+    """判断一个 content part 是否为临时注入的 life state。"""
+    return (
+        isinstance(part, Text)
+        and part.text.startswith(_LIFE_STATE_OPEN)
+        and part.text.endswith(_LIFE_STATE_CLOSE)
+    )
+
+
+def _append_temp_life_state(
+    response: LLMConversationState,
+    life_state_text: str,
+    logger: Logger,
+) -> bool:
+    """临时将 life state 挂到当前轮最后一个 USER payload 上。"""
+    payloads = getattr(response, "payloads", None) or []
+    if not payloads or payloads[-1].role != ROLE.USER:
+        logger.debug("当前轮尾部不是 USER，跳过 Life State 注入")
+        return False
+
+    response.add_payload(LLMPayload(ROLE.USER, Text(_build_life_state_block(life_state_text))))
+    return True
+
+
+def _strip_temp_life_state(response: LLMConversationState, logger: Logger) -> None:
+    """从 payloads 中剥离临时注入的 life state，避免污染历史。"""
+    payloads = getattr(response, "payloads", None)
+    if not payloads:
+        return
+
+    removed_parts = 0
+    new_payloads: list[LLMPayload] = []
+    for payload in payloads:
+        if payload.role != ROLE.USER:
+            new_payloads.append(payload)
+            continue
+
+        filtered_content = [part for part in payload.content if not _is_life_state_part(part)]
+        removed_parts += len(payload.content) - len(filtered_content)
+        if filtered_content:
+            payload.content = filtered_content
+            new_payloads.append(payload)
+
+    if removed_parts:
+        response.payloads = new_payloads
+        logger.debug(f"已清理临时 Life State payload: removed_parts={removed_parts}")
+
+
+def _is_temp_system_note_part(part: object) -> bool:
+    """判断一个 content part 是否为一次性系统提示。"""
+    return (
+        isinstance(part, Text)
+        and part.text.startswith(_TEMP_SYSTEM_NOTE_OPEN)
+        and part.text.endswith(_TEMP_SYSTEM_NOTE_CLOSE)
+    )
+
+
+def _has_continuous_memory_block(response: LLMConversationState) -> bool:
+    """判断当前上下文是否已经包含连续记忆块。"""
+    payloads = getattr(response, "payloads", None)
+    if not payloads:
+        return False
+    for payload in payloads:
+        for part in getattr(payload, "content", []) or []:
+            if (
+                isinstance(part, Text)
+                and _CONTINUOUS_MEMORY_BLOCK_START in part.text
+            ):
+                return True
+    return False
+
+
+def _build_scene_guide_system_block(text: str) -> str:
+    """构建场景引导 SYSTEM 固定块。"""
+    return f"{_SCENE_GUIDE_SYSTEM_OPEN}{text}{_SCENE_GUIDE_SYSTEM_CLOSE}"
+
+
+def _is_scene_guide_system_part(part: object) -> bool:
+    """判断是否为场景引导 SYSTEM 固定块。"""
+    return (
+        isinstance(part, Text)
+        and part.text.startswith(_SCENE_GUIDE_SYSTEM_OPEN)
+        and part.text.endswith(_SCENE_GUIDE_SYSTEM_CLOSE)
+    )
+
+
+def _upsert_scene_guide_system_block(
+    response: LLMConversationState,
+    block_text: str,
+) -> None:
+    """更新场景引导 SYSTEM 固定块。"""
+    payloads = getattr(response, "payloads", None)
+    if not payloads:
+        return
+
+    cleaned_payloads: list[LLMPayload] = []
+    for payload in payloads:
+        if payload.role != ROLE.SYSTEM:
+            cleaned_payloads.append(payload)
+            continue
+        filtered = [part for part in payload.content if not _is_scene_guide_system_part(part)]
+        if filtered:
+            payload.content = filtered
+            cleaned_payloads.append(payload)
+
+    response.payloads = cleaned_payloads
+
+    text = str(block_text or "").strip()
+    if not text:
+        return
+
+    insert_index = 0
+    while (
+        insert_index < len(response.payloads)
+        and response.payloads[insert_index].role == ROLE.SYSTEM
+    ):
+        insert_index += 1
+
+    response.add_payload(
+        LLMPayload(ROLE.SYSTEM, Text(_build_scene_guide_system_block(text))),
+        position=insert_index,
+    )
+
+
+def _is_continuous_memory_system_part(part: object) -> bool:
+    """判断是否为连续记忆固定块。"""
+    return (
+        isinstance(part, Text)
+        and part.text.startswith(_CONTINUOUS_MEMORY_BLOCK_START)
+        and part.text.endswith(_CONTINUOUS_MEMORY_BLOCK_END)
+    )
+
+
+def _upsert_continuous_memory_system_block(
+    response: LLMConversationState,
+    memory_text: str,
+) -> None:
+    """更新连续记忆 SYSTEM 固定块。"""
+    payloads = getattr(response, "payloads", None)
+    if not payloads:
+        return
+
+    cleaned_payloads: list[LLMPayload] = []
+    for payload in payloads:
+        if payload.role != ROLE.SYSTEM:
+            cleaned_payloads.append(payload)
+            continue
+        filtered = [part for part in payload.content if not _is_continuous_memory_system_part(part)]
+        if filtered:
+            payload.content = filtered
+            cleaned_payloads.append(payload)
+
+    response.payloads = cleaned_payloads
+
+    text = str(memory_text or "").strip()
+    if not text:
+        return
+
+    insert_index = 0
+    while (
+        insert_index < len(response.payloads)
+        and response.payloads[insert_index].role == ROLE.SYSTEM
+    ):
+        insert_index += 1
+
+    wrapped = (
+        f"{_CONTINUOUS_MEMORY_BLOCK_START}\n"
+        f"{text}\n"
+        f"{_CONTINUOUS_MEMORY_BLOCK_END}"
+    )
+    # 直接写 payloads，避免触发 context_manager 的 reminder 重排，
+    # 从而保证连续记忆块在发送前保持“最后一个 SYSTEM”。
+    response.payloads.insert(insert_index, LLMPayload(ROLE.SYSTEM, Text(wrapped)))
+
+
+def _strip_legacy_continuous_memory_user_blocks(
+    response: LLMConversationState,
+    logger: Logger,
+) -> None:
+    """清理历史遗留在 USER payload 内的连续记忆块。"""
+    payloads = getattr(response, "payloads", None)
+    if not payloads:
+        return
+
+    removed_parts = 0
+    rebuilt: list[LLMPayload] = []
+    for payload in payloads:
+        if payload.role != ROLE.USER:
+            rebuilt.append(payload)
+            continue
+        filtered = [
+            part
+            for part in payload.content
+            if not (
+                isinstance(part, Text)
+                and _CONTINUOUS_MEMORY_BLOCK_START in part.text
+            )
+        ]
+        removed_parts += len(payload.content) - len(filtered)
+        if filtered:
+            payload.content = filtered
+            rebuilt.append(payload)
+    if removed_parts:
+        response.payloads = rebuilt
+        logger.debug(f"已清理 USER 内遗留连续记忆块: removed_parts={removed_parts}")
+
+
+def _strip_temp_system_notes(response: LLMConversationState, logger: Logger) -> None:
+    """清理一次性系统提示，避免在长会话中堆积。"""
+    payloads = getattr(response, "payloads", None)
+    if not payloads:
+        return
+
+    removed_parts = 0
+    rebuilt: list[LLMPayload] = []
+    for payload in payloads:
+        if payload.role != ROLE.SYSTEM:
+            rebuilt.append(payload)
+            continue
+
+        filtered = [part for part in payload.content if not _is_temp_system_note_part(part)]
+        removed_parts += len(payload.content) - len(filtered)
+        if filtered:
+            payload.content = filtered
+            rebuilt.append(payload)
+
+    if removed_parts:
+        response.payloads = rebuilt
+        logger.debug(f"已清理一次性系统提示: removed_parts={removed_parts}")
+
+
 # Life State 集成
 async def _get_life_state_for_current_turn(logger: Logger) -> str:
     """获取当前轮次的 Life State（简单模板，不调用 LLM）。
@@ -96,11 +347,61 @@ class _EnhancedWorkflowRuntime:
     plain_text_retry_count: int = 0
     think_only_retry_count: int = 0
     last_continuous_memory_updated_at: str = ""
+    seen_life_wake_signatures: set[str] | None = None
 
     def has_tool_result_tail(self) -> bool:
         """当前上下文尾部是否为 TOOL_RESULT。"""
         payloads = getattr(self.response, "payloads", None)
         return bool(payloads and payloads[-1].role == ROLE.TOOL_RESULT)
+
+
+def _build_life_wake_signature(msg: Message) -> str | None:
+    """为 life_engine 唤醒消息构建去重签名。"""
+    sender_id = str(getattr(msg, "sender_id", "") or "").strip()
+    is_wake = bool(getattr(msg, "is_life_engine_wake", False))
+    if not is_wake and sender_id != "life_engine_nucleus":
+        return None
+
+    reason = str(getattr(msg, "life_wake_reason", "") or "").strip().lower()
+    importance = str(getattr(msg, "life_wake_importance", "") or "").strip().lower()
+    wake_message = str(getattr(msg, "life_wake_message", "") or "").strip()
+    if not wake_message:
+        wake_message = str(getattr(msg, "processed_plain_text", "") or "").strip()
+    if not wake_message:
+        wake_message = str(getattr(msg, "content", "") or "").strip()
+    normalized = " ".join(wake_message.split())
+    return f"{importance}|{reason}|{normalized}"
+
+
+def _split_life_wake_duplicates(
+    unread_msgs: list[Message],
+    seen_signatures: set[str],
+) -> tuple[list[Message], list[Message]]:
+    """拆分未读中的 life 唤醒重复项。"""
+    unique_msgs: list[Message] = []
+    duplicate_msgs: list[Message] = []
+    local_seen: set[str] = set()
+
+    for msg in unread_msgs:
+        signature = _build_life_wake_signature(msg)
+        if signature is None:
+            unique_msgs.append(msg)
+            continue
+
+        if signature in seen_signatures or signature in local_seen:
+            duplicate_msgs.append(msg)
+            continue
+
+        unique_msgs.append(msg)
+        local_seen.add(signature)
+        seen_signatures.add(signature)
+
+    # 限制集合规模，避免极端长会话占用过多内存
+    if len(seen_signatures) > 512:
+        for sig in list(seen_signatures)[: len(seen_signatures) - 512]:
+            seen_signatures.discard(sig)
+
+    return unique_msgs, duplicate_msgs
 
 
 def _is_response_like(response: LLMConversationState) -> TypeGuard[LLMResponseLike]:
@@ -247,7 +548,11 @@ def _append_think_only_retry_instruction(
     logger: Logger,
 ) -> None:
     """向上下文注入“think 不能单独结束本轮”的系统提醒。"""
-    response.add_payload(LLMPayload(ROLE.SYSTEM, Text(_THINK_ONLY_RETRY_REMINDER)))
+    reminder_text = _build_temp_system_note(_THINK_ONLY_RETRY_REMINDER)
+    response.add_payload(
+        LLMPayload(ROLE.SYSTEM, Text(reminder_text)),
+        position=0,
+    )
     logger.warning("检测到本轮仅调用 action-think，已注入系统提醒并触发重试")
 
 
@@ -351,14 +656,55 @@ def _drop_oldest_conversation_payloads(
     return dropped
 
 
+def _refresh_continuous_memory_system_block(
+    chat_stream: ChatStream,
+    rt: _EnhancedWorkflowRuntime,
+    logger: Logger,
+    *,
+    force: bool = False,
+) -> bool:
+    """刷新连续记忆 SYSTEM 固定块，返回是否发生了“版本更新”。"""
+    try:
+        from src.app.plugin_system.api.service_api import get_service
+
+        service = get_service("diary_plugin:service:diary_service")
+        if service is None or not hasattr(service, "get_continuous_memory_summary"):
+            return False
+
+        summary = service.get_continuous_memory_summary(  # type: ignore[attr-defined]
+            chat_stream.stream_id,
+            chat_stream.chat_type,
+        )
+        updated_at = str(summary.get("updated_at", "") or "").strip()
+        prompt_text = str(summary.get("prompt_text", "") or "").strip()
+        changed = bool(
+            updated_at
+            and updated_at != rt.last_continuous_memory_updated_at
+        )
+
+        if force or changed or (prompt_text and not _has_continuous_memory_block(rt.response)):
+            _upsert_continuous_memory_system_block(rt.response, prompt_text)
+
+        if updated_at:
+            rt.last_continuous_memory_updated_at = updated_at
+        return changed
+    except Exception as exc:
+        logger.debug(f"刷新连续记忆 SYSTEM 固定块失败：{exc}")
+        return False
+
+
 def _trim_payloads_if_continuous_memory_updated(
     chatter: DefaultChatterRuntime,
     chat_stream: ChatStream,
     rt: _EnhancedWorkflowRuntime,
     logger: Logger,
+    *,
+    continuous_memory_changed: bool,
 ) -> None:
     """连续记忆更新后，裁剪当前请求中的最旧对话 payload。"""
     try:
+        if not continuous_memory_changed:
+            return
         # 避免干扰 tool 调用闭环阶段。
         if rt.phase != _ToolCallWorkflowPhase.WAIT_USER:
             return
@@ -366,17 +712,8 @@ def _trim_payloads_if_continuous_memory_updated(
         from src.app.plugin_system.api.service_api import get_service
 
         service = get_service("diary_plugin:service:diary_service")
-        if service is None or not hasattr(service, "get_continuous_memory_summary"):
+        if service is None:
             return
-
-        summary = service.get_continuous_memory_summary(  # type: ignore[attr-defined]
-            chat_stream.stream_id,
-            chat_stream.chat_type,
-        )
-        updated_at = str(summary.get("updated_at", "") or "").strip()
-        if not updated_at or updated_at == rt.last_continuous_memory_updated_at:
-            return
-        rt.last_continuous_memory_updated_at = updated_at
 
         trim_count = 0
         cfg = getattr(getattr(service, "plugin", None), "config", None)
@@ -390,13 +727,34 @@ def _trim_payloads_if_continuous_memory_updated(
 
         dropped = _drop_oldest_conversation_payloads(rt.response, trim_count)
         if dropped > 0:
-            # 下一次采纳用户消息时重新带一次历史块，避免“历史区看起来空了”。
-            rt.history_merged = False
+            # 保持 history_merged 状态不回滚，避免把整段历史反复重新注入导致堆积。
             logger.info(
                 f"[cache] 检测到连续记忆更新，已裁剪最旧 payloads：{dropped} 条"
             )
     except Exception as exc:
         logger.debug(f"连续记忆更新触发 payloads 裁剪失败：{exc}")
+
+
+def _inject_continuous_memory_system_block_once(
+    chat_stream: ChatStream,
+    response: LLMConversationState,
+    logger: Logger,
+) -> None:
+    """classical 模式：为当前请求注入一次连续记忆 SYSTEM 固定块。"""
+    try:
+        from src.app.plugin_system.api.service_api import get_service
+
+        service = get_service("diary_plugin:service:diary_service")
+        if service is None or not hasattr(service, "get_continuous_memory_summary"):
+            return
+        summary = service.get_continuous_memory_summary(  # type: ignore[attr-defined]
+            chat_stream.stream_id,
+            chat_stream.chat_type,
+        )
+        prompt_text = str(summary.get("prompt_text", "") or "").strip()
+        _upsert_continuous_memory_system_block(response, prompt_text)
+    except Exception as exc:
+        logger.debug(f"classical 注入连续记忆 SYSTEM 固定块失败：{exc}")
 
 
 async def run_enhanced(
@@ -417,6 +775,10 @@ async def run_enhanced(
 
     system_prompt_text = await chatter._build_system_prompt(chat_stream)
     request.add_payload(LLMPayload(ROLE.SYSTEM, Text(system_prompt_text)))
+    _upsert_scene_guide_system_block(
+        request,
+        chatter._build_scene_guide_system_block(chat_stream),
+    )
 
     history_text = chatter._build_enhanced_history_text(chat_stream)
     native_multimodal, max_images, max_videos = _get_multimodal_settings(chatter)
@@ -429,11 +791,38 @@ async def run_enhanced(
         unreads=[],
         cross_round_seen_signatures=set(),
         unread_msgs_to_flush=[],
+        seen_life_wake_signatures=set(),
+    )
+    _strip_legacy_continuous_memory_user_blocks(rt.response, logger)
+    _refresh_continuous_memory_system_block(
+        chat_stream,
+        rt,
+        logger,
+        force=True,
     )
 
     while True:
         _, unread_msgs = await chatter.fetch_unreads()
-        _trim_payloads_if_continuous_memory_updated(chatter, chat_stream, rt, logger)
+        seen_signatures = rt.seen_life_wake_signatures
+        if seen_signatures is None:
+            seen_signatures = set()
+            rt.seen_life_wake_signatures = seen_signatures
+        unread_msgs, duplicate_wakes = _split_life_wake_duplicates(unread_msgs, seen_signatures)
+        if duplicate_wakes:
+            await chatter.flush_unreads(duplicate_wakes)
+            logger.debug(f"已清理重复 life 唤醒消息: {len(duplicate_wakes)} 条")
+        continuous_memory_changed = _refresh_continuous_memory_system_block(
+            chat_stream,
+            rt,
+            logger,
+        )
+        _trim_payloads_if_continuous_memory_updated(
+            chatter,
+            chat_stream,
+            rt,
+            logger,
+            continuous_memory_changed=continuous_memory_changed,
+        )
 
         # 安全兜底：若上下文尾部为 TOOL_RESULT，必须进入 FOLLOW_UP
         if rt.phase == _ToolCallWorkflowPhase.WAIT_USER and rt.has_tool_result_tail():
@@ -467,7 +856,8 @@ async def run_enhanced(
                 chat_stream,
                 history_text=history_text if not rt.history_merged else "",
                 unread_lines=unread_lines,
-                extra=chatter._build_user_extra(chat_stream),
+                extra=chatter._build_user_extra(chat_stream) if not rt.history_merged else "",
+                include_continuous_memory=False,
             )
 
             if native_multimodal:
@@ -516,14 +906,24 @@ async def run_enhanced(
 
             if life_state_text:
                 try:
-                    life_state_payload = LLMPayload(ROLE.USER, Text(f"<life_state>\n{life_state_text}\n</life_state>"))
-                    rt.response.add_payload(life_state_payload)
-                    life_state_payload_added = True
-                    logger.debug(f"已添加 Life State: {len(life_state_text)} chars")
+                    life_state_payload_added = _append_temp_life_state(
+                        rt.response,
+                        life_state_text,
+                        logger,
+                    )
+                    if life_state_payload_added:
+                        logger.debug(f"已添加 Life State: {len(life_state_text)} chars")
                 except Exception as e:
                     logger.warning(f"添加 Life State 失败: {e}")
 
             try:
+                # 发送前强制把连续记忆重排到最后一个 SYSTEM 位置。
+                _refresh_continuous_memory_system_block(
+                    chat_stream,
+                    rt,
+                    logger,
+                    force=True,
+                )
                 _log_prompt_debug(chatter, rt.response, logger)
                 rt.response = await rt.response.send(stream=False)
                 await rt.response
@@ -537,6 +937,10 @@ async def run_enhanced(
                 yield Failure("LLM 请求失败", error)
                 _transition(rt=rt, to_phase=_ToolCallWorkflowPhase.WAIT_USER, logger=logger, reason="request failed")
                 continue
+            finally:
+                if life_state_payload_added:
+                    _strip_temp_life_state(rt.response, logger)
+                _strip_temp_system_notes(rt.response, logger)
 
             _transition(rt=rt, to_phase=_ToolCallWorkflowPhase.TOOL_EXEC, logger=logger, reason="model responded")
             continue
@@ -638,9 +1042,14 @@ async def run_classical(
     usable_map = await chatter.inject_usables(base_request)
     native_multimodal, max_images, max_videos = _get_multimodal_settings(chatter)
     history_media_injected = False
+    seen_life_wake_signatures: set[str] = set()
 
     while True:
         _, unread_msgs = await chatter.fetch_unreads()
+        unread_msgs, duplicate_wakes = _split_life_wake_duplicates(unread_msgs, seen_life_wake_signatures)
+        if duplicate_wakes:
+            await chatter.flush_unreads(duplicate_wakes)
+            logger.debug(f"classical 清理重复 life 唤醒消息: {len(duplicate_wakes)} 条")
         unreads = unread_msgs
 
         if not unread_msgs:
@@ -676,6 +1085,15 @@ async def run_classical(
                 Text(await chatter._build_system_prompt(chat_stream)),
             )
         )
+        _upsert_scene_guide_system_block(
+            request,
+            chatter._build_scene_guide_system_block(chat_stream),
+        )
+        _inject_continuous_memory_system_block_once(
+            chat_stream,
+            request,
+            logger,
+        )
         if native_multimodal:
             user_content = _build_multimodal_payload(
                 classical_user_text,
@@ -700,6 +1118,12 @@ async def run_classical(
 
         while True:
             try:
+                # classical 每次 send 前重排一次，确保连续记忆处于最后 SYSTEM。
+                _inject_continuous_memory_system_block_once(
+                    chat_stream,
+                    response,
+                    logger,
+                )
                 _log_prompt_debug(chatter, response, logger)
                 response = await response.send(stream=False)
                 await response
@@ -708,6 +1132,8 @@ async def run_classical(
                 logger.error(f"LLM 请求失败: {error}", exc_info=True)
                 yield Failure("LLM 请求失败", error)
                 break
+            finally:
+                _strip_temp_system_notes(response, logger)
 
             if not response.call_list:
                 if response.message and response.message.strip():

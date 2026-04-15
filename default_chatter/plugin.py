@@ -53,6 +53,13 @@ _REASON_LEAK_PATTERN = re.compile(
     r'[,，]?\s*["\']?reason["\']?\s*[:：]',
     re.IGNORECASE,
 )
+_NOISY_PROMPT_MSG_ID_PREFIXES = (
+    "action_",
+    "api_",
+    "inner_monologue_",
+    "tool_",
+    "fc_tooluse_",
+)
 
 # ─── 系统提示词构建 ─────────────────────────────────────────────
 system_prompt = """# 关于你
@@ -103,9 +110,18 @@ system_prompt = """# 关于你
 你可以一次调用多个工具组合使用，善用工具组合往往可以让你的行为更丰富，达到事半功倍的效果。
 多工具组合调用时，你需要自行决定调用顺序，通常回复动作应当优先，除非有明确的理由需要先执行其他工具。
 
+# 工具边界
+- `consult_nucleus` 只查当前状态、近期日记、TODO、内在变化，不做深层历史检索。
+- `search_life_memory` 返回记忆摘要和文件路径，适合快速浏览和定位。如果摘要不够详细，可以使用 `fetch_life_memory` 深入查看。
+- `fetch_life_memory` 获取完整文件内容，适合深入了解。建议先 search 后 fetch，避免盲目读取。此工具会消耗较多上下文，请谨慎使用。
+- `retrieve_memory` 智能记忆检索工具，自动决定检索策略和详细程度，一次调用完成（推荐使用）。内部会自动调用 search 和 fetch，你不需要手动管理。
+- 如果已经对同一问题搜索过一次，且没有出现新线索，不要换一组近义词继续搜同一个方向；改为总结已知信息、换工具，或直接给出不确定结论。
+- 如果需要读取明确的本地文件或路径，优先走对应的本地文件工具；`nucleus_browser_fetch` 也兼容 workspace 内本地路径，但它的主职仍然是网页提取。
+
+
 # 会话适配
-- 你会在用户提示词的「额外信息」里看到当前会话的动态上下文（平台、聊天类型、场景引导等）。
-- 你需要根据这些动态上下文调整表达方式与互动策略：私聊更自然亲近，群聊更克制简洁，避免刷屏与过度热情。
+- 你会在前置 SYSTEM 固定块中看到当前会话的场景引导（平台、聊天类型、场景规则等）。
+- 你需要根据这些上下文调整表达方式与互动策略：私聊更自然亲近，群聊更克制简洁，避免刷屏与过度热情。
 
 {extra_info}
 """
@@ -573,10 +589,17 @@ class DefaultChatter(BaseChatter):
             chat_stream,
         )
 
+    def _build_scene_guide_system_block(self, chat_stream: ChatStream) -> str:
+        """构建场景引导 SYSTEM 固定块。"""
+        plugin_config = getattr(self.plugin, "config", None)
+        return DefaultChatterPromptBuilder.build_scene_guide_system_block(
+            plugin_config if isinstance(plugin_config, DefaultChatterConfig) else None,
+            chat_stream,
+        )
+
     def _build_user_extra(self, chat_stream: ChatStream) -> str:
-        """合并 user extra：动态会话上下文 + 行为约束增强。"""
+        """构建 user extra：仅保留行为约束增强与一次性运行时补充。"""
         return DefaultChatterPromptBuilder.merge_extra_blocks(
-            self._build_runtime_context_extra(chat_stream),
             self._build_negative_behaviors_extra(),
         )
 
@@ -649,8 +672,12 @@ class DefaultChatter(BaseChatter):
         else:
             name_part = nickname or "未知发送者"
 
-        message_id = getattr(msg, "message_id", "") or ""
-        msg_id_part = f"[{message_id}]" if message_id else ""
+        message_id_raw = str(getattr(msg, "message_id", "") or "").strip()
+        # 过滤内部调用轨迹 ID，避免把 action/tool 运行噪声塞进用户历史上下文。
+        if message_id_raw.lower().startswith(_NOISY_PROMPT_MSG_ID_PREFIXES):
+            msg_id_part = ""
+        else:
+            msg_id_part = f"[{message_id_raw}]" if message_id_raw else ""
 
         media_suffix = DefaultChatter._count_media_suffix(msg)
         content = getattr(msg, "processed_plain_text", None)
@@ -668,7 +695,9 @@ class DefaultChatter(BaseChatter):
             else:
                 content = str(raw_content)
 
-        return f"【{time_str}】{role_part}{id_part}{name_part} {msg_id_part}： {content}"
+        if msg_id_part:
+            return f"【{time_str}】{role_part}{id_part}{name_part} {msg_id_part}： {content}"
+        return f"【{time_str}】{role_part}{id_part}{name_part}： {content}"
 
     async def _build_system_prompt(self, chat_stream: ChatStream) -> str:
         """构建系统提示词"""
@@ -704,6 +733,7 @@ class DefaultChatter(BaseChatter):
         history_text: str,
         unread_lines: str,
         extra: str = "",
+        include_continuous_memory: bool = True,
     ) -> str:
         """通过 user prompt 模板构建用户提示词。
 
@@ -712,6 +742,7 @@ class DefaultChatter(BaseChatter):
             history_text: 格式化后的历史消息文本（各行已用统一格式）
             unread_lines: 格式化后的未读消息文本
             extra: 额外信息文本
+            include_continuous_memory: 是否在本轮注入连续记忆块
 
         Returns:
             str: 渲染后的 user 提示词
@@ -721,6 +752,7 @@ class DefaultChatter(BaseChatter):
             history_text,
             unread_lines,
             extra,
+            include_continuous_memory=include_continuous_memory,
         )
 
     @staticmethod

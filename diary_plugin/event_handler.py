@@ -428,6 +428,8 @@ class ContinuousMemoryPromptInjector(BaseEventHandler):
             return EventDecision.SUCCESS, params
         if prompt_name != "default_chatter_user_prompt":
             return EventDecision.SUCCESS, params
+        if not bool(values.get("inject_continuous_memory", True)):
+            return EventDecision.SUCCESS, params
 
         service = self._get_service()
         if service is None:
