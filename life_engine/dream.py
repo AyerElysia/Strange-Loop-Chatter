@@ -23,6 +23,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+import random
+from collections import deque
+
 import numpy as np
 
 from src.app.plugin_system.api.llm_api import create_llm_request, get_model_set_by_task
@@ -41,6 +44,11 @@ _RESIDUE_TTL_SECONDS = 24 * 60 * 60
 _MAX_DREAM_SEEDS = 3
 _MAX_SCENES = 5
 _DREAM_ARCHIVE_DIR = "dreams"
+_DREAM_SCENE_TIMEOUT_SECONDS = 600.0
+_DREAM_SCENE_MAX_RETRIES = 3
+_SEED_SCORE_TEMPERATURE = 0.15
+_DREAM_HISTORY_WINDOW = 5
+_REPETITION_DECAY = 0.3
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 _DATE_STEM_RE = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})(?:$|[_-])")
 _MONTH_STEM_RE = re.compile(r"^(?P<month>\d{4}-\d{2})(?:$|[_-])")
@@ -221,6 +229,11 @@ class DreamScheduler:
         self._active_residue: DreamResidue | None = None
         self._last_archive_path: str = ""
 
+        # 仿生状态：海马体重复抑制 + REM 渐变 + 梦境避重
+        self._recent_seed_titles: deque[set[str]] = deque(maxlen=_DREAM_HISTORY_WINDOW)
+        self._recent_dream_summaries: deque[str] = deque(maxlen=_DREAM_HISTORY_WINDOW)
+        self._dreams_since_sleep_start: int = 0
+
     @property
     def is_dreaming(self) -> bool:
         return self._is_dreaming
@@ -267,6 +280,9 @@ class DreamScheduler:
                 report.nrem = await self._run_nrem(event_history)
 
             report.seed_report = await self._generate_dream_seeds(event_history)
+            self._emit_visual_event("dream.seeds_extracted", {
+                "seeds": [_seed_to_dict(s) for s in report.seed_report]
+            })
 
             self._current_phase = DreamPhase.REM
             self._emit_visual_event("dream.phase_change", {"phase": "rem", "dream_id": report.dream_id})
@@ -277,19 +293,37 @@ class DreamScheduler:
             if self._memory is not None:
                 report.rem = await self._run_rem(seed_node_ids)
 
-            trace, dream_text, residue = await self._build_dream_scene(
+            self._emit_visual_event("dream.rem_stats", {
+                "nodes_activated": report.rem.nodes_activated,
+                "new_edges_created": report.rem.new_edges_created,
+                "edges_pruned": report.rem.edges_pruned
+            })
+
+            result = await self._build_dream_scene(
                 seeds=report.seed_report,
                 rem_report=report.rem,
                 event_history=event_history,
             )
-            report.dream_trace = trace
-            report.dream_text = dream_text
-            report.narrative = dream_text
-            report.dream_residue = residue
 
-            report.archive_path = await self._archive_dream(report)
-            self._last_archive_path = report.archive_path
-            report.memory_effects = await self._integrate_archive_into_memory(report)
+            if result is None:
+                # 做梦失败 — NREM 和 REM 已完成，但没有形成清晰梦境
+                # 这在人类身上也会发生（很多睡眠周期不产生可回忆的梦）
+                report.dream_text = ""
+                report.narrative = ""
+                logger.info(f"🌙 Dream [{report.dream_id}] 本次未形成清晰梦境（类似无梦睡眠）")
+            else:
+                trace, dream_text, residue = result
+                report.dream_trace = trace
+                report.dream_text = dream_text
+                report.narrative = dream_text
+                report.dream_residue = residue
+                # 记录梦境摘要供后续避重
+                if residue and residue.summary:
+                    self._recent_dream_summaries.append(residue.summary)
+
+                report.archive_path = await self._archive_dream(report)
+                self._last_archive_path = report.archive_path
+                report.memory_effects = await self._integrate_archive_into_memory(report)
 
             self._current_phase = DreamPhase.WAKING_UP
             self._emit_visual_event("dream.phase_change", {"phase": "waking_up", "dream_id": report.dream_id})
@@ -309,6 +343,7 @@ class DreamScheduler:
             self._dream_history.append(report)
             self._dream_history = self._dream_history[-_REMINDER_MAX_HISTORY:]
             self._last_dream_time = time.time()
+            self._dreams_since_sleep_start += 1
             self._emit_visual_event("dream.finished", _report_to_dict(report))
 
             logger.info(
@@ -428,7 +463,20 @@ class DreamScheduler:
         candidates.extend(await self._collect_dream_lag(memory_candidates))
         candidates.extend(await self._collect_self_theme(memory_candidates))
 
+        # 海马体重复抑制（habituation）：最近梦过的种子降分
+        recent_titles: set[str] = set()
+        for title_set in self._recent_seed_titles:
+            recent_titles.update(title_set)
+        for seed in candidates:
+            if seed.title in recent_titles:
+                seed.score = max(0.05, seed.score - _REPETITION_DECAY)
+
         selected = self._select_seed_candidates(candidates)
+
+        # 记录本次选中的种子标题
+        if selected:
+            self._recent_seed_titles.append({s.title for s in selected})
+
         if selected:
             return selected
 
@@ -447,19 +495,30 @@ class DreamScheduler:
         ]
 
     async def _run_rem(self, seed_node_ids: list[str]) -> REMReport:
-        """REM 阶段：围绕主种子做联想扩散。"""
+        """REM 阶段：渐进式联想扩散 — 后半夜梦更深更wild。
+
+        仿生设计：人类一晚经历 4-6 个睡眠周期，后半夜的 REM 期更长、
+        更 vivid、更荒诞。通过 _dreams_since_sleep_start 控制渐变。
+        """
         report = REMReport()
 
         if not self._memory:
             return report
 
-        actual_seed_ids = seed_node_ids[: self._rem_seeds_per_round]
-        for _ in range(self._rem_walk_rounds):
+        # 渐进参数：后半夜更深、更广、衰减更慢
+        n = self._dreams_since_sleep_start
+        effective_depth = self._rem_max_depth + min(n, 3)
+        effective_decay = min(self._rem_decay_factor + n * 0.05, 0.85)
+        effective_seeds = self._rem_seeds_per_round + n
+        effective_rounds = self._rem_walk_rounds + (1 if n >= 2 else 0)
+
+        actual_seed_ids = seed_node_ids[: effective_seeds]
+        for _ in range(effective_rounds):
             result = await self._memory.dream_walk(
-                num_seeds=self._rem_seeds_per_round,
+                num_seeds=effective_seeds,
                 seed_ids=actual_seed_ids or None,
-                max_depth=self._rem_max_depth,
-                decay_factor=self._rem_decay_factor,
+                max_depth=effective_depth,
+                decay_factor=effective_decay,
                 learning_rate=self._rem_learning_rate,
             )
             report.nodes_activated += int(result.get("nodes_activated", 0) or 0)
@@ -484,19 +543,41 @@ class DreamScheduler:
         seeds: list[DreamSeed],
         rem_report: REMReport,
         event_history: list[Any],
-    ) -> tuple[DreamTrace, str, DreamResidue]:
-        """用 LLM 将入梦种子变形成梦境；失败时回退到规则版。"""
-        try:
-            payload = await self._generate_scene_payload(seeds=seeds, rem_report=rem_report, event_history=event_history)
-            trace = _trace_from_payload(payload.get("dream_trace"))
-            dream_text = _clean_text(payload.get("dream_text"))
-            residue = _residue_from_payload(payload.get("dream_residue"))
-            if dream_text and residue.summary:
-                return trace, dream_text, residue
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"DreamSceneBuilder 生成失败，将使用回退梦境：{exc}")
+    ) -> tuple[DreamTrace, str, DreamResidue] | None:
+        """用 LLM 将入梦种子变形成梦境。失败时返回 None（不伪造梦境）。
 
-        return self._build_fallback_scene(seeds)
+        仿生设计：人类大多数睡眠周期不产生可回忆的梦。做梦失败
+        相当于"无梦睡眠"——这是完全正常的生物现象。
+        """
+        last_error: Exception | None = None
+
+        for attempt in range(_DREAM_SCENE_MAX_RETRIES):
+            try:
+                payload = await self._generate_scene_payload(
+                    seeds=seeds,
+                    rem_report=rem_report,
+                    event_history=event_history,
+                )
+                trace = _trace_from_payload(payload.get("dream_trace"))
+                dream_text = _clean_text(payload.get("dream_text"))
+                residue = _residue_from_payload(payload.get("dream_residue"))
+                if dream_text and residue.summary:
+                    return trace, dream_text, residue
+                logger.warning(
+                    f"DreamSceneBuilder 第{attempt+1}次返回空文本，重试中..."
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                logger.warning(
+                    f"DreamSceneBuilder 第{attempt+1}次异常：{exc}，重试中..."
+                )
+                await asyncio.sleep(2)
+
+        logger.error(
+            f"做梦失败：DreamSceneBuilder {_DREAM_SCENE_MAX_RETRIES}次尝试均失败。"
+            f"最后错误：{last_error}"
+        )
+        return None
 
     async def _generate_scene_payload(
         self,
@@ -522,6 +603,14 @@ class DreamScheduler:
                             "请输出严格 JSON，不要输出 markdown，不要输出解释。",
                             "梦必须具备：场景错位、时间折叠、情绪迁移、轻微象征化。",
                             "禁止：把梦写成计划、总结、工具调用说明、系统日志。",
+                            "",
+                            "多样性约束（极重要）：",
+                            "- 每个梦的场景类型必须不同：不要总用走廊/房间/追赶，尝试水域、天空、声音、温度、光影、季节、时间折叠。",
+                            "- 情绪基调必须变化：怅然只是一种可能，还有好奇、微甜、荒诞、安宁、不安、恍惚、炽热等。",
+                            "- 叙事视角可以变化：第一人称、旁观者、片段式意识流、倒叙、多线交织。",
+                            "- 将 seeds 中的具体内容（TODO标题、文件名）变形为象征意象，不要直接引用原文。",
+                            "- 如果素材中有 avoid_recent_themes 字段，本次梦境必须在主题、意象和情绪上与它们明显不同。",
+                            "",
                             "JSON 结构必须是：",
                             "{",
                             '  "dream_trace": {',
@@ -555,6 +644,9 @@ class DreamScheduler:
             "recent_context": self._build_recent_context_summary(event_history),
             "reference_previews": self._build_reference_previews(seeds),
         }
+        # 避重上下文：告诉 LLM 最近梦过什么，让它避免重复
+        if self._recent_dream_summaries:
+            brief["avoid_recent_themes"] = list(self._recent_dream_summaries)
         request.add_payload(
             LLMPayload(
                 ROLE.USER,
@@ -565,68 +657,27 @@ class DreamScheduler:
             )
         )
 
-        response = await asyncio.wait_for(
-            request.send(stream=False),
-            timeout=90.0,
-        )
-        response_text = str(await asyncio.wait_for(response, timeout=90.0) or "").strip()
-        payload = _parse_json_payload(response_text)
-        if not isinstance(payload, dict):
-            raise ValueError("dream scene payload 非法")
-        return payload
-
-    def _build_fallback_scene(self, seeds: list[DreamSeed]) -> tuple[DreamTrace, str, DreamResidue]:
-        """LLM 失败时的规则回退。"""
-        primary = seeds[0] if seeds else DreamSeed(
-            seed_id="fallback",
-            seed_type=DreamSeedType.DAY_RESIDUE.value,
-            title="模糊的回声",
-            summary="一些没有彻底散去的念头在夜里缓慢回流。",
-        )
-        secondary = seeds[1] if len(seeds) > 1 else None
-        motif_parts = [primary.title]
-        if secondary is not None:
-            motif_parts.append(secondary.title)
-
-        trace = DreamTrace(
-            scenes=[
-                DreamScene(
-                    title="回到熟悉却不完全正确的地方",
-                    summary=f"她像是回到了和「{primary.title}」有关的场景，但细节被轻轻挪动了位置。",
-                    imagery=["走廊", "偏移的门牌", "被重新命名的房间"],
-                    emotion_shift="从辨认到迟疑",
-                    refs=list(primary.core_refs[:2]),
-                ),
-                DreamScene(
-                    title="想靠近，却总差半步",
-                    summary=(
-                        f"夜里的目标并不直接出现，只留下「{primary.summary or primary.title}」那种挂心的感觉。"
-                    ),
-                    imagery=["追赶", "慢半拍的回应", "来不及说出口的话"],
-                    emotion_shift="从期待到轻微失落",
-                    refs=list(primary.supporting_refs[:2]),
-                ),
-            ],
-            motifs=motif_parts,
-            transitions=["靠近", "错位", "回返"],
-        )
-        dream_text = (
-            f"她像是走回了一个熟悉却微微偏移的地方，那里和「{primary.title}」有关，"
-            "但所有房间都像被梦轻轻挪过一点位置。她一边辨认，一边又觉得自己总慢半拍，"
-            "明明快要碰到真正重要的那件事了，却总被某个细小的岔路带开。如果再往深处走，"
-            f"又会遇到「{secondary.title}」留下的影子，让整场梦变成一种回返与错过交叠的感觉。"
-            "等到醒来时，那种想把某件事重新接起来的心情还没有完全散掉。"
-        )
-        residue = DreamResidue(
-            summary="夜里的梦把几件挂心的事揉在一起，醒来后仍有一点想回看、想接续的余韵。",
-            life_payload="【梦后余韵】昨夜像是回到熟悉却不完全正确的场景里，几条挂心的线索被重新缠在一起。醒来后并没有清晰结论，但对未完成的事、旧笔记和没说出口的话会更在意一点，像是想顺着那股微弱的牵引再看一眼。",
-            dfc_payload="【梦后余韵】她昨夜像是从一场关于回返、错位和未完成的梦里醒来，注意力会更容易落到旧线索和没说出口的话上。",
-            dominant_affect="怅然",
-            strength="light",
-            tags=["回返", "错位", "未完成"],
-            expires_at=time.time() + _RESIDUE_TTL_SECONDS,
-        )
-        return trace, dream_text, residue
+        try:
+            self._emit_visual_event("dream.scene_generating", {"status": "request_sent"})
+            response = await asyncio.wait_for(
+                request.send(stream=False),
+                timeout=_DREAM_SCENE_TIMEOUT_SECONDS,
+            )
+            response_text = str(
+                await asyncio.wait_for(
+                    response,
+                    timeout=_DREAM_SCENE_TIMEOUT_SECONDS,
+                )
+                or ""
+            ).strip()
+            payload = _parse_json_payload(response_text)
+            if not isinstance(payload, dict):
+                raise ValueError("dream scene payload 非法")
+            self._emit_visual_event("dream.scene_generated", {"payload": payload})
+            return payload
+        except Exception as e:
+            self._emit_visual_event("dream.scene_failed", {"error": str(e)})
+            raise
 
     async def _archive_dream(self, report: DreamReport) -> str:
         """将梦写入 Markdown 梦札。"""
@@ -779,18 +830,44 @@ class DreamScheduler:
         }
 
     async def _load_memory_candidates(self) -> list[dict[str, Any]]:
-        """读取长期主题候选。"""
+        """从整个记忆图谱中采样候选节点 — 模拟海马体自由联想。
+
+        策略：
+        - 保留 top-5 高重要性节点（核心记忆更容易被激活）
+        - 从全图谱随机采样 15 个节点（任何记忆都可能闪回）
+        - 合并去重，总共 ~20 个候选
+        """
         if self._memory is None:
             return []
+
+        candidates: list[dict[str, Any]] = []
+
+        # 1. 高重要性核心节点（模拟高激活强度记忆）
         getter = getattr(self._memory, "list_dream_candidate_nodes", None)
         if callable(getter):
             try:
-                nodes = await getter(limit=12)
-                if isinstance(nodes, list):
-                    return [item for item in nodes if isinstance(item, dict)]
+                top_nodes = await getter(limit=5)
+                if isinstance(top_nodes, list):
+                    candidates.extend(item for item in top_nodes if isinstance(item, dict))
             except Exception as exc:  # noqa: BLE001
-                logger.debug(f"读取 dream memory candidates 失败：{exc}")
-        return []
+                logger.debug(f"读取 top memory candidates 失败：{exc}")
+
+        # 2. 全图谱随机采样（模拟海马体自由放电）
+        random_getter = getattr(self._memory, "list_random_file_nodes", None)
+        if callable(random_getter):
+            try:
+                random_nodes = await random_getter(limit=15)
+                if isinstance(random_nodes, list):
+                    existing_ids = {c.get("node_id") for c in candidates}
+                    candidates.extend(
+                        item for item in random_nodes
+                        if isinstance(item, dict) and item.get("node_id") not in existing_ids
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"随机采样 memory candidates 失败：{exc}")
+
+        random.shuffle(candidates)
+        return candidates
 
     async def _collect_day_residue(
         self,
@@ -940,16 +1017,30 @@ class DreamScheduler:
         self,
         memory_candidates: list[dict[str, Any]],
     ) -> list[DreamSeed]:
-        """收集梦滞后材料。"""
+        """收集延迟记忆 — 经典梦滞后 + 远期闪回。
+
+        仿生设计：人类做梦不只回溯一周内的记忆。研究表明梦中经常
+        出现数月甚至数年前的内容。远期记忆闪回是重要的做梦特征。
+        """
         if self._workspace is None:
             return []
+
+        # 70% 经典梦滞后（4-8天），30% 远期闪回（14-90天）
+        if random.random() < 0.3:
+            min_age, max_age, optimal_age = 14, 90, 30
+            seed_title = "很久以前的记忆碎片在深夜浮起"
+            seed_reason = "远期记忆闪回——大脑在深层整合中偶尔翻出被遗忘的旧事。"
+        else:
+            min_age, max_age, optimal_age = 4, 8, 6
+            seed_title = "几天前的材料悄悄回返"
+            seed_reason = "这批材料不算最新，却带着延迟后的个人意义，适合在梦里回返。"
 
         candidates: list[tuple[float, Path]] = []
         for path in self._iter_workspace_markdown_files():
             age_days = self._file_age_days(path)
-            if age_days is None or age_days < 4 or age_days > 8:
+            if age_days is None or age_days < min_age or age_days > max_age:
                 continue
-            distance_penalty = abs(age_days - 6)
+            distance_penalty = abs(age_days - optimal_age)
             score = max(0.0, 1.0 - distance_penalty * 0.2)
             candidates.append((score, path))
 
@@ -969,7 +1060,7 @@ class DreamScheduler:
             DreamSeed(
                 seed_id=f"seed_lag_{uuid.uuid4().hex[:6]}",
                 seed_type=DreamSeedType.DREAM_LAG.value,
-                title="几天前的材料悄悄回返",
+                title=seed_title,
                 summary="；".join(preview for preview in previews if preview) or "前几天的内容在今晚绕了一圈回来。",
                 core_refs=refs,
                 core_node_ids=core_node_ids,
@@ -982,7 +1073,7 @@ class DreamScheduler:
                 unfinished_score=0.4,
                 dreamability=0.74,
                 score=0.64,
-                tension_reason="这批材料不算最新，却带着延迟后的个人意义，适合在梦里回返。",
+                tension_reason=seed_reason,
             )
         ]
 
@@ -990,11 +1081,16 @@ class DreamScheduler:
         self,
         memory_candidates: list[dict[str, Any]],
     ) -> list[DreamSeed]:
-        """收集长期自我主题。"""
+        """收集长期自我主题。
+
+        仿生设计：不固定取前 3 个，而是从候选中随机采样，
+        让不同主题有机会在不同夜晚浮现。
+        """
         if not memory_candidates:
             return []
 
-        top_nodes = memory_candidates[:3]
+        sample_size = min(3, len(memory_candidates))
+        top_nodes = random.sample(memory_candidates, sample_size)
         refs = [str(item.get("file_path") or "").strip() for item in top_nodes if str(item.get("file_path") or "").strip()]
         titles = [str(item.get("title") or "").strip() or Path(ref).stem for item, ref in zip(top_nodes, refs, strict=False)]
         core_node_ids = [str(item.get("node_id") or "") for item in top_nodes if str(item.get("node_id") or "")]
@@ -1023,28 +1119,47 @@ class DreamScheduler:
         ]
 
     def _select_seed_candidates(self, candidates: list[DreamSeed]) -> list[DreamSeed]:
-        """按类型优先和总分选择最终种子。"""
+        """按类型优先 + 神经噪声选择最终种子。
+
+        仿生设计：人类做梦时前额叶皮层活动降低，神经元随机放电增加。
+        这种"噪声"是梦境多样性的关键来源。
+        """
         if not candidates:
             return []
 
-        by_type: dict[str, DreamSeed] = {}
-        for seed in sorted(candidates, key=lambda item: item.score, reverse=True):
-            by_type.setdefault(seed.seed_type, seed)
+        # 给每个种子加入神经噪声（模拟前额叶抑制下的随机激活）
+        scored: list[tuple[float, DreamSeed]] = []
+        for seed in candidates:
+            noise = random.gauss(0, _SEED_SCORE_TEMPERATURE)
+            effective = max(0.01, seed.score + noise)
+            scored.append((effective, seed))
 
-        selected = list(by_type.values())
-        selected.sort(key=lambda item: item.score, reverse=True)
+        # 按类型分组，每组取最高有效分
+        by_type: dict[str, tuple[float, DreamSeed]] = {}
+        for eff_score, seed in sorted(scored, key=lambda x: x[0], reverse=True):
+            by_type.setdefault(seed.seed_type, (eff_score, seed))
+
+        selected = [seed for _, seed in sorted(by_type.values(), key=lambda x: x[0], reverse=True)]
+
         if len(selected) >= _MAX_DREAM_SEEDS:
             return selected[:_MAX_DREAM_SEEDS]
 
-        existing_ids = {seed.seed_id for seed in selected}
-        for seed in sorted(candidates, key=lambda item: item.score, reverse=True):
-            if seed.seed_id in existing_ids:
-                continue
-            selected.append(seed)
-            existing_ids.add(seed.seed_id)
-            if len(selected) >= _MAX_DREAM_SEEDS:
-                break
-        return selected
+        # 剩余名额：加权随机采样（不是确定性 top-K）
+        existing_ids = {s.seed_id for s in selected}
+        remaining = [(eff, s) for eff, s in scored if s.seed_id not in existing_ids]
+        if remaining:
+            weights = [max(0.01, eff) for eff, _ in remaining]
+            total = sum(weights)
+            if total > 0:
+                extra_count = min(_MAX_DREAM_SEEDS - len(selected), len(remaining))
+                extras = random.choices(
+                    [s for _, s in remaining],
+                    weights=[w / total for w in weights],
+                    k=extra_count,
+                )
+                selected.extend(extras)
+
+        return selected[:_MAX_DREAM_SEEDS]
 
     def _collect_seed_node_ids(self, seeds: list[DreamSeed]) -> list[str]:
         """收集 REM 的主种子节点 ID。"""
@@ -1187,6 +1302,7 @@ class DreamScheduler:
 
     def enter_sleep(self) -> None:
         """通知调质层进入睡眠。"""
+        self._dreams_since_sleep_start = 0
         if self._inner_state is not None:
             self._inner_state.enter_sleep()
 
@@ -1239,6 +1355,9 @@ class DreamScheduler:
             "last_archive_path": self._last_archive_path,
             "active_residue": _residue_to_dict(self.get_active_residue()),
             "dream_history": [_report_to_dict(report) for report in self._dream_history[-_REMINDER_MAX_HISTORY:]],
+            "recent_seed_titles": [list(s) for s in self._recent_seed_titles],
+            "recent_dream_summaries": list(self._recent_dream_summaries),
+            "dreams_since_sleep_start": self._dreams_since_sleep_start,
         }
 
     def deserialize(self, data: dict[str, Any]) -> None:
@@ -1258,6 +1377,21 @@ class DreamScheduler:
                 if isinstance(item, dict):
                     restored.append(_report_from_dict(item))
             self._dream_history = restored
+
+        # 恢复仿生状态
+        seed_titles_raw = data.get("recent_seed_titles")
+        if isinstance(seed_titles_raw, list):
+            self._recent_seed_titles = deque(
+                (set(s) for s in seed_titles_raw if isinstance(s, list)),
+                maxlen=_DREAM_HISTORY_WINDOW,
+            )
+        summaries_raw = data.get("recent_dream_summaries")
+        if isinstance(summaries_raw, list):
+            self._recent_dream_summaries = deque(
+                (str(s) for s in summaries_raw if isinstance(s, str)),
+                maxlen=_DREAM_HISTORY_WINDOW,
+            )
+        self._dreams_since_sleep_start = int(data.get("dreams_since_sleep_start", 0))
 
         logger.info(f"做梦系统状态已恢复: last_dream={self._last_dream_time:.0f}")
 

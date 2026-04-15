@@ -143,8 +143,13 @@ class LifeMemoryService:
             from .memory_router import MemoryRouter
 
             MemoryRouter.broadcast(event_type, payload, source=source)
-        except Exception as e:
+        except (ImportError, RuntimeError, ConnectionError, AttributeError) as e:
+            # 预期的异常：模块未加载、路由未初始化、网络问题等
             logger.debug(f"可视化事件广播失败 ({event_type}): {e}")
+        except Exception:
+            # 意外异常：记录后抛出，避免静默失败
+            logger.exception(f"可视化事件遇到意外错误 ({event_type})")
+            raise
 
     @staticmethod
     def _normalize_file_path(file_path: str) -> str:
@@ -1758,6 +1763,48 @@ class LifeMemoryService:
                      access_count DESC,
                      activation_strength DESC,
                      updated_at DESC
+            LIMIT ?
+            """,
+            (NodeType.FILE.value, max(1, int(limit))),
+        )
+        results: List[Dict[str, Any]] = []
+        for row in cursor.fetchall():
+            results.append(
+                {
+                    "node_id": row["node_id"],
+                    "file_path": row["file_path"],
+                    "title": row["title"] or "",
+                    "activation_strength": float(row["activation_strength"] or 0.0),
+                    "access_count": int(row["access_count"] or 0),
+                    "emotional_valence": float(row["emotional_valence"] or 0.0),
+                    "emotional_arousal": float(row["emotional_arousal"] or 0.0),
+                    "importance": float(row["importance"] or 0.0),
+                    "updated_at": float(row["updated_at"] or 0.0),
+                }
+            )
+        return results
+
+    async def list_random_file_nodes(
+        self,
+        *,
+        limit: int = 15,
+    ) -> List[Dict[str, Any]]:
+        """随机采样文件节点 — 供做梦系统自由联想使用。
+
+        与 list_dream_candidate_nodes 不同，此方法使用 ORDER BY RANDOM()
+        从全图谱均匀采样，让任何记忆都有机会成为做梦素材。
+        """
+        if not self._initialized or not self._db:
+            return []
+
+        cursor = self._db.cursor()
+        cursor.execute(
+            """
+            SELECT node_id, file_path, title, activation_strength, access_count,
+                   emotional_valence, emotional_arousal, importance, updated_at
+            FROM memory_nodes
+            WHERE node_type = ?
+            ORDER BY RANDOM()
             LIMIT ?
             """,
             (NodeType.FILE.value, max(1, int(limit))),

@@ -36,8 +36,8 @@
     .toolbar button:hover { border-color: rgba(56,189,248,.4); }
     .toolbar button.active { background: rgba(56,189,248,.14); border-color: rgba(56,189,248,.45); }
     main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 400px; min-height: 0; }
-    #graph-wrap { position: relative; min-width: 0; }
-    #graph { width: 100%; height: 100%; }
+    #graph-wrap { position: relative; min-width: 0; display: flex; align-items: stretch; justify-content: stretch; overflow: hidden; }
+    #graph { flex: 1; min-width: 0; height: 100%; display: block; overflow: hidden; }
     #hover-card { position: absolute; z-index: 10; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(16px); border-radius: 14px; box-shadow: 0 10px 35px rgba(0,0,0,.28); }
     #hover-card { left: 18px; top: 18px; min-width: 260px; max-width: 360px; padding: 14px; pointer-events: none; opacity: 0; transition: opacity .15s ease; }
     
@@ -47,7 +47,8 @@
     #event-items::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
     
     .side h3, .side h4 { margin: 0 0 10px; font-size: 12px; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
-    .event-item { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+    .event-item { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 12px; animation: fadeIn 0.3s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
     .event-item:last-child { border-bottom: none; }
     .event-type { color: var(--accent); font-weight: 700; }
     .meta { color: var(--muted); font-size: 12px; }
@@ -282,112 +283,166 @@
     }
 
     async function loadGraph() {
-      const params = new URLSearchParams({
-        limit_nodes: String(nodeLimit()),
-        min_weight: String(minWeight())
-      });
-      if (currentMode === 'focus' && lastFocusId) params.set('focus_id', lastFocusId);
-      graphData = await fetchJSON(`api/graph?${params.toString()}`);
-      if (!Graph) initGraph();
-      Graph.graphData(graphData);
-      Graph.zoomToFit(400, 50);
-      refreshSelectionPanel();
+      try {
+        const params = new URLSearchParams({
+          limit_nodes: String(nodeLimit()),
+          min_weight: String(minWeight())
+        });
+        if (currentMode === 'focus' && lastFocusId) params.set('focus_id', lastFocusId);
+        graphData = await fetchJSON(`api/graph?${params.toString()}`);
+        if (!graphData || !graphData.nodes) graphData = { nodes: [], links: [] };
+        if (!Graph) initGraph();
+        Graph.graphData(graphData);
+        setTimeout(() => {
+          Graph.zoomToFit(400, 50);
+        }, 300);
+        refreshSelectionPanel();
+      } catch (err) {
+        console.error('Load Graph Error:', err);
+        pushEvent('error', `加载数据失败: ${err.message}`);
+      }
     }
 
     function initGraph() {
-      Graph = ForceGraph()(document.getElementById('graph'))
-        .backgroundColor('#06101e')
-        .graphData(graphData)
-        .nodeId('id')
-        .nodeLabel(node => `${node.title}\n${node.path || node.type}`)
-        .linkLabel(link => `${link.type} | weight=${fmt(link.weight, 3)} | activation=${link.activation_count || 0}${link.reason ? ` | ${link.reason}` : ''}`)
-        .nodeVal(node => {
-          const act = Math.max(node.activation || 0.05, 0.05);
-          return 2 + Math.pow(act, 0.7) * 6 + Math.min(node.degree || 0, 12) * 0.12;
-        })
-        .nodeColor(node => {
-          if (selectedNodes.has(node.id)) return '#ffffff';
-          if (changedNodes.has(node.id)) return '#f59e0b';
-          if (activatedNodes.has(node.id)) return '#8b5cf6';
-          if (searchNodes.has(node.id)) return '#38bdf8';
-          const base = COLORS[node.type] || '#94a3b8';
-          const alpha = 0.45 + Math.min(0.45, (node.importance || 0.3) * 0.45);
-          return colorWithAlpha(base, alpha);
-        })
-        .linkColor(link => {
-          const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
-          const targetId = typeof link.target === 'object' ? link.target.id : link.target;
-          const id = link.id || `${sourceId}__${targetId}`;
-          if (selectedEdges.has(id)) return '#ffffff';
-          if (activatedEdges.has(id)) return '#f59e0b';
-          const base = EDGE_COLORS[link.type] || '#94a3b8';
-          return colorWithAlpha(base, Math.min(0.9, 0.15 + (link.weight || 0) * 0.75));
-        })
-        .linkWidth(link => {
-          const weight = Math.max(0, Number(link.weight || 0));
-          const base = Math.max(0.5, Math.pow(weight, 1.5) * 5);
-          const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
-          const targetId = typeof link.target === 'object' ? link.target.id : link.target;
-          const id = link.id || `${sourceId}__${targetId}`;
-          return selectedEdges.has(id) ? base + 2 : base;
-        })
-        .onNodeClick(node => selectNode(node))
-        .onNodeHover(node => { hoverLink = null; hoverNode = node; renderHover(); document.getElementById('graph').style.cursor = node ? 'pointer' : 'default'; })
-        .onLinkHover(link => { hoverNode = null; hoverLink = link; renderHover(); })
-        .nodeCanvasObject((node, ctx, globalScale) => {
-          const size = 2 + Math.pow(Math.max(node.activation || 0.05, 0.05), 0.7) * 6;
-          if (selectedNodes.has(node.id) || searchNodes.has(node.id) || activatedNodes.has(node.id) || changedNodes.has(node.id)) {
-            ctx.beginPath();
-            ctx.arc(node.x, node.y, size + 5, 0, 2 * Math.PI);
-            ctx.fillStyle = selectedNodes.has(node.id)
-              ? 'rgba(255,255,255,.18)'
-              : changedNodes.has(node.id)
-                ? 'rgba(245,158,11,.18)'
-                : activatedNodes.has(node.id)
-                  ? 'rgba(139,92,246,.18)'
-                  : 'rgba(56,189,248,.18)';
-            ctx.fill();
-          }
-          ctx.beginPath();
-          ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
-          ctx.fillStyle = selectedNodes.has(node.id)
-            ? '#ffffff'
-            : changedNodes.has(node.id)
-              ? '#f59e0b'
-              : activatedNodes.has(node.id)
-                ? '#8b5cf6'
-                : searchNodes.has(node.id)
-                  ? '#38bdf8'
-                  : COLORS[node.type] || '#94a3b8';
-          ctx.fill();
+      try {
+        Graph = ForceGraph()(document.getElementById('graph'))
+          .backgroundColor('#06101e')
+          .graphData(graphData)
+          .nodeId('id')
+          .nodeLabel(node => `${node.title}\n${node.path || node.type}`)
+          .linkLabel(link => `${link.type} | weight=${fmt(link.weight, 3)} | activation=${link.activation_count || 0}${link.reason ? ` | ${link.reason}` : ''}`)
+          .nodeVal(node => {
+            const act = Math.max(Number(node.activation) || 0.05, 0.05);
+            return 2 + Math.pow(act, 0.7) * 6 + Math.min(Number(node.degree) || 0, 12) * 0.12;
+          })
+          .nodeColor(node => {
+            if (selectedNodes.has(node.id)) return '#ffffff';
+            if (changedNodes.has(node.id)) return '#f59e0b';
+            if (activatedNodes.has(node.id)) return '#8b5cf6';
+            if (searchNodes.has(node.id)) return '#38bdf8';
+            const base = COLORS[node.type] || '#94a3b8';
+            const alpha = 0.45 + Math.min(0.45, (Number(node.importance) || 0.3) * 0.45);
+            return colorWithAlpha(base, alpha);
+          })
+          .linkColor(link => {
+            const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+            const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+            const id = link.id || `${sourceId}__${targetId}`;
+            if (selectedEdges.has(id)) return '#ffffff';
+            if (activatedEdges.has(id)) return '#f59e0b';
+            const base = EDGE_COLORS[link.type] || '#94a3b8';
+            return colorWithAlpha(base, Math.min(0.9, 0.15 + (Number(link.weight) || 0) * 0.75));
+          })
+          .linkWidth(link => {
+            const weight = Math.max(0, Number(link.weight) || 0);
+            const base = Math.max(0.5, Math.pow(weight, 1.5) * 5);
+            const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+            const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+            const id = link.id || `${sourceId}__${targetId}`;
+            return selectedEdges.has(id) ? base + 2 : base;
+          })
+          .linkLineDash(link => {
+            return (Number(link.weight) || 0) < 0.3 ? [4, 4] : [];
+          })
+          .onNodeClick(node => selectNode(node))
+          .onNodeHover((node, prevNode, event) => { hoverLink = null; hoverNode = node; renderHover(event); document.getElementById('graph').style.cursor = node ? 'pointer' : 'default'; })
+          .onLinkHover((link, prevLink, event) => { hoverNode = null; hoverLink = link; renderHover(event); })
+          .nodeCanvasObject((node, ctx, globalScale) => {
+            try {
+              const act = Math.max(Number(node.activation) || 0.05, 0.05);
+              const size = 2 + Math.pow(act, 0.7) * 6;
+              if (selectedNodes.has(node.id) || searchNodes.has(node.id) || activatedNodes.has(node.id) || changedNodes.has(node.id)) {
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, size + 5, 0, 2 * Math.PI);
+                ctx.fillStyle = selectedNodes.has(node.id)
+                  ? 'rgba(255,255,255,.18)'
+                  : changedNodes.has(node.id)
+                    ? 'rgba(245,158,11,.18)'
+                    : activatedNodes.has(node.id)
+                      ? 'rgba(139,92,246,.18)'
+                      : 'rgba(56,189,248,.18)';
+                ctx.fill();
+              }
+              ctx.beginPath();
+              ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
+              ctx.fillStyle = selectedNodes.has(node.id)
+                ? '#ffffff'
+                : changedNodes.has(node.id)
+                  ? '#f59e0b'
+                  : activatedNodes.has(node.id)
+                    ? '#8b5cf6'
+                    : searchNodes.has(node.id)
+                      ? '#38bdf8'
+                      : COLORS[node.type] || '#94a3b8';
+              ctx.fill();
 
-          const showLabel = globalScale > 1.8 || selectedNodes.has(node.id) || searchNodes.has(node.id) || hoverNode === node;
-          if (showLabel) {
-            const label = node.title || node.id;
-            const fontSize = Math.max(10 / globalScale, 3);
-            ctx.font = `${fontSize}px sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'top';
-            const width = ctx.measureText(label).width;
-            ctx.fillStyle = 'rgba(3,8,18,.65)';
-            ctx.fillRect(node.x - width / 2 - 4, node.y + size + 2, width + 8, fontSize + 6);
-            ctx.fillStyle = 'rgba(229,238,252,.92)';
-            ctx.fillText(label, node.x, node.y + size + 5);
+              const showLabel = globalScale > 1.8 || selectedNodes.has(node.id) || searchNodes.has(node.id) || hoverNode === node;
+              if (showLabel) {
+                const label = node.title || node.id || "Unknown";
+                const fontSize = Math.max(10 / globalScale, 3);
+                ctx.font = `${fontSize}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                const width = ctx.measureText(label).width;
+                ctx.fillStyle = 'rgba(3,8,18,.65)';
+                ctx.fillRect(node.x - width / 2 - 4, node.y + size + 2, width + 8, fontSize + 6);
+                ctx.fillStyle = 'rgba(229,238,252,.92)';
+                ctx.fillText(label, node.x, node.y + size + 5);
+              }
+            } catch(err) {
+              // 静默处理单节点渲染异常，防止阻断整体刷新
+            }
+          });
+
+        // 调整全局引力
+        Graph.d3Force('charge').strength(-400);
+        Graph.d3Force('link').distance(150);
+
+        // 关键修复：确保图谱布局不会在一开始因为容器没量好尺寸缩到左上角
+        const container = document.getElementById('graph');
+        const resizeObserver = new ResizeObserver(entries => {
+          for (let entry of entries) {
+            const { width, height } = entry.contentRect;
+            if (width > 0 && height > 0) {
+              Graph.width(width);
+              Graph.height(height);
+              Graph.d3Force('center', d3.forceCenter(width / 2, height / 2));
+              Graph.zoomToFit(400, 50);
+            }
+          }
+        });
+        resizeObserver.observe(container);
+
+        Graph.onEngineStop(() => {
+          if (!window.__graph_ready) {
+            window.__graph_ready = true;
+            pushEvent('sys', '图谱渲染就绪');
           }
         });
 
-      // 调整全局引力
-      Graph.d3Force('charge').strength(-400);
-      Graph.d3Force('link').distance(100);
+      } catch (err) {
+        console.error('Init Graph Error:', err);
+        pushEvent('error', `图谱初始化失败: ${err.message}`);
+      }
     }
 
-    function renderHover() {
+    function renderHover(event) {
       if (!hoverNode && !hoverLink) {
         hoverCard.style.opacity = '0';
         hoverCard.innerHTML = '';
         return;
       }
       hoverCard.style.opacity = '1';
+
+      // 让 hoverCard 跟随鼠标
+      if (event) {
+        const rect = document.getElementById('graph').getBoundingClientRect();
+        let left = event.clientX - rect.left + 15;
+        let top = event.clientY - rect.top + 15;
+        hoverCard.style.left = `${left}px`;
+        hoverCard.style.top = `${top}px`;
+      }
+
       if (hoverLink) {
         hoverCard.innerHTML = `
           <div class="meta">边详情</div>

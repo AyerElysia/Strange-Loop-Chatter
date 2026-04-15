@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import ClassVar
+
+from pydantic import field_validator
 
 from src.core.components.base.config import BaseConfig, Field, SectionBase, config_section
 
@@ -270,3 +273,37 @@ class LifeEngineConfig(BaseConfig):
     snn: SNNSection = Field(default_factory=SNNSection)
     neuromod: NeuromodSection = Field(default_factory=NeuromodSection)
     dream: DreamSection = Field(default_factory=DreamSection)
+
+    @field_validator("settings")
+    @classmethod
+    def validate_sleep_wake_times(cls, v: SettingsSection) -> SettingsSection:
+        """验证睡眠/苏醒时间的格式和一致性。"""
+        sleep_time = getattr(v, "sleep_time", "") or ""
+        wake_time = getattr(v, "wake_time", "") or ""
+
+        # 检查时间格式
+        time_pattern = re.compile(r'^([01]\d|2[0-3]):([0-5]\d)$')
+
+        if sleep_time and not time_pattern.match(sleep_time):
+            raise ValueError(
+                f'sleep_time 格式必须是 HH:MM（24小时制），例如 "23:00"，收到: "{sleep_time}"'
+            )
+
+        if wake_time and not time_pattern.match(wake_time):
+            raise ValueError(
+                f'wake_time 格式必须是 HH:MM（24小时制），例如 "07:00"，收到: "{wake_time}"'
+            )
+
+        # 检查配对一致性
+        sleep_set = bool(sleep_time.strip())
+        wake_set = bool(wake_time.strip())
+
+        if sleep_set != wake_set:
+            raise ValueError(
+                "sleep_time 和 wake_time 必须同时设置或同时留空"
+            )
+
+        if sleep_set and wake_set and sleep_time == wake_time:
+            raise ValueError("sleep_time 和 wake_time 不能相同")
+
+        return v

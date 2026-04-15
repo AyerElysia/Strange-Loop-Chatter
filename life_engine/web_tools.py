@@ -15,6 +15,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from src.app.plugin_system.api import log_api
@@ -170,6 +171,50 @@ def _truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
     if max_chars <= 3:
         return text[:max_chars], True
     return text[: max_chars - 3] + "...", True
+
+
+def _get_workspace(plugin: Any) -> Path:
+    cfg = _get_life_config(plugin)
+    if cfg is not None:
+        workspace = cfg.settings.workspace_path
+    else:
+        workspace = str(Path(__file__).parent.parent.parent / "data" / "life_engine_workspace")
+    path = Path(workspace).resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _resolve_local_path(plugin: Any, raw_path: str) -> tuple[bool, Path | str]:
+    """解析本地文件路径，只允许 workspace 内的文件。"""
+    workspace = _get_workspace(plugin)
+    candidate = str(raw_path or "").strip()
+    if not candidate:
+        return False, "路径不能为空"
+
+    if candidate.startswith("file://"):
+        parsed = urllib.parse.urlparse(candidate)
+        if parsed.netloc and parsed.path:
+            candidate = f"{parsed.netloc}{parsed.path}"
+        elif parsed.netloc:
+            candidate = parsed.netloc
+        else:
+            candidate = parsed.path
+
+    try:
+        target = Path(candidate)
+        if not target.is_absolute():
+            target = (workspace / candidate).resolve()
+        else:
+            target = target.resolve()
+    except Exception as exc:  # noqa: BLE001
+        return False, f"本地路径解析失败: {exc}"
+
+    try:
+        target.relative_to(workspace)
+    except ValueError:
+        return False, f"本地路径超出工作空间范围。工作空间: {workspace}"
+
+    return True, target
 
 
 def _is_blocked_host(hostname: str) -> bool:
@@ -335,9 +380,15 @@ class LifeEngineWebSearchTool(BaseTool):
                 payload,
                 _resolve_search_timeout(self.plugin),
             )
-        except Exception as exc:  # noqa: BLE001
-            logger.error(f"nucleus_web_search 执行失败: {exc}", exc_info=True)
+        except RuntimeError as exc:
+            logger.error(f"nucleus_web_search 执行失败: {exc}")
             return False, {"error": str(exc)}
+        except asyncio.TimeoutError:
+            logger.error("nucleus_web_search 请求超时")
+            return False, {"error": "搜索请求超时"}
+        except OSError as exc:
+            logger.error(f"nucleus_web_search 网络错误: {exc}")
+            return False, {"error": f"网络错误: {exc}"}
 
         raw_results = response.get("results")
         if not isinstance(raw_results, list):
@@ -392,8 +443,9 @@ class LifeEngineBrowserFetchTool(BaseTool):
         "- ✓ 需要从页面中提炼信息用于后续思考或记录\n\n"
         "**何时不用：**\n"
         "- ✗ 还没有 URL，只是想先找资料 → 用 nucleus_web_search\n"
-        "- ✗ 想处理本地文件内容 → 用 read/grep/memory 工具\n\n"
-        "**安全约束：** 仅允许 http/https，禁止访问本地/内网地址。"
+        "- ✗ 想处理本地文件内容 → 优先用 read/grep/memory 工具\n"
+        "- ✗ 本地文件不是网页，但本工具也兼容 workspace 内的本地路径读取\n\n"
+        "**安全约束：** 公开网页仅允许 http/https；本地路径仅允许 workspace 内文件。"
     )
     chatter_allow: list[str] = ["life_engine_internal", "default_chatter"]
 
@@ -409,6 +461,41 @@ class LifeEngineBrowserFetchTool(BaseTool):
         target_url = str(url or "").strip()
         if not target_url:
             return False, {"error": "url 不能为空"}
+
+        resolved_max_chars = (
+            _resolve_default_fetch_max_chars(self.plugin)
+            if max_chars <= 0
+            else max(1, min(_MAX_FETCH_CHARS, int(max_chars)))
+        )
+
+        parsed = urllib.parse.urlparse(target_url)
+        local_like = parsed.scheme != "http" and parsed.scheme != "https"
+
+        if local_like:
+            ok, resolved = _resolve_local_path(self.plugin, target_url)
+            if not ok:
+                return False, {"error": str(resolved)}
+            target_path = resolved
+            try:
+                raw_content = target_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                return False, {"error": "文件编码错误，请尝试其他编码"}
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"nucleus_browser_fetch 读取本地文件失败: {exc}")
+                return False, {"error": f"读取本地文件失败: {exc}"}
+
+            truncated_content, truncated = _truncate_text(raw_content, resolved_max_chars)
+            return True, {
+                "action": "browser_fetch",
+                "provider": "local_file",
+                "url": target_url,
+                "result_url": str(target_path),
+                "extract_depth": extract_depth,
+                "content": truncated_content,
+                "content_length": len(truncated_content),
+                "truncated": truncated,
+                "title": target_path.name,
+            }
 
         ok, err = _validate_public_url(target_url)
         if not ok:
@@ -448,9 +535,15 @@ class LifeEngineBrowserFetchTool(BaseTool):
                 payload,
                 _resolve_extract_timeout(self.plugin),
             )
-        except Exception as exc:  # noqa: BLE001
-            logger.error(f"nucleus_browser_fetch 执行失败: {exc}", exc_info=True)
+        except RuntimeError as exc:
+            logger.error(f"nucleus_browser_fetch 执行失败: {exc}")
             return False, {"error": str(exc)}
+        except asyncio.TimeoutError:
+            logger.error("nucleus_browser_fetch 请求超时")
+            return False, {"error": "网页提取请求超时"}
+        except OSError as exc:
+            logger.error(f"nucleus_browser_fetch 网络错误: {exc}")
+            return False, {"error": f"网络错误: {exc}"}
 
         raw_results = response.get("results")
         if not isinstance(raw_results, list):

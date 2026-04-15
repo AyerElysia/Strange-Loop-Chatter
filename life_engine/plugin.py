@@ -64,6 +64,7 @@ class LifeEnginePlugin(BasePlugin):
         """返回插件提供的组件。"""
         from .snn_router import SNNRouter
         from .memory_router import MemoryRouter
+        from .dream_router import DreamRouter
 
         return [
             LifeEngineService,
@@ -71,6 +72,7 @@ class LifeEnginePlugin(BasePlugin):
             LifeEngineCommandHandler,
             SNNRouter,
             MemoryRouter,
+            DreamRouter,
             *ALL_TOOLS,
             *TODO_TOOLS,
             *MEMORY_TOOLS,

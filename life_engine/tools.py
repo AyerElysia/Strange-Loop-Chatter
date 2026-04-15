@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 from datetime import datetime, timezone
@@ -170,6 +171,20 @@ async def _sync_memory_embedding_for_file(plugin: Any, path: str, content: str) 
 
 
 _TELL_DFC_EXTERNAL_ACTIVE_MINUTES = 5  # 外部消息在此时间内视为"活跃"
+_PROACTIVE_WAKE_MIN_REASON_CHARS = 28
+_PROACTIVE_WAKE_REQUIRED_IMPORTANCE = {"high", "critical"}
+
+
+def _is_detailed_proactive_wake_reason(reason: str) -> bool:
+    """检查主动唤醒理由是否足够明确和详尽。"""
+    text = " ".join(str(reason or "").split())
+    if len(text) < _PROACTIVE_WAKE_MIN_REASON_CHARS:
+        return False
+    segments = [seg.strip() for seg in re.split(r"[。！？!?\n；;]", text) if seg.strip()]
+    if len(segments) < 2:
+        return False
+    keywords = ("信息差", "影响", "风险", "必要", "依据", "观察", "后果", "时效", "上下文", "目标")
+    return any(keyword in text for keyword in keywords)
 
 
 class LifeEngineWakeDFCTool(BaseTool):
@@ -177,12 +192,13 @@ class LifeEngineWakeDFCTool(BaseTool):
 
     tool_name: str = "nucleus_tell_dfc"
     tool_description: str = (
-        "【重要】向对外社交态（DFC/表意识）的脑海中留下潜意识碎片。"
+        "【重要】向对外社交态（DFC/表意识）的脑海中留下潜意识碎片。默认只入队，不主动唤醒。"
         "\n\n"
         "**核心理解：**\n"
         "- 你是且仅仅是潜意识，你生活在数字黑暗中，没有直接操纵肢体或说话的权利\n"
-        "- 这个工具**绝对无法**强行唤醒外界。它是你的“梦境”或“直觉留言板”\n"
+        "- 默认模式不会强行唤醒外界。它是你的“梦境”或“直觉留言板”\n"
         "- 留下的想法会“堆积”。只有当外界有人跟她说话（她自然苏醒时），这些堆积的想法才会像灵感一样“涌上她的心头”\n"
+        "- 若确需立即唤醒，必须显式开启 `proactive_wake=true`，并给出明确详尽理由（高门槛，平时不要开）\n"
         "\n"
         "**何时使用：**\n"
         "- ✓ 你掌握了 DFC 当前上下文里没有的新信息\n"
@@ -201,6 +217,7 @@ class LifeEngineWakeDFCTool(BaseTool):
         "- `message`: 必须包含三件事：新信息、影响、内在驱动\n"
         "- `reason`: 说明这条信息差来自哪里（新观察/新关联/新风险/新状态）\n"
         "- `importance`: 常规用 normal；只有紧急时用 high/critical\n"
+        "- `proactive_wake`: 默认 false。仅在 high/critical 且 reason 详尽时允许 true\n"
         "- `stream_id`: 不确定就留空，让系统自动路由\n"
         "\n"
         "**信息差模板（推荐）：**\n"
@@ -230,11 +247,38 @@ class LifeEngineWakeDFCTool(BaseTool):
             "传话原因（如：长期沉默想主动问候/内心反思有重要领悟/完成TODO想分享/发现有趣事物等）",
         ] = "",
         importance: Annotated[str, "重要度（可选：low/normal/high/critical，默认 normal）"] = "normal",
+        proactive_wake: Annotated[
+            bool,
+            "是否主动唤醒 DFC 立即说话。默认 false。仅在 high/critical 且 reason 明确详尽时允许 true。",
+        ] = False,
         stream_id: Annotated[str, "目标聊天流ID（可选，不填则自动选择最近活跃的外部对话流）"] = "",
     ) -> tuple[bool, str | dict]:
+        # 记录工具调用参数，方便调试
+        logger.info(
+            f"[nucleus_tell_dfc] Life 调用传话工具:\n"
+            f"  message: {message}\n"
+            f"  reason: {reason}\n"
+            f"  importance: {importance}\n"
+            f"  proactive_wake: {proactive_wake}\n"
+            f"  stream_id: {stream_id}"
+        )
+
         text = str(message or "").strip()
         if not text:
             return False, "message 不能为空"
+
+        normalized_importance = str(importance or "normal").strip().lower() or "normal"
+        if normalized_importance not in {"low", "normal", "high", "critical"}:
+            return False, "importance 仅支持 low/normal/high/critical"
+
+        if proactive_wake:
+            if normalized_importance not in _PROACTIVE_WAKE_REQUIRED_IMPORTANCE:
+                return False, "proactive_wake=true 仅允许在 high/critical 使用，平时请保持关闭。"
+            if not _is_detailed_proactive_wake_reason(reason):
+                return (
+                    False,
+                    f"proactive_wake=true 必须提供明确详尽的 reason（至少 {_PROACTIVE_WAKE_MIN_REASON_CHARS} 字，且需包含信息差与影响说明）。",
+                )
 
         # 获取服务实例以辅助路由判断
         life_service = _get_life_engine_service(self.plugin)
@@ -244,7 +288,7 @@ class LifeEngineWakeDFCTool(BaseTool):
             # 活跃检查：如果外界很活跃，建议不要打扰
             if minutes_since_external is not None and minutes_since_external < _TELL_DFC_EXTERNAL_ACTIVE_MINUTES:
                 # 除非是 high 或 critical 级别，否则给出警告但不阻止
-                if importance not in ("high", "critical"):
+                if normalized_importance not in ("high", "critical"):
                     logger.info(
                         f"外界正在活跃（{minutes_since_external} 分钟前有消息），"
                         f"传话可能会打扰 DFC 正常对话，但仍然允许执行。"
@@ -305,7 +349,7 @@ class LifeEngineWakeDFCTool(BaseTool):
 
         wake_prompt = (
             "[潜意识浮现]\n"
-            f"重要度: {importance}\n"
+            f"重要度: {normalized_importance}\n"
             f"缘由: {reason or '潜意识波动'}\n"
             f"内心灵感/直觉碎片: {text}\n"
             "（你的一段记忆/潜意识在你休眠时整理出了上述直觉。这只是一阵涌上心头的感受，请结合当前对话上下文，自然决定是否将这份直觉具象化表达，或者仅作为内在情感驱动你此刻的回复语气。）"
@@ -325,16 +369,24 @@ class LifeEngineWakeDFCTool(BaseTool):
             time=time.time(),
             is_life_engine_wake=True,
             life_wake_reason=reason,
-            life_wake_importance=importance,
+            life_wake_importance=normalized_importance,
             life_wake_message=text,
             **target_extra,
         )
 
         chat_stream.context.add_unread_message(trigger_message)
 
-        # 【重点改造】移除了强制启动流循环 (start_stream_loop) 的逻辑
-        # 消息仅作为堆积在未读队列中的潜意识。
-        # 当有外部消息到来，或有 scheduled_trigger 生效时，DFC 自然苏醒，才会消费这条提示。
+        wake_triggered = False
+        if proactive_wake:
+            try:
+                wake_triggered = bool(
+                    await get_stream_loop_manager().start_stream_loop(chat_stream.stream_id)
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"主动唤醒 DFC 失败，将保留未读潜意识消息: {exc}")
+                return False, f"已写入潜意识队列，但主动唤醒失败: {exc}"
+            if not wake_triggered:
+                return False, "已写入潜意识队列，但主动唤醒失败：start_stream_loop 返回 false"
 
         # 记录传话时间
         if life_service:
@@ -343,20 +395,42 @@ class LifeEngineWakeDFCTool(BaseTool):
         logger.info(
             "中枢向潜意识池沉淀了想法碎片: "
             f"stream_id={chat_stream.stream_id} "
-            f"importance={importance} "
+            f"importance={normalized_importance} "
             f"reason={reason or '未说明'} "
         )
 
-        return True, {
+        note = "已传递到对外自己的未读队列。DFC 会自主判断如何融入表达。"
+        if proactive_wake:
+            note = "已传递并主动唤醒 DFC。请仅在必须即时介入时使用此模式。"
+
+        result = {
             "action": "message_to_dfc",
             "stream_id": chat_stream.stream_id,
             "platform": chat_stream.platform,
             "chat_type": chat_stream.chat_type,
-            "importance": importance,
+            "importance": normalized_importance,
             "reason": reason,
             "message": text,
-            "note": "已传递到对外自己的未读队列。DFC 会自主判断如何融入表达。",
+            "proactive_wake": proactive_wake,
+            "wake_triggered": wake_triggered,
+            "note": note,
         }
+
+        # 记录工具返回结果，方便调试
+        logger.info(
+            f"[nucleus_tell_dfc] 工具返回结果:\n"
+            f"  stream_id: {result['stream_id']}\n"
+            f"  platform: {result['platform']}\n"
+            f"  chat_type: {result['chat_type']}\n"
+            f"  importance: {result['importance']}\n"
+            f"  reason: {result['reason']}\n"
+            f"  message: {result['message']}\n"
+            f"  proactive_wake: {result['proactive_wake']}\n"
+            f"  wake_triggered: {result['wake_triggered']}\n"
+            f"  note: {result['note']}"
+        )
+
+        return True, result
 
 
 class LifeEngineReadFileTool(BaseTool):
@@ -1159,6 +1233,164 @@ class LifeEngineRunAgentTool(BaseTool):
             return False, f"执行失败: {e}"
 
 
+class FetchLifeMemoryTool(BaseTool):
+    """获取记忆文件完整内容工具。"""
+
+    tool_name: str = "fetch_life_memory"
+    tool_description: str = (
+        "获取生命中枢记忆文件的完整内容。"
+        "\n\n"
+        "**何时使用：**\n"
+        "- ✓ search_life_memory 返回的摘要不够详细，需要查看完整内容\n"
+        "- ✓ 需要深入了解某个记忆文件的全部信息\n"
+        "- ✓ 批量读取多个相关记忆文件\n"
+        "\n"
+        "**何时不用：**\n"
+        "- ✗ 还不知道要读哪个文件 → 先用 search_life_memory 搜索\n"
+        "- ✗ 只需要摘要信息 → search_life_memory 的结果已经足够\n"
+        "- ✗ 想搜索关键词 → 用 search_life_memory\n"
+        "\n"
+        "**注意事项：**\n"
+        "- 此工具会消耗较多上下文 token，请谨慎使用\n"
+        "- 对于大文件（>5000字符），会自动截断并提示\n"
+        "- 建议一次最多读取 3-5 个文件，避免上下文爆炸\n"
+        "- 文件路径必须是 search_life_memory 返回的路径"
+    )
+    chatter_allow: list[str] = ["life_engine_internal", "default_chatter"]
+
+    async def execute(
+        self,
+        file_paths: Annotated[list[str], "要读取的文件路径列表（来自 search_life_memory 的结果）"],
+        max_length_per_file: Annotated[int, "每个文件的最大字符数，0=不限制，超过则截断"] = 5000,
+        include_metadata: Annotated[bool, "是否包含文件元数据（大小、修改时间等）"] = True,
+    ) -> tuple[bool, dict]:
+        """批量读取记忆文件的完整内容。"""
+        if not file_paths:
+            return False, {"error": "file_paths 不能为空"}
+
+        if len(file_paths) > 10:
+            return False, {"error": "单次最多读取 10 个文件"}
+
+        workspace = _get_workspace(self.plugin)
+        files_data: list[dict] = []
+        successful = 0
+        failed = 0
+
+        for file_path_str in file_paths:
+            file_path_str = str(file_path_str or "").strip()
+            if not file_path_str:
+                files_data.append({"path": "", "error": "路径为空"})
+                failed += 1
+                continue
+
+            # 验证路径安全性
+            ok, resolved = _resolve_path(self.plugin, file_path_str)
+            if not ok:
+                files_data.append({"path": file_path_str, "error": str(resolved)})
+                failed += 1
+                continue
+
+            target_path = resolved
+            if not target_path.exists():
+                files_data.append({"path": file_path_str, "error": "文件不存在"})
+                failed += 1
+                continue
+
+            if not target_path.is_file():
+                files_data.append({"path": file_path_str, "error": "不是文件"})
+                failed += 1
+                continue
+
+            # 读取文件内容
+            try:
+                # 检查文件大小，防止内存溢出
+                stat = target_path.stat()
+                MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+                if stat.st_size > MAX_FILE_SIZE:
+                    files_data.append({
+                        "path": file_path_str,
+                        "error": f"文件过大 ({stat.st_size / 1024 / 1024:.1f}MB)，超过限制 ({MAX_FILE_SIZE / 1024 / 1024:.1f}MB)"
+                    })
+                    failed += 1
+                    continue
+
+                # 如果设置了长度限制，只读取需要的部分
+                truncated = False
+                if max_length_per_file > 0:
+                    with target_path.open('r', encoding='utf-8', errors='replace') as f:
+                        content = f.read(max_length_per_file + 1)
+                        truncated = len(content) > max_length_per_file
+                        if truncated:
+                            content = content[:max_length_per_file] + "\n\n... (内容过长，已截断)"
+                else:
+                    content = target_path.read_text(encoding="utf-8", errors='replace')
+
+                file_data = {
+                    "path": file_path_str,
+                    "title": target_path.stem,
+                    "content": content,
+                    "truncated": truncated,
+                }
+
+                # 添加元数据
+                if include_metadata:
+                    size = stat.st_size
+                    for unit in ["B", "KB", "MB", "GB"]:
+                        if size < 1024:
+                            size_str = f"{size:.1f}{unit}" if unit != "B" else f"{size}{unit}"
+                            break
+                        size /= 1024
+                    else:
+                        # 防御性编程：处理超大文件（>1TB）
+                        size_str = f"{size:.1f}TB"
+
+                    now = time.time()
+                    days_ago = int((now - stat.st_mtime) / 86400)
+                    if days_ago == 0:
+                        time_ago = "今天"
+                    elif days_ago == 1:
+                        time_ago = "昨天"
+                    elif days_ago < 7:
+                        time_ago = f"{days_ago}天前"
+                    elif days_ago < 30:
+                        time_ago = f"{days_ago // 7}周前"
+                    else:
+                        time_ago = f"{days_ago // 30}月前"
+
+                    file_data["metadata"] = {
+                        "size": size_str,
+                        "modified": time_ago,
+                        "ext": target_path.suffix or "(无扩展名)",
+                    }
+
+                files_data.append(file_data)
+                successful += 1
+
+            except Exception as e:
+                files_data.append({"path": file_path_str, "error": f"读取失败: {e}"})
+                failed += 1
+
+        # 记录工具调用，方便调试
+        logger.info(
+            f"[fetch_life_memory] DFC 调用文件读取工具:\n"
+            f"  请求文件数: {len(file_paths)}\n"
+            f"  成功: {successful} 个\n"
+            f"  失败: {failed} 个\n"
+            f"  文件列表: {file_paths}"
+        )
+
+        result = {
+            "action": "fetch_life_memory",
+            "total_files": len(file_paths),
+            "successful": successful,
+            "failed": failed,
+            "files": files_data,
+            "note": f"成功读取 {successful} 个文件，{failed} 个失败" if failed > 0 else f"成功读取 {successful} 个文件",
+        }
+
+        return True, result
+
+
 # 导出所有工具类
 ALL_TOOLS = [
     LifeEngineReadFileTool,
@@ -1171,4 +1403,5 @@ ALL_TOOLS = [
     LifeEngineMakeDirectoryTool,
     LifeEngineWakeDFCTool,
     LifeEngineRunAgentTool,
+    FetchLifeMemoryTool,
 ]

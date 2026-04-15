@@ -251,6 +251,8 @@ class LifeEngineService(BaseService):
         self._inner_state: Any = None
         # 做梦系统
         self._dream_scheduler: Any = None
+        # 已注入到 DFC 上下文的梦记录（去重）
+        self._injected_dream_ids: set[str] = set()
 
     @property
     def memory_service(self) -> "LifeMemoryService | None":
@@ -741,16 +743,9 @@ class LifeEngineService(BaseService):
                 except Exception as e:
                     logger.warning(f"获取调质层状态失败: {e}")
 
-            # 2. 梦后余韵：通过当前轮 payload 注入，而不是写入固定 reminder
-            if self._dream_scheduler is not None:
-                try:
-                    dream_payload = str(
-                        self._dream_scheduler.get_active_residue_payload("dfc") or ""
-                    ).strip()
-                    if dream_payload:
-                        parts.append(f"【梦后余韵】{_shorten_text(dream_payload, max_length=180)}")
-                except Exception as e:
-                    logger.warning(f"获取梦后余韵失败: {e}")
+            # 2. 梦境影响说明：
+            # 完整梦境信息会以 assistant payload 方式注入 DFC 对话上下文，
+            # 这里不再重复塞入梦后余韵，避免每轮摘要重复污染上下文。
 
             # 3. 最近思考（最近1-2条心跳独白）
             heartbeat_events = [
@@ -789,6 +784,121 @@ class LifeEngineService(BaseService):
                     parts.append(f"【工具偏好】{', '.join(tool_names)}")
 
             return "\n".join(parts) if parts else ""
+
+    @staticmethod
+    def _to_jsonable(value: Any) -> Any:
+        """将复杂对象转换为 JSON 可序列化结构。"""
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, dict):
+            return {str(k): LifeEngineService._to_jsonable(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [LifeEngineService._to_jsonable(v) for v in value]
+        if isinstance(value, datetime):
+            return value.isoformat()
+
+        tolist = getattr(value, "tolist", None)
+        if callable(tolist):
+            try:
+                return LifeEngineService._to_jsonable(tolist())
+            except Exception:
+                pass
+
+        item = getattr(value, "item", None)
+        if callable(item):
+            try:
+                return item()
+            except Exception:
+                pass
+
+        enum_value = getattr(value, "value", None)
+        if isinstance(enum_value, (str, int, float, bool)):
+            return enum_value
+
+        return str(value)
+
+    def _build_dream_record_payload_text(self, report: Any) -> str:
+        """把 DreamReport 构建为完整 assistant payload 文本。"""
+        try:
+            payload_obj = self._to_jsonable(asdict(report))
+            payload_text = json.dumps(payload_obj, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            logger.warning(f"序列化梦记录失败: {exc}")
+            return ""
+
+        return (
+            "[梦境记录]\n"
+            "<dream_record>\n"
+            f"{payload_text}\n"
+            "</dream_record>"
+        )
+
+    async def _pick_latest_external_stream_id_for_dream(self) -> str:
+        """选择最近的外部对话流作为梦记录注入目标。"""
+        async with self._get_lock():
+            candidates = list(self._pending_events) + list(self._event_history)
+
+        for event in reversed(candidates):
+            if event.event_type != EventType.MESSAGE:
+                continue
+            stream_id = str(event.stream_id or "").strip()
+            if not stream_id:
+                continue
+            source = str(event.source or "").strip()
+            if source == _INTERNAL_PLATFORM:
+                continue
+            return stream_id
+        return ""
+
+    async def _inject_dream_report_to_dfc_payloads(
+        self,
+        report: Any,
+        *,
+        trigger: str,
+    ) -> None:
+        """把完整梦境记录作为 assistant payload 注入 DFC。"""
+        dream_id = str(getattr(report, "dream_id", "") or "").strip()
+        if not dream_id:
+            return
+        if dream_id in self._injected_dream_ids:
+            return
+
+        stream_id = await self._pick_latest_external_stream_id_for_dream()
+        if not stream_id:
+            logger.info(
+                f"梦记录未注入 DFC（无可用目标流）: dream_id={dream_id} trigger={trigger}"
+            )
+            return
+
+        payload_text = self._build_dream_record_payload_text(report)
+        if not payload_text:
+            return
+
+        try:
+            from default_chatter import plugin as default_chatter_plugin_module
+
+            push_runtime_assistant_injection = getattr(
+                default_chatter_plugin_module,
+                "push_runtime_assistant_injection",
+                None,
+            )
+            if not callable(push_runtime_assistant_injection):
+                logger.warning("默认聊天未提供 runtime assistant 注入接口，跳过梦记录注入")
+                return
+
+            push_runtime_assistant_injection(
+                stream_id,
+                payload_text,
+            )
+            self._injected_dream_ids.add(dream_id)
+            if len(self._injected_dream_ids) > 512:
+                self._injected_dream_ids.clear()
+                self._injected_dream_ids.add(dream_id)
+            logger.info(
+                f"已将完整梦记录注入 DFC payload 队列: stream={stream_id[:8]} dream_id={dream_id} trigger={trigger}"
+            )
+        except Exception as exc:
+            logger.warning(f"注入梦记录到 DFC payload 失败: {exc}")
 
     def _workspace_dir(self) -> Path:
         """返回 life workspace 目录。"""
@@ -850,6 +960,46 @@ class LifeEngineService(BaseService):
 
         return "\n\n".join(part for part in parts if part.strip())
 
+    def _get_file_metadata(self, file_path: Path) -> dict[str, str]:
+        """获取文件元数据。"""
+        try:
+            if not file_path.exists():
+                return {"ext": "?", "time_ago": "未知", "size": "0B"}
+
+            stat = file_path.stat()
+
+            # 文件扩展名
+            ext = file_path.suffix or "(无扩展名)"
+
+            # 相对时间
+            now = time.time()
+            days_ago = int((now - stat.st_mtime) / 86400)
+            if days_ago == 0:
+                time_ago = "今天"
+            elif days_ago == 1:
+                time_ago = "昨天"
+            elif days_ago < 7:
+                time_ago = f"{days_ago}天前"
+            elif days_ago < 30:
+                time_ago = f"{days_ago // 7}周前"
+            else:
+                time_ago = f"{days_ago // 30}月前"
+
+            # 文件大小
+            size = stat.st_size
+            for unit in ["B", "KB", "MB", "GB"]:
+                if size < 1024:
+                    size_str = f"{size:.1f}{unit}" if unit != "B" else f"{size}{unit}"
+                    break
+                size /= 1024
+            else:
+                size_str = f"{size:.1f}TB"
+
+            return {"ext": ext, "time_ago": time_ago, "size": size_str}
+        except Exception as e:
+            logger.debug(f"获取文件元数据失败 {file_path}: {e}")
+            return {"ext": "?", "time_ago": "未知", "size": "0B"}
+
     async def search_actor_memory(self, query: str, top_k: int = 5) -> str:
         """供 DFC 深度检索 life memory。"""
         query_text = str(query or "").strip()
@@ -862,34 +1012,80 @@ class LifeEngineService(BaseService):
 
         results = await memory_service.search_memory(query_text, top_k=max(1, int(top_k)))
         if not results:
+            logger.info(
+                f"[search_actor_memory] 记忆检索无结果:\n"
+                f"  query: {query_text}\n"
+                f"  top_k: {top_k}"
+            )
             return ""
 
+        workspace = self._workspace_dir()
         direct_lines: list[str] = []
         associated_lines: list[str] = []
-        for result in results[: max(1, int(top_k)) * 2]:
+
+        # 分别收集直接命中和联想结果
+        for result in results:
             title = result.title or Path(result.file_path).name or result.file_path
-            snippet = _shorten_text(" ".join((result.snippet or "").split()), max_length=120)
+
+            # 增加摘要长度到 250 字符
+            snippet = _shorten_text(" ".join((result.snippet or "").split()), max_length=250)
+
+            # 获取文件元数据
+            file_meta = self._get_file_metadata(workspace / result.file_path)
+            meta_str = f"{file_meta['ext']} | {file_meta['time_ago']} | {file_meta['size']}"
+
+            # 构建基础行
             line = (
                 f"- {title} [{result.file_path}] "
-                f"(相关度 {result.relevance:.2f})：{snippet or '无摘要'}"
+                f"(相关度 {result.relevance:.2f} | {meta_str})\n"
+                f"  摘要：{snippet or '无摘要'}"
             )
+
             if result.source == "associated":
+                # 增加联想原因长度到 150 字符
                 reason = _shorten_text(
                     " ".join((result.association_reason or "").split()),
-                    max_length=60,
+                    max_length=150,
                 )
-                if reason:
-                    line += f"；联想：{reason}"
+                # 格式化联想路径
+                path_str = " → ".join(result.association_path[-3:]) if result.association_path else ""
+                if reason or path_str:
+                    line += f"\n  联想：{reason or path_str}"
                 associated_lines.append(line)
             else:
                 direct_lines.append(line)
 
+            # 如果两类结果都已足够，提前退出
+            if len(direct_lines) >= top_k and len(associated_lines) >= top_k:
+                break
+
         parts: list[str] = []
         if direct_lines:
-            parts.append("【直接命中的记忆】\n" + "\n".join(direct_lines[:top_k]))
+            parts.append(
+                f"【直接命中的记忆】({len(direct_lines[:top_k])}条)\n" +
+                "\n\n".join(direct_lines[:top_k])
+            )
         if associated_lines:
-            parts.append("【联想扩散结果】\n" + "\n".join(associated_lines[:top_k]))
-        return "\n\n".join(parts)
+            parts.append(
+                f"【联想扩散结果】({len(associated_lines[:top_k])}条)\n" +
+                "\n\n".join(associated_lines[:top_k])
+            )
+
+        # 添加工具提示
+        footer = "\n\n💡 提示：以上仅为摘要。如需查看完整内容，可使用 fetch_life_memory 工具读取文件。"
+        final_result = "\n\n".join(parts) + footer
+
+        # 记录检索结果，方便调试
+        logger.info(
+            f"[search_actor_memory] 记忆检索完成:\n"
+            f"  query: {query_text}\n"
+            f"  top_k: {top_k}\n"
+            f"  直接命中: {len(direct_lines)} 条\n"
+            f"  联想结果: {len(associated_lines)} 条\n"
+            f"  返回内容:\n{final_result}"
+        )
+
+        return final_result
 
     async def record_message(self, message: Message, direction: str = "received") -> None:
         """记录一条来自聊天流的消息事件。"""
@@ -1423,6 +1619,12 @@ class LifeEngineService(BaseService):
             "7. **联网搜索** → `nucleus_web_search` - 了解外部世界的新信息",
             "8. **网页浏览** → `nucleus_browser_fetch` - 深入阅读某个网页",
             "",
+            "### 🧱 工具边界",
+            "",
+            "- `nucleus_search_memory` 是历史检索，不要拿它反复重搜同一个主题；如果同一轮已经搜过一次且没有新线索，就换工具或先收束结论。",
+            "- 明确的本地文件路径、notes/markdown、`file://` 之类优先用 `nucleus_read_file` / `nucleus_grep_file`；`nucleus_browser_fetch` 也兼容 workspace 内本地路径，但主职仍是网页提取。",
+            "- `nucleus_browser_fetch` 只适合公开的 `http/https` 页面，内网地址仍然禁止。",
+            "",
             "### 🧭 `nucleus_tell_dfc` 的核心判定：信息差",
             "",
             "判断标准不是语气，而是：**你是否握有 DFC 目前没有的增量信息**。",
@@ -1437,6 +1639,7 @@ class LifeEngineService(BaseService):
             "- 没有信息差，只是在复述已知内容",
             "- 只是把动作要求丢给 DFC（任务分配）",
             "- 直接转发用户对 life 的命令原句",
+            "- 平时不要主动唤醒 DFC（`proactive_wake` 默认必须是 false）",
             "",
             "简化决策：",
             "- 有信息差 → tell_dfc",
@@ -1449,6 +1652,7 @@ class LifeEngineService(BaseService):
             '  "message": "[信息差] ... [影响] ... [内在驱动] ...",',
             '  "reason": "新观察 | 新关联 | 新风险 | 新状态",',
             '  "importance": "normal",',
+            '  "proactive_wake": false,',
             '  "stream_id": ""',
             "}",
             "```",
@@ -1458,6 +1662,7 @@ class LifeEngineService(BaseService):
             "- `message` 不是给 DFC 分配动作，而是补齐认知盲区",
             "- `reason` 必须标明信息差类型，不要写“随便说说”",
             "- `importance` 默认 `normal`；只有紧急影响对话方向才用 `high/critical`",
+            "- `proactive_wake` 默认必须 `false`；仅当必须立即介入且 reason 明确详尽时才允许 `true`",
             "- `stream_id` 不确定就留空，让系统自动选最近活跃流",
             "",
             "表达示例：",
@@ -1988,6 +2193,10 @@ class LifeEngineService(BaseService):
                                 event_history = list(self._event_history)
                             report = await self._dream_scheduler.run_dream_cycle(event_history)
                             await self._save_runtime_context()
+                            await self._inject_dream_report_to_dfc_payloads(
+                                report,
+                                trigger="sleep_window",
+                            )
                             logger.info(
                                 f"🌙 做梦完成: dream_id={report.dream_id} "
                                 f"duration={report.duration_seconds:.1f}s"
@@ -2042,6 +2251,10 @@ class LifeEngineService(BaseService):
                                 event_history = list(self._event_history)
                             report = await self._dream_scheduler.run_dream_cycle(event_history)
                             await self._save_runtime_context()
+                            await self._inject_dream_report_to_dfc_payloads(
+                                report,
+                                trigger="daytime_nap",
+                            )
                             logger.info(
                                 f"💤 白天小憩完成: dream_id={report.dream_id} "
                                 f"duration={report.duration_seconds:.1f}s"
@@ -2182,6 +2395,10 @@ class LifeEngineService(BaseService):
                 event_history = list(self._event_history)
             report = await dream.run_dream_cycle(event_history)
             await self._save_runtime_context()
+            await self._inject_dream_report_to_dfc_payloads(
+                report,
+                trigger="manual",
+            )
 
             logger.info(
                 "life_engine 手动做梦完成: "
