@@ -17,7 +17,7 @@ async def test_memory_service():
     # 测试导入
     print("\n1. 测试模块导入...")
     try:
-        from plugins.life_engine.memory_service import (
+        from plugins.life_engine.memory import (
             LifeMemoryService,
             MemoryNode,
             MemoryEdge,

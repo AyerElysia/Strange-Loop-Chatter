@@ -397,7 +397,7 @@
         // 调整全局引力
         Graph.d3Force('charge').strength(-400);
         Graph.d3Force('link').distance(150);
-
+        
         // 关键修复：确保图谱布局不会在一开始因为容器没量好尺寸缩到左上角
         const container = document.getElementById('graph');
         const resizeObserver = new ResizeObserver(entries => {
@@ -433,7 +433,7 @@
         return;
       }
       hoverCard.style.opacity = '1';
-
+      
       // 让 hoverCard 跟随鼠标
       if (event) {
         const rect = document.getElementById('graph').getBoundingClientRect();
