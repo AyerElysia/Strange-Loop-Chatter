@@ -1,0 +1,600 @@
+"""life_engine 网络搜索与浏览工具。
+
+提供两类能力（均基于 Tavily API）：
+1. nucleus_web_search：联网检索最新信息
+2. nucleus_browser_fetch：像“浏览器打开页面”一样提取网页正文
+"""
+
+from __future__ import annotations
+
+import asyncio
+import ipaddress
+import json
+import os
+import threading
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Annotated, Any, Literal
+
+from src.app.plugin_system.api import log_api
+from src.core.components import BaseTool
+
+from ..core.config import LifeEngineConfig
+
+logger = log_api.get_logger("life_engine.web_tools")
+
+_DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com"
+_DEFAULT_SEARCH_TIMEOUT_SECONDS = 30
+_DEFAULT_EXTRACT_TIMEOUT_SECONDS = 60
+_DEFAULT_SEARCH_MAX_RESULTS = 5
+_DEFAULT_FETCH_MAX_CHARS = 12000
+_MAX_RESULTS = 20
+_MAX_FETCH_CHARS = 50000
+_MAX_RAW_CONTENT_CHARS = 4000
+
+_BLOCKED_HOSTS = {
+    "localhost",
+    "127.0.0.1",
+    "::1",
+}
+
+_TAVILY_TARGET_LOCK = threading.Lock()
+_TAVILY_TARGET_CURSOR = 0
+
+
+def _get_life_config(plugin: Any) -> LifeEngineConfig | None:
+    cfg = getattr(plugin, "config", None)
+    if isinstance(cfg, LifeEngineConfig):
+        return cfg
+    return None
+
+
+def _clean_string_list(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    """清洗字符串列表，移除空白项。"""
+    if not values:
+        return []
+    cleaned: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            cleaned.append(text)
+    return cleaned
+
+
+def _resolve_tavily_api_keys(plugin: Any) -> list[str]:
+    cfg = _get_life_config(plugin)
+    if cfg is not None:
+        keys = _clean_string_list(getattr(cfg.web, "tavily_api_keys", []))
+        if keys:
+            return keys
+        key = str(cfg.web.tavily_api_key or "").strip()
+        if key:
+            return [key]
+    return []
+
+
+def _resolve_tavily_base_urls(plugin: Any) -> list[str]:
+    cfg = _get_life_config(plugin)
+    if cfg is not None:
+        base_urls = _clean_string_list(getattr(cfg.web, "tavily_base_urls", []))
+        if base_urls:
+            return base_urls
+        base = str(cfg.web.tavily_base_url or "").strip()
+        if base:
+            return [base]
+    env_bases = _clean_string_list(
+        [part.strip() for part in str(os.getenv("TAVILY_BASE_URLS") or "").split(",")]
+    )
+    if env_bases:
+        return env_bases
+    env_base = str(os.getenv("TAVILY_BASE_URL") or "").strip()
+    if env_base:
+        return [env_base]
+    return [_DEFAULT_TAVILY_BASE_URL]
+
+
+def _pick_tavily_target(plugin: Any) -> tuple[str, str]:
+    """选择本次 Tavily 请求要使用的 key/base_url。
+
+    兼容旧配置（单 key / 单 base_url），也支持多 key / 多 base_url 轮询。
+    当 key 与 base_url 数量不同，二者分别按自己的长度循环。
+    """
+    keys = _resolve_tavily_api_keys(plugin)
+    if not keys:
+        raise RuntimeError(
+            "未配置 Tavily API Key。请在 config/plugins/life_engine/config.toml "
+            "中设置 [web].tavily_api_key，或 [web].tavily_api_keys。"
+        )
+
+    base_urls = _resolve_tavily_base_urls(plugin)
+    if not base_urls:
+        base_urls = [_DEFAULT_TAVILY_BASE_URL]
+
+    global _TAVILY_TARGET_CURSOR
+    with _TAVILY_TARGET_LOCK:
+        cursor = _TAVILY_TARGET_CURSOR
+        _TAVILY_TARGET_CURSOR += 1
+
+    api_key = keys[cursor % len(keys)]
+    base_url = base_urls[cursor % len(base_urls)]
+    return api_key, base_url
+
+
+def _resolve_search_timeout(plugin: Any) -> int:
+    cfg = _get_life_config(plugin)
+    if cfg is not None:
+        return max(1, min(120, int(cfg.web.search_timeout_seconds)))
+    return _DEFAULT_SEARCH_TIMEOUT_SECONDS
+
+
+def _resolve_extract_timeout(plugin: Any) -> int:
+    cfg = _get_life_config(plugin)
+    if cfg is not None:
+        return max(1, min(180, int(cfg.web.extract_timeout_seconds)))
+    return _DEFAULT_EXTRACT_TIMEOUT_SECONDS
+
+
+def _resolve_default_search_max_results(plugin: Any) -> int:
+    cfg = _get_life_config(plugin)
+    if cfg is not None:
+        return max(1, min(_MAX_RESULTS, int(cfg.web.default_search_max_results)))
+    return _DEFAULT_SEARCH_MAX_RESULTS
+
+
+def _resolve_default_fetch_max_chars(plugin: Any) -> int:
+    cfg = _get_life_config(plugin)
+    if cfg is not None:
+        return max(500, min(_MAX_FETCH_CHARS, int(cfg.web.default_fetch_max_chars)))
+    return _DEFAULT_FETCH_MAX_CHARS
+
+
+def _resolve_endpoint(base_url: str, path: str) -> str:
+    base = base_url.strip() if base_url else _DEFAULT_TAVILY_BASE_URL
+    if not base:
+        base = _DEFAULT_TAVILY_BASE_URL
+    try:
+        parsed = urllib.parse.urlparse(base)
+        if parsed.scheme not in ("http", "https"):
+            base = _DEFAULT_TAVILY_BASE_URL
+    except Exception:
+        base = _DEFAULT_TAVILY_BASE_URL
+    return base.rstrip("/") + "/" + path.lstrip("/")
+
+
+def _truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
+    if max_chars <= 0:
+        return "", True
+    if len(text) <= max_chars:
+        return text, False
+    if max_chars <= 3:
+        return text[:max_chars], True
+    return text[: max_chars - 3] + "...", True
+
+
+def _get_workspace(plugin: Any) -> Path:
+    cfg = _get_life_config(plugin)
+    if cfg is not None:
+        workspace = cfg.settings.workspace_path
+    else:
+        workspace = str(Path(__file__).parent.parent.parent / "data" / "life_engine_workspace")
+    path = Path(workspace).resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _resolve_local_path(plugin: Any, raw_path: str) -> tuple[bool, Path | str]:
+    """解析本地文件路径，只允许 workspace 内的文件。"""
+    workspace = _get_workspace(plugin)
+    candidate = str(raw_path or "").strip()
+    if not candidate:
+        return False, "路径不能为空"
+
+    if candidate.startswith("file://"):
+        parsed = urllib.parse.urlparse(candidate)
+        if parsed.netloc and parsed.path:
+            candidate = f"{parsed.netloc}{parsed.path}"
+        elif parsed.netloc:
+            candidate = parsed.netloc
+        else:
+            candidate = parsed.path
+
+    try:
+        target = Path(candidate)
+        if not target.is_absolute():
+            target = (workspace / candidate).resolve()
+        else:
+            target = target.resolve()
+    except Exception as exc:  # noqa: BLE001
+        return False, f"本地路径解析失败: {exc}"
+
+    try:
+        target.relative_to(workspace)
+    except ValueError:
+        return False, f"本地路径超出工作空间范围。工作空间: {workspace}"
+
+    return True, target
+
+
+def _is_blocked_host(hostname: str) -> bool:
+    host = hostname.strip().strip("[]").lower()
+    if not host:
+        return True
+    if host in _BLOCKED_HOSTS or host.endswith(".local"):
+        return True
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _validate_public_url(url: str) -> tuple[bool, str]:
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return False, "URL 格式无效"
+
+    if parsed.scheme not in ("http", "https"):
+        return False, "仅支持 http/https URL"
+    if not parsed.netloc:
+        return False, "URL 缺少主机名"
+    if not parsed.hostname:
+        return False, "URL 主机名无效"
+    if _is_blocked_host(parsed.hostname):
+        return False, "出于安全原因，禁止访问本地或内网地址"
+    return True, ""
+
+
+def _sync_post_json(url: str, payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url=url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "life_engine/3.3.0",
+        },
+        method="POST",
+    )
+    # Tavily 请求默认直连，避免被全局 http_proxy/https_proxy 劫持导致 TLS EOF。
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(req, timeout=timeout_seconds) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            status = getattr(resp, "status", 200)
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            detail = str(exc)
+        raise RuntimeError(f"Tavily 请求失败（HTTP {exc.code}）: {detail[:500]}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Tavily 网络请求失败: {exc.reason}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"Tavily 请求异常: {exc}") from exc
+
+    try:
+        data = json.loads(raw) if raw else {}
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Tavily 返回了非 JSON 响应（HTTP {status}）") from exc
+
+    if status >= 400:
+        raise RuntimeError(f"Tavily 请求失败（HTTP {status}）: {str(data)[:500]}")
+    if not isinstance(data, dict):
+        raise RuntimeError("Tavily 返回格式异常：顶层不是对象")
+    return data
+
+
+async def _tavily_post_json(
+    plugin: Any,
+    endpoint: str,
+    payload: dict[str, Any],
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    api_key, base_url = _pick_tavily_target(plugin)
+    body = dict(payload)
+    body["api_key"] = api_key
+    url = _resolve_endpoint(base_url, endpoint)
+    return await asyncio.to_thread(_sync_post_json, url, body, timeout_seconds)
+
+
+class LifeEngineWebSearchTool(BaseTool):
+    """网络搜索工具（Tavily）。"""
+
+    tool_name: str = "nucleus_web_search"
+    tool_description: str = (
+        "联网搜索最新信息（基于 Tavily Search API）。\n\n"
+        "**何时使用：**\n"
+        "- ✓ 需要最新信息（新闻、近期动态、实时变化）\n"
+        "- ✓ 需要跨站点快速收集多个来源\n"
+        "- ✓ 需要按时间范围或域名过滤结果\n\n"
+        "**何时不用：**\n"
+        "- ✗ 已经有明确 URL，想直接读网页正文 → 用 nucleus_browser_fetch\n"
+        "- ✗ 想回忆自己写过的内容 → 用 nucleus_search_memory / nucleus_grep_file\n\n"
+        "**注意：** 这是外部网络信息，可能有偏差，关键事实请交叉核验。"
+    )
+    chatter_allow: list[str] = ["life_engine_internal", "default_chatter"]
+
+    async def execute(
+        self,
+        query: Annotated[str, "搜索查询语句"],
+        search_depth: Annotated[Literal["basic", "advanced"], "搜索深度：basic/advanced"] = "basic",
+        topic: Annotated[Literal["general", "news", "finance"], "主题类型"] = "general",
+        max_results: Annotated[int, "返回数量（1-20）"] = 0,
+        include_answer: Annotated[bool, "是否包含 Tavily 生成的答案摘要"] = False,
+        time_range: Annotated[Literal["", "day", "week", "month", "year"], "时间范围过滤"] = "",
+        include_domains: Annotated[list[str] | None, "仅包含这些域名"] = None,
+        exclude_domains: Annotated[list[str] | None, "排除这些域名"] = None,
+        include_raw_content: Annotated[bool, "是否附带较长原文片段（会截断）"] = False,
+    ) -> tuple[bool, dict[str, Any]]:
+        q = str(query or "").strip()
+        if not q:
+            return False, {"error": "query 不能为空"}
+
+        if search_depth not in ("basic", "advanced"):
+            return False, {"error": "search_depth 必须是 basic 或 advanced"}
+        if topic not in ("general", "news", "finance"):
+            return False, {"error": "topic 必须是 general/news/finance"}
+        if time_range not in ("", "day", "week", "month", "year"):
+            return False, {"error": "time_range 必须是 day/week/month/year 或空"}
+        if include_domains and exclude_domains:
+            return False, {"error": "include_domains 和 exclude_domains 不能同时设置"}
+
+        resolved_max_results = (
+            _resolve_default_search_max_results(self.plugin)
+            if max_results <= 0
+            else max(1, min(_MAX_RESULTS, int(max_results)))
+        )
+
+        payload: dict[str, Any] = {
+            "query": q,
+            "max_results": resolved_max_results,
+            "search_depth": search_depth,
+            "topic": topic,
+            "include_answer": bool(include_answer),
+        }
+        if time_range:
+            payload["time_range"] = time_range
+        if include_domains:
+            payload["include_domains"] = [d.strip() for d in include_domains if str(d).strip()]
+        if exclude_domains:
+            payload["exclude_domains"] = [d.strip() for d in exclude_domains if str(d).strip()]
+
+        try:
+            response = await _tavily_post_json(
+                self.plugin,
+                "/search",
+                payload,
+                _resolve_search_timeout(self.plugin),
+            )
+        except RuntimeError as exc:
+            logger.error(f"nucleus_web_search 执行失败: {exc}")
+            return False, {"error": str(exc)}
+        except asyncio.TimeoutError:
+            logger.error("nucleus_web_search 请求超时")
+            return False, {"error": "搜索请求超时"}
+        except OSError as exc:
+            logger.error(f"nucleus_web_search 网络错误: {exc}")
+            return False, {"error": f"网络错误: {exc}"}
+
+        raw_results = response.get("results")
+        if not isinstance(raw_results, list):
+            raw_results = []
+
+        results: list[dict[str, Any]] = []
+        for item in raw_results:
+            if not isinstance(item, dict):
+                continue
+            result_item: dict[str, Any] = {
+                "title": str(item.get("title") or ""),
+                "url": str(item.get("url") or ""),
+                "snippet": str(item.get("content") or ""),
+            }
+            score = item.get("score")
+            if isinstance(score, (int, float)):
+                result_item["score"] = round(float(score), 4)
+            published = item.get("published_date")
+            if isinstance(published, str) and published.strip():
+                result_item["published"] = published.strip()
+            if include_raw_content and isinstance(item.get("raw_content"), str):
+                raw_content, _ = _truncate_text(str(item.get("raw_content")), _MAX_RAW_CONTENT_CHARS)
+                result_item["raw_content"] = raw_content
+            results.append(result_item)
+
+        output: dict[str, Any] = {
+            "action": "web_search",
+            "provider": "tavily",
+            "query": q,
+            "search_depth": search_depth,
+            "topic": topic,
+            "total_results": len(results),
+            "results": results,
+        }
+
+        answer = response.get("answer")
+        if isinstance(answer, str) and answer.strip():
+            output["answer"] = answer.strip()
+
+        return True, output
+
+
+class LifeEngineBrowserFetchTool(BaseTool):
+    """网页浏览/提取工具（Tavily Extract）。"""
+
+    tool_name: str = "nucleus_browser_fetch"
+    tool_description: str = (
+        "打开网页并提取可读正文（基于 Tavily Extract API）。\n\n"
+        "**何时使用：**\n"
+        "- ✓ 手上已经有 URL，想读取网页正文\n"
+        "- ✓ 普通抓取拿不到内容，需要更稳的网页提取能力\n"
+        "- ✓ 需要从页面中提炼信息用于后续思考或记录\n\n"
+        "**何时不用：**\n"
+        "- ✗ 还没有 URL，只是想先找资料 → 用 nucleus_web_search\n"
+        "- ✗ 想处理本地文件内容 → 优先用 read/grep/memory 工具\n"
+        "- ✗ 本地文件不是网页，但本工具也兼容 workspace 内的本地路径读取\n\n"
+        "**安全约束：** 公开网页仅允许 http/https；本地路径仅允许 workspace 内文件。"
+    )
+    chatter_allow: list[str] = ["life_engine_internal", "default_chatter"]
+
+    async def execute(
+        self,
+        url: Annotated[str, "目标网页 URL（http/https）"],
+        extract_depth: Annotated[Literal["basic", "advanced"], "提取深度：basic/advanced"] = "basic",
+        query: Annotated[str, "可选：按该问题重排提取内容"] = "",
+        chunks_per_source: Annotated[int, "每个来源的分块数（1-5，需配合 query）"] = 0,
+        include_images: Annotated[bool, "是否返回图片 URL"] = False,
+        max_chars: Annotated[int, "正文最大返回字符数（500-50000）"] = 0,
+    ) -> tuple[bool, dict[str, Any]]:
+        target_url = str(url or "").strip()
+        if not target_url:
+            return False, {"error": "url 不能为空"}
+
+        resolved_max_chars = (
+            _resolve_default_fetch_max_chars(self.plugin)
+            if max_chars <= 0
+            else max(1, min(_MAX_FETCH_CHARS, int(max_chars)))
+        )
+
+        parsed = urllib.parse.urlparse(target_url)
+        local_like = parsed.scheme != "http" and parsed.scheme != "https"
+
+        if local_like:
+            ok, resolved = _resolve_local_path(self.plugin, target_url)
+            if not ok:
+                return False, {"error": str(resolved)}
+            target_path = resolved
+            try:
+                raw_content = target_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                return False, {"error": "文件编码错误，请尝试其他编码"}
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"nucleus_browser_fetch 读取本地文件失败: {exc}")
+                return False, {"error": f"读取本地文件失败: {exc}"}
+
+            truncated_content, truncated = _truncate_text(raw_content, resolved_max_chars)
+            return True, {
+                "action": "browser_fetch",
+                "provider": "local_file",
+                "url": target_url,
+                "result_url": str(target_path),
+                "extract_depth": extract_depth,
+                "content": truncated_content,
+                "content_length": len(truncated_content),
+                "truncated": truncated,
+                "title": target_path.name,
+            }
+
+        ok, err = _validate_public_url(target_url)
+        if not ok:
+            return False, {"error": err}
+
+        if extract_depth not in ("basic", "advanced"):
+            return False, {"error": "extract_depth 必须是 basic 或 advanced"}
+
+        q = str(query or "").strip()
+        if chunks_per_source > 0 and not q:
+            return False, {"error": "设置 chunks_per_source 时必须提供 query"}
+        if chunks_per_source < 0:
+            return False, {"error": "chunks_per_source 不能为负数"}
+        if chunks_per_source > 5:
+            return False, {"error": "chunks_per_source 不能超过 5"}
+
+        resolved_max_chars = (
+            _resolve_default_fetch_max_chars(self.plugin)
+            if max_chars <= 0
+            else max(1, min(_MAX_FETCH_CHARS, int(max_chars)))
+        )
+
+        payload: dict[str, Any] = {
+            "urls": [target_url],
+            "extract_depth": extract_depth,
+            "include_images": bool(include_images),
+        }
+        if q:
+            payload["query"] = q
+        if chunks_per_source > 0:
+            payload["chunks_per_source"] = int(chunks_per_source)
+
+        try:
+            response = await _tavily_post_json(
+                self.plugin,
+                "/extract",
+                payload,
+                _resolve_extract_timeout(self.plugin),
+            )
+        except RuntimeError as exc:
+            logger.error(f"nucleus_browser_fetch 执行失败: {exc}")
+            return False, {"error": str(exc)}
+        except asyncio.TimeoutError:
+            logger.error("nucleus_browser_fetch 请求超时")
+            return False, {"error": "网页提取请求超时"}
+        except OSError as exc:
+            logger.error(f"nucleus_browser_fetch 网络错误: {exc}")
+            return False, {"error": f"网络错误: {exc}"}
+
+        raw_results = response.get("results")
+        if not isinstance(raw_results, list):
+            raw_results = []
+
+        selected: dict[str, Any] | None = None
+        for item in raw_results:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("url") or "").strip() == target_url:
+                selected = item
+                break
+            if selected is None:
+                selected = item
+
+        if selected is None:
+            failed_results = response.get("failed_results")
+            return False, {
+                "error": "未提取到可用网页内容",
+                "failed_results": failed_results if isinstance(failed_results, list) else [],
+            }
+
+        title = str(selected.get("title") or "")
+        content = str(selected.get("content") or "")
+        raw_content = str(selected.get("raw_content") or "")
+        chosen_content = content if content.strip() else raw_content
+        truncated_content, truncated = _truncate_text(chosen_content, resolved_max_chars)
+
+        result: dict[str, Any] = {
+            "action": "browser_fetch",
+            "provider": "tavily",
+            "url": target_url,
+            "result_url": str(selected.get("url") or target_url),
+            "extract_depth": extract_depth,
+            "content": truncated_content,
+            "content_length": len(truncated_content),
+            "truncated": truncated,
+        }
+        if title.strip():
+            result["title"] = title.strip()
+        if isinstance(selected.get("images"), list):
+            result["images"] = [str(v) for v in selected["images"] if str(v).strip()]
+
+        failed_results = response.get("failed_results")
+        if isinstance(failed_results, list) and failed_results:
+            result["failed_results"] = failed_results
+
+        return True, result
+
+
+WEB_TOOLS = [
+    LifeEngineWebSearchTool,
+    LifeEngineBrowserFetchTool,
+]
