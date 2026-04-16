@@ -10,8 +10,8 @@ from typing import Any
 
 import pytest
 
-from plugins.life_engine.config import LifeEngineConfig
-from plugins.life_engine.memory_service import EdgeType, LifeMemoryService
+from plugins.life_engine.core.config import LifeEngineConfig
+from plugins.life_engine.memory import EdgeType, LifeMemoryService
 
 
 @dataclass
@@ -46,7 +46,7 @@ def test_get_chroma_collection_awaits_async_vector_service(tmp_path: Path, monke
     fake_vector_service = _FakeVectorService(fake_collection)
 
     monkeypatch.setattr(
-        "plugins.life_engine.memory_service.get_vector_db_service",
+        "src.kernel.vector_db.get_vector_db_service",
         lambda _path: fake_vector_service,
     )
 

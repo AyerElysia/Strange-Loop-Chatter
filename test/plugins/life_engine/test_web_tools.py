@@ -8,10 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from plugins.life_engine.config import LifeEngineConfig
-from plugins.life_engine.web_tools import (
+from plugins.life_engine.core.config import LifeEngineConfig
+from plugins.life_engine.tools.web_tools import (
     LifeEngineBrowserFetchTool,
     LifeEngineWebSearchTool,
+    _pick_tavily_target,
 )
 
 
@@ -47,7 +48,7 @@ def test_web_search_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
             ],
         }
 
-    monkeypatch.setattr("plugins.life_engine.web_tools._tavily_post_json", _fake_post)
+    monkeypatch.setattr("plugins.life_engine.tools.web_tools._tavily_post_json", _fake_post)
 
     tool = LifeEngineWebSearchTool(plugin=plugin)
     ok, data = asyncio.run(
@@ -97,6 +98,48 @@ def test_web_search_does_not_use_env_api_key(
     assert "config/plugins/life_engine/config.toml" in data["error"]
 
 
+def test_pick_tavily_target_supports_round_robin_lists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """配置多个 key/base_url 时应按轮询方式选择。"""
+    plugin = _make_plugin(tmp_path)
+    plugin.config.web.tavily_api_keys = ["key-a", "key-b"]
+    plugin.config.web.tavily_base_urls = [
+        "https://api-1.example.com",
+        "https://api-2.example.com",
+        "https://api-3.example.com",
+    ]
+    monkeypatch.setattr("plugins.life_engine.tools.web_tools._TAVILY_TARGET_CURSOR", 0)
+
+    picks = [_pick_tavily_target(plugin) for _ in range(5)]
+
+    assert picks == [
+        ("key-a", "https://api-1.example.com"),
+        ("key-b", "https://api-2.example.com"),
+        ("key-a", "https://api-3.example.com"),
+        ("key-b", "https://api-1.example.com"),
+        ("key-a", "https://api-2.example.com"),
+    ]
+
+
+def test_pick_tavily_target_keeps_legacy_single_value_compatible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """旧的单 key / 单 base_url 配置仍应可正常工作。"""
+    plugin = _make_plugin(tmp_path)
+    plugin.config.web.tavily_api_key = "legacy-key"
+    plugin.config.web.tavily_base_url = "https://legacy.example.com"
+    monkeypatch.setattr("plugins.life_engine.tools.web_tools._TAVILY_TARGET_CURSOR", 0)
+
+    first = _pick_tavily_target(plugin)
+    second = _pick_tavily_target(plugin)
+
+    assert first == ("legacy-key", "https://legacy.example.com")
+    assert second == ("legacy-key", "https://legacy.example.com")
+
+
 def test_web_tools_allow_default_chatter() -> None:
     """网络工具应同时允许 life_engine 与 DFC(default_chatter) 调用。"""
     assert "life_engine_internal" in LifeEngineWebSearchTool.chatter_allow
@@ -138,6 +181,36 @@ def test_browser_fetch_blocks_private_url(tmp_path: Path) -> None:
     assert "禁止访问本地或内网地址" in data["error"]
 
 
+def test_browser_fetch_reads_file_url(tmp_path: Path) -> None:
+    """浏览工具应兼容读取 workspace 内的 file:// 本地文件路径。"""
+    plugin = _make_plugin(tmp_path)
+    plugin.config.web.tavily_api_key = "tvly-test-key"
+    notes_dir = tmp_path / "notes"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    (notes_dir / "name_promise.md").write_text("名字承诺内容", encoding="utf-8")
+
+    tool = LifeEngineBrowserFetchTool(plugin=plugin)
+    ok, data = asyncio.run(tool.execute(url="file://notes/name_promise.md"))
+
+    assert ok is True
+    assert data["provider"] == "local_file"
+    assert data["action"] == "browser_fetch"
+    assert "名字承诺内容" in data["content"]
+    assert data["title"] == "name_promise.md"
+
+
+def test_browser_fetch_rejects_outside_workspace_path(tmp_path: Path) -> None:
+    """浏览工具仍应拒绝 workspace 外的本地路径。"""
+    plugin = _make_plugin(tmp_path)
+    plugin.config.web.tavily_api_key = "tvly-test-key"
+
+    tool = LifeEngineBrowserFetchTool(plugin=plugin)
+    ok, data = asyncio.run(tool.execute(url="file:///etc/passwd"))
+
+    assert ok is False
+    assert "超出工作空间范围" in data["error"]
+
+
 def test_browser_fetch_success_and_truncation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -160,7 +233,7 @@ def test_browser_fetch_success_and_truncation(
             ]
         }
 
-    monkeypatch.setattr("plugins.life_engine.web_tools._tavily_post_json", _fake_post)
+    monkeypatch.setattr("plugins.life_engine.tools.web_tools._tavily_post_json", _fake_post)
 
     tool = LifeEngineBrowserFetchTool(plugin=plugin)
     ok, data = asyncio.run(
@@ -179,3 +252,91 @@ def test_browser_fetch_success_and_truncation(
     assert data["truncated"] is True
     assert len(data["content"]) == 10
     assert data["images"] == ["https://example.com/a.png"]
+
+
+def test_web_search_handles_timeout_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """web_search 应正确处理 asyncio.TimeoutError 而非捕获裸 Exception。"""
+    plugin = _make_plugin(tmp_path)
+    plugin.config.web.tavily_api_key = "tvly-test-key"
+
+    async def _fake_post_timeout(*args, **kwargs):
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(
+        "plugins.life_engine.tools.web_tools._tavily_post_json", _fake_post_timeout
+    )
+
+    tool = LifeEngineWebSearchTool(plugin=plugin)
+    ok, data = asyncio.run(tool.execute(query="测试超时"))
+
+    assert ok is False
+    assert "超时" in data["error"]
+
+
+def test_web_search_handles_runtime_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """web_search 应正确处理 RuntimeError（Tavily API 错误）。"""
+    plugin = _make_plugin(tmp_path)
+    plugin.config.web.tavily_api_key = "tvly-test-key"
+
+    async def _fake_post_runtime(*args, **kwargs):
+        raise RuntimeError("API 限额已用完")
+
+    monkeypatch.setattr(
+        "plugins.life_engine.tools.web_tools._tavily_post_json", _fake_post_runtime
+    )
+
+    tool = LifeEngineWebSearchTool(plugin=plugin)
+    ok, data = asyncio.run(tool.execute(query="测试 RuntimeError"))
+
+    assert ok is False
+    assert "API 限额已用完" in data["error"]
+
+
+def test_browser_fetch_handles_timeout_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """browser_fetch 应正确处理 asyncio.TimeoutError。"""
+    plugin = _make_plugin(tmp_path)
+    plugin.config.web.tavily_api_key = "tvly-test-key"
+
+    async def _fake_post_timeout(*args, **kwargs):
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(
+        "plugins.life_engine.tools.web_tools._tavily_post_json", _fake_post_timeout
+    )
+
+    tool = LifeEngineBrowserFetchTool(plugin=plugin)
+    ok, data = asyncio.run(tool.execute(url="https://example.com"))
+
+    assert ok is False
+    assert "超时" in data["error"]
+
+
+def test_browser_fetch_handles_os_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """browser_fetch 应正确处理 OSError（网络错误）。"""
+    plugin = _make_plugin(tmp_path)
+    plugin.config.web.tavily_api_key = "tvly-test-key"
+
+    async def _fake_post_oserror(*args, **kwargs):
+        raise OSError("网络不可达")
+
+    monkeypatch.setattr(
+        "plugins.life_engine.tools.web_tools._tavily_post_json", _fake_post_oserror
+    )
+
+    tool = LifeEngineBrowserFetchTool(plugin=plugin)
+    ok, data = asyncio.run(tool.execute(url="https://example.com"))
+
+    assert ok is False
+    assert "网络错误" in data["error"]

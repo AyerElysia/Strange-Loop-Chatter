@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from plugins.life_engine.config import LifeEngineConfig
+from plugins.life_engine.core.config import LifeEngineConfig
 from plugins.life_engine.service import LifeEngineService
 
 

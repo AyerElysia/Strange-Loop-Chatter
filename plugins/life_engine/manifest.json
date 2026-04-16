@@ -157,9 +157,15 @@
       "component_name": "nucleus_browser_fetch",
       "dependencies": [],
       "enabled": true
+    },
+    {
+      "component_type": "tool",
+      "component_name": "fetch_life_memory",
+      "dependencies": [],
+      "enabled": true
     }
   ],
-  "entry_point": "plugin.py",
+  "entry_point": "core/plugin.py",
   "min_core_version": "1.0.0",
   "python_dependencies": [],
   "dependencies_required": true,
