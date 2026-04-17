@@ -267,12 +267,33 @@ class LifeEngineConfig(BaseConfig):
             description="是否启用白天小憩做梦（空闲触发）。",
         )
 
+    @config_section("chatter")
+    class ChatterSection(SectionBase):
+        """统一对话器配置。"""
+
+        enabled: bool = Field(
+            default=False,
+            description="启用后 life_engine 直接处理对话，替代 DFC + bridge 架构。",
+        )
+
+        mode: str = Field(
+            default="enhanced",
+            description="执行模式: enhanced / classical",
+        )
+
+        max_rounds_per_chat: int = Field(
+            default=5,
+            ge=1,
+            description="对话模式单轮最大工具调用轮数。",
+        )
+
     settings: SettingsSection = Field(default_factory=SettingsSection)
     model: ModelSection = Field(default_factory=ModelSection)
     web: WebSection = Field(default_factory=WebSection)
     snn: SNNSection = Field(default_factory=SNNSection)
     neuromod: NeuromodSection = Field(default_factory=NeuromodSection)
     dream: DreamSection = Field(default_factory=DreamSection)
+    chatter: ChatterSection = Field(default_factory=ChatterSection)
 
     @field_validator("settings")
     @classmethod

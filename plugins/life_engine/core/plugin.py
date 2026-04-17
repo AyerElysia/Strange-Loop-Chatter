@@ -66,7 +66,7 @@ class LifeEnginePlugin(BasePlugin):
         from ..memory.router import MemoryRouter
         from ..dream.router import DreamRouter
 
-        return [
+        components: list[type] = [
             LifeEngineService,
             LifeEngineMessageCollectorHandler,
             LifeEngineCommandHandler,
@@ -79,6 +79,16 @@ class LifeEnginePlugin(BasePlugin):
             *GREP_TOOLS,
             *WEB_TOOLS,
         ]
+
+        # 启用 LifeChatter 时注册对话器及其专用 Action
+        if isinstance(self.config, LifeEngineConfig) and getattr(
+            getattr(self.config, "chatter", None), "enabled", False
+        ):
+            from .chatter import LifeChatter, LifeSendTextAction, LifePassAndWaitAction
+
+            components.extend([LifeChatter, LifeSendTextAction, LifePassAndWaitAction])
+
+        return components
 
     async def on_plugin_loaded(self) -> None:
         """插件加载后启动心跳。"""
