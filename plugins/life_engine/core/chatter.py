@@ -58,6 +58,7 @@ class _WorkflowRuntime:
     cross_round_seen_signatures: set[str]
     unread_msgs_to_flush: list[Message]
     plain_text_retry_count: int = 0
+    follow_up_rounds: int = 0
 
 
 # ── Actions ───────────────────────────────────────────────────
@@ -669,14 +670,9 @@ class LifeChatter(BaseChatter):
             yield Failure(f"模型配置错误: {e}")
             return
 
-        # System prompt: 100% 静态可缓存
+        # System prompt: 100% 静态可缓存（内含场景引导）
         system_text = self._build_chat_system_prompt(chat_stream, service)
         request.add_payload(LLMPayload(ROLE.SYSTEM, Text(system_text)))
-
-        # 场景引导 SYSTEM 固定块
-        scene_guide = self._build_scene_guide(chat_stream)
-        if scene_guide:
-            request.add_payload(LLMPayload(ROLE.SYSTEM, Text(scene_guide)))
 
         # 历史文本（首轮合并）
         history_text = self._build_history_text(chat_stream)
@@ -711,6 +707,7 @@ class LifeChatter(BaseChatter):
 
                 rt.cross_round_seen_signatures.clear()
                 rt.plain_text_retry_count = 0
+                rt.follow_up_rounds = 0
                 rt.unreads = unread_msgs
 
                 unread_lines = "\n".join(
@@ -727,6 +724,7 @@ class LifeChatter(BaseChatter):
 
                 if not decision.get("should_respond", False):
                     logger.info("决定不响应，继续等待...")
+                    await self.flush_unreads(unread_msgs)
                     yield Wait()
                     continue
 
@@ -843,6 +841,13 @@ class LifeChatter(BaseChatter):
                     continue
 
                 if has_pending_tool_results:
+                    rt.follow_up_rounds += 1
+                    if rt.follow_up_rounds >= max_rounds:
+                        logger.warning(f"已达最大工具调用轮数 ({max_rounds})，强制等待")
+                        if self._has_tool_result_tail(llm_response):
+                            llm_response.add_payload(LLMPayload(ROLE.ASSISTANT, Text(_SUSPEND_TEXT)))
+                        self._transition(rt, _Phase.WAIT_USER, "max rounds reached")
+                        continue
                     self._transition(rt, _Phase.FOLLOW_UP, "pending tool results")
                     continue
 
