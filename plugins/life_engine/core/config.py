@@ -10,6 +10,19 @@ from pydantic import field_validator
 
 from src.core.components.base.config import BaseConfig, Field, SectionBase, config_section
 
+from ..constants import (
+    HEARTBEAT_IDLE_CRITICAL_THRESHOLD,
+    HEARTBEAT_IDLE_WARNING_THRESHOLD,
+    EXTERNAL_MESSAGE_ACTIVE_WINDOW_MINUTES,
+    TODO_URGENT_DAYS_THRESHOLD,
+    RRF_K,
+    SPREAD_DECAY,
+    SPREAD_THRESHOLD,
+    DECAY_LAMBDA,
+    PRUNE_THRESHOLD,
+    DREAM_LEARNING_RATE,
+)
+
 
 # 默认工作空间路径
 _DEFAULT_WORKSPACE = str(Path(__file__).parent.parent.parent / "data" / "life_engine_workspace")
@@ -265,6 +278,79 @@ class LifeEngineConfig(BaseConfig):
         nap_enabled: bool = Field(
             default=True,
             description="是否启用白天小憩做梦（空闲触发）。",
+        )
+
+    @config_section("thresholds")
+    class ThresholdsSection(SectionBase):
+        """阈值配置。"""
+
+        external_active_minutes: int = Field(
+            default=EXTERNAL_MESSAGE_ACTIVE_WINDOW_MINUTES,
+            ge=1,
+            description="外部消息活跃时间窗口（分钟）",
+        )
+
+        idle_warning_threshold: int = Field(
+            default=HEARTBEAT_IDLE_WARNING_THRESHOLD,
+            ge=1,
+            description="心跳空闲警告阈值",
+        )
+
+        idle_critical_threshold: int = Field(
+            default=HEARTBEAT_IDLE_CRITICAL_THRESHOLD,
+            ge=1,
+            description="心跳空闲严重警告阈值",
+        )
+
+        todo_urgent_days: int = Field(
+            default=TODO_URGENT_DAYS_THRESHOLD,
+            ge=1,
+            description="TODO 紧急截止天数阈值",
+        )
+
+    @config_section("memory_algorithm")
+    class MemoryAlgorithmSection(SectionBase):
+        """记忆算法参数配置。"""
+
+        rrf_k: int = Field(
+            default=RRF_K,
+            ge=1,
+            description="RRF 融合参数",
+        )
+
+        spread_decay: float = Field(
+            default=SPREAD_DECAY,
+            ge=0.0,
+            le=1.0,
+            description="激活扩散衰减系数",
+        )
+
+        spread_threshold: float = Field(
+            default=SPREAD_THRESHOLD,
+            ge=0.0,
+            le=1.0,
+            description="激活扩散阈值",
+        )
+
+        decay_lambda: float = Field(
+            default=DECAY_LAMBDA,
+            ge=0.0,
+            le=1.0,
+            description="遗忘衰减系数",
+        )
+
+        prune_threshold: float = Field(
+            default=PRUNE_THRESHOLD,
+            ge=0.0,
+            le=1.0,
+            description="边剪枝阈值",
+        )
+
+        dream_learning_rate: float = Field(
+            default=DREAM_LEARNING_RATE,
+            ge=0.0,
+            le=1.0,
+            description="梦境学习率",
         )
 
     @config_section("chatter")

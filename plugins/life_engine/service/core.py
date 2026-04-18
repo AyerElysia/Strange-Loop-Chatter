@@ -930,10 +930,14 @@ class LifeEngineService(BaseService):
 
         period_label, suggested_activities = self._get_period_info()
 
+        cfg = self._cfg()
+        warning_threshold = cfg.thresholds.idle_warning_threshold
+        critical_threshold = cfg.thresholds.idle_critical_threshold
+
         idle_warning = ""
-        if idle_heartbeats >= 5:
+        if idle_heartbeats >= critical_threshold:
             idle_warning = "⚠️ **你已经发呆太久了！这次必须做点什么。**"
-        elif idle_heartbeats >= 2:
+        elif idle_heartbeats >= warning_threshold:
             idle_warning = f"💭 已经连续 {idle_heartbeats} 次心跳没有行动了，找点事做吧～"
 
         lines: list[str] = self._build_prompt_header()

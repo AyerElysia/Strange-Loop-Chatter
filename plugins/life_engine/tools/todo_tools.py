@@ -25,6 +25,11 @@ from src.core.components import BaseTool
 from src.app.plugin_system.api import log_api
 
 from ..core.config import LifeEngineConfig
+from ..constants import (
+    TODO_NO_DEADLINE_PRIORITY,
+    TODO_OVERDUE_BASE_PRIORITY,
+    TODO_URGENT_DAYS_THRESHOLD,
+)
 
 
 logger = log_api.get_logger("life_engine.todos")
@@ -463,29 +468,29 @@ class LifeEngineListTodosTool(BaseTool):
                 # 计算截止时间优先级（越紧急越优先）
                 days_left = t.days_until_deadline()
                 if days_left is None:
-                    deadline_priority = 9999  # 没有截止时间，优先级最低
+                    deadline_priority = TODO_NO_DEADLINE_PRIORITY
                 elif days_left < 0:
-                    deadline_priority = -1000 + days_left  # 已逾期，最高优先级
+                    deadline_priority = TODO_OVERDUE_BASE_PRIORITY + days_left
                 else:
-                    deadline_priority = days_left  # 按剩余天数排序
-                
+                    deadline_priority = days_left
+
                 return (
                     deadline_priority,  # 首先按截止时间紧急程度
                     -desire_order.get(t.desire, 0),  # 其次按想做程度
                     -meaning_order.get(t.meaning, 0),  # 最后按意义
                 )
-            
+
             filtered.sort(key=sort_key)
-            
+
             # 统计截止时间情况
             overdue_count = 0
-            urgent_count = 0  # 3天内截止
+            urgent_count = 0
             for todo in filtered:
                 days_left = todo.days_until_deadline()
                 if days_left is not None:
                     if days_left < 0:
                         overdue_count += 1
-                    elif days_left <= 3:
+                    elif days_left <= TODO_URGENT_DAYS_THRESHOLD:
                         urgent_count += 1
 
             return True, {

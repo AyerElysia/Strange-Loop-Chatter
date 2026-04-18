@@ -170,21 +170,24 @@ async def _sync_memory_embedding_for_file(plugin: Any, path: str, content: str) 
         logger.warning(f"同步记忆 embedding 失败 {path}: {e}")
 
 
-_TELL_DFC_EXTERNAL_ACTIVE_MINUTES = 5  # 外部消息在此时间内视为"活跃"
-_PROACTIVE_WAKE_MIN_REASON_CHARS = 28
-_PROACTIVE_WAKE_REQUIRED_IMPORTANCE = {"high", "critical"}
+from ..constants import (
+    EXTERNAL_MESSAGE_ACTIVE_WINDOW_MINUTES,
+    PROACTIVE_WAKE_MIN_REASON_CHARS,
+    PROACTIVE_WAKE_MIN_SEGMENTS,
+    PROACTIVE_WAKE_REQUIRED_IMPORTANCE,
+    PROACTIVE_WAKE_KEYWORDS,
+)
 
 
 def _is_detailed_proactive_wake_reason(reason: str) -> bool:
     """检查主动唤醒理由是否足够明确和详尽。"""
     text = " ".join(str(reason or "").split())
-    if len(text) < _PROACTIVE_WAKE_MIN_REASON_CHARS:
+    if len(text) < PROACTIVE_WAKE_MIN_REASON_CHARS:
         return False
     segments = [seg.strip() for seg in re.split(r"[。！？!?\n；;]", text) if seg.strip()]
-    if len(segments) < 2:
+    if len(segments) < PROACTIVE_WAKE_MIN_SEGMENTS:
         return False
-    keywords = ("信息差", "影响", "风险", "必要", "依据", "观察", "后果", "时效", "上下文", "目标")
-    return any(keyword in text for keyword in keywords)
+    return any(keyword in text for keyword in PROACTIVE_WAKE_KEYWORDS)
 
 
 class LifeEngineWakeDFCTool(BaseTool):
@@ -272,12 +275,12 @@ class LifeEngineWakeDFCTool(BaseTool):
             return False, "importance 仅支持 low/normal/high/critical"
 
         if proactive_wake:
-            if normalized_importance not in _PROACTIVE_WAKE_REQUIRED_IMPORTANCE:
+            if normalized_importance not in PROACTIVE_WAKE_REQUIRED_IMPORTANCE:
                 return False, "proactive_wake=true 仅允许在 high/critical 使用，平时请保持关闭。"
             if not _is_detailed_proactive_wake_reason(reason):
                 return (
                     False,
-                    f"proactive_wake=true 必须提供明确详尽的 reason（至少 {_PROACTIVE_WAKE_MIN_REASON_CHARS} 字，且需包含信息差与影响说明）。",
+                    f"proactive_wake=true 必须提供明确详尽的 reason（至少 {PROACTIVE_WAKE_MIN_REASON_CHARS} 字，且需包含信息差与影响说明）。",
                 )
 
         # 获取服务实例以辅助路由判断
@@ -286,7 +289,10 @@ class LifeEngineWakeDFCTool(BaseTool):
             minutes_since_external = life_service._minutes_since_external_message()
 
             # 活跃检查：如果外界很活跃，建议不要打扰
-            if minutes_since_external is not None and minutes_since_external < _TELL_DFC_EXTERNAL_ACTIVE_MINUTES:
+            if (
+                minutes_since_external is not None
+                and minutes_since_external < EXTERNAL_MESSAGE_ACTIVE_WINDOW_MINUTES
+            ):
                 # 除非是 high 或 critical 级别，否则给出警告但不阻止
                 if normalized_importance not in ("high", "critical"):
                     logger.info(
