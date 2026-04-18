@@ -27,8 +27,9 @@ async def _get_life_state_for_current_turn(logger: Logger) -> str:
         Life State 文本，如果获取失败则返回空字符串
     """
     try:
-        from src.app.plugin_system.api import plugin_api
-        life_service = plugin_api.get_service("life_engine:service:life_engine")
+        from src.app.plugin_system.api import service_api
+
+        life_service = service_api.get_service("life_engine:service:life_engine")
         if not life_service:
             return ""
 

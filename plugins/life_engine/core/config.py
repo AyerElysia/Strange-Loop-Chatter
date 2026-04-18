@@ -273,7 +273,7 @@ class LifeEngineConfig(BaseConfig):
 
         enabled: bool = Field(
             default=False,
-            description="启用后 life_engine 直接处理对话，替代 DFC + bridge 架构。",
+            description="启用后 life_engine 直接处理对话，作为同一主体的对外运行模式。",
         )
 
         mode: str = Field(

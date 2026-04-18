@@ -97,7 +97,7 @@ async def decide_should_respond(
     logger: Logger,
     unreads_text: str,
     chat_stream: ChatStream,
-    fallback_prompt: str,
+    fallback_prompt: str | None = None,
 ) -> SubAgentDecision:
     """执行子代理决策并返回 should_respond 结果。"""
     try:
@@ -115,6 +115,13 @@ async def decide_should_respond(
     if tmpl:
         sub_prompt = await tmpl.set("nickname", nickname).build()
     else:
+        if fallback_prompt is None:
+            fallback_prompt = (
+                "你是一个聊天意图识别助手。"
+                "你的任务是分析新收到的聊天消息，结合历史上下文，判断主机器人是否有必要进行响应。"
+                "主机器人的名字是 {nickname}。"
+                "请务必返回 JSON，格式为 {{\"reason\": \"...\", \"should_respond\": true/false}}。"
+            )
         sub_prompt = fallback_prompt.format(nickname=nickname)
 
     request.add_payload(LLMPayload(ROLE.SYSTEM, Text(sub_prompt)))

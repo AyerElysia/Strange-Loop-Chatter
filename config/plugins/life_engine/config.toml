@@ -72,20 +72,6 @@ default_search_max_results = 5
 # 值类型：int, 默认值：12000
 default_fetch_max_chars = 12000
 
-# 统一对话器配置。
-[chatter]
-# 启用后 life_engine 直接处理对话，替代 DFC + bridge 架构。
-# 值类型：bool, 默认值：false
-enabled = false
-
-# 执行模式: enhanced / classical
-# 值类型：str, 默认值："enhanced"
-mode = "enhanced"
-
-# 对话模式单轮最大工具调用轮数。
-# 值类型：int, 默认值：5
-max_rounds_per_chat = 5
-
 # SNN 皮层下状态层配置。
 [snn]
 # 是否启用 SNN 状态层。启用后 life_engine 将运行一个持续的 SNN 驱动核。
@@ -182,9 +168,9 @@ nap_enabled = true
 
 # 统一对话器配置。
 [chatter]
-# 启用后 life_engine 直接处理对话，替代 DFC + bridge 架构。
+# 启用后 life_engine 直接处理对话，作为同一主体的对外运行模式。
 # 值类型：bool, 默认值：false
-enabled = false
+enabled = true
 
 # 执行模式: enhanced / classical
 # 值类型：str, 默认值："enhanced"

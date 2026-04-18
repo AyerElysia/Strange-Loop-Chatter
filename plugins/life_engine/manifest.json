@@ -181,6 +181,12 @@
       "component_name": "life_pass_and_wait",
       "dependencies": [],
       "enabled": true
+    },
+    {
+      "component_type": "action",
+      "component_name": "schedule_followup_message",
+      "dependencies": [],
+      "enabled": true
     }
   ],
   "entry_point": "core/plugin.py",

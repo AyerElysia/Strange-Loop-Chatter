@@ -20,6 +20,14 @@ from ..tools.todo_tools import TODO_TOOLS
 from ..memory.tools import MEMORY_TOOLS
 from ..tools.grep_tools import GREP_TOOLS
 from ..tools.web_tools import WEB_TOOLS
+from .compat_tools import (
+    LifeThinkAction,
+    LifeScheduleFollowupMessageAction,
+    LifeMessageNucleusTool,
+    LifeConsultNucleusTool,
+    LifeSearchLifeMemoryTool,
+    LifeRetrieveMemoryTool,
+)
 
 
 logger = get_logger("life_engine", display="life_engine")
@@ -29,7 +37,7 @@ logger = get_logger("life_engine", display="life_engine")
 class LifeEnginePlugin(BasePlugin):
     """生命中枢插件。
 
-    提供一个独立于 DFC 的并行存在系统，使用统一的事件流模型处理
+    提供同一主体的内外运行模式切换能力，使用统一的事件流模型处理
     消息、心跳、工具调用等交互，保持时间连续性。
 
     特性：
@@ -65,6 +73,7 @@ class LifeEnginePlugin(BasePlugin):
         from ..snn.router import SNNRouter
         from ..memory.router import MemoryRouter
         from ..dream.router import DreamRouter
+        from ..monitor.router import MessageTimelineRouter
 
         components: list[type] = [
             LifeEngineService,
@@ -73,6 +82,7 @@ class LifeEnginePlugin(BasePlugin):
             SNNRouter,
             MemoryRouter,
             DreamRouter,
+            MessageTimelineRouter,
             *ALL_TOOLS,
             *TODO_TOOLS,
             *MEMORY_TOOLS,
@@ -86,7 +96,17 @@ class LifeEnginePlugin(BasePlugin):
         ):
             from .chatter import LifeChatter, LifeSendTextAction, LifePassAndWaitAction
 
-            components.extend([LifeChatter, LifeSendTextAction, LifePassAndWaitAction])
+            components.extend([
+                LifeChatter,
+                LifeSendTextAction,
+                LifePassAndWaitAction,
+                LifeThinkAction,
+                LifeScheduleFollowupMessageAction,
+                LifeMessageNucleusTool,
+                LifeConsultNucleusTool,
+                LifeSearchLifeMemoryTool,
+                LifeRetrieveMemoryTool,
+            ])
 
         return components
 

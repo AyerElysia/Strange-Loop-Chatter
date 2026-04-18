@@ -1,0 +1,376 @@
+"""life_engine 对话兼容工具层。
+
+把默认聊天器/思考插件里的常用工具适配到 life_chatter，
+让同一主体的不同运行模式可以直接复用这些能力。
+"""
+
+from __future__ import annotations
+
+import json_repair
+from typing import Annotated, Any
+
+from src.app.plugin_system.api.log_api import get_logger
+from src.app.plugin_system.api.llm_api import create_llm_request, get_model_set_by_task
+from src.core.components.base.action import BaseAction
+from src.core.components.base.tool import BaseTool
+from src.core.managers import get_plugin_manager
+from src.kernel.llm import LLMPayload, ROLE, Text, ToolRegistry, ToolResult
+
+from plugins.default_chatter.consult_nucleus import (
+    ConsultNucleusTool as _DefaultConsultNucleusTool,
+    SearchLifeMemoryTool as _DefaultSearchLifeMemoryTool,
+)
+from plugins.default_chatter.nucleus_bridge import (
+    MessageNucleusTool as _DefaultMessageNucleusTool,
+)
+
+
+logger = get_logger("life_engine.compat_tools")
+
+
+class LifeThinkAction(BaseAction):
+    """生命对话器的思考动作。"""
+
+    action_name = "think"
+    action_description = (
+        "在发送文本回复前，先记录一段内心思考动作。"
+        "此 action 必须与 action-life_send_text 同时使用，且必须排在 action-life_send_text 之前；"
+        "不要单独调用，也不要把它和查询型 tool 混在同一轮。"
+        "thought 只写内心活动，不要把真正要发给用户的正文只写在 thought 里；"
+        "最终回复必须单独写进 life_send_text.content。"
+    )
+
+    chatter_allow: list[str] = ["life_chatter"]
+    primary_action: bool = False
+
+    async def execute(
+        self,
+        mood: Annotated[str, "此刻的心情/情绪状态（必填）。"],
+        decision: Annotated[str, "你决定的下一步行动（必填）。"],
+        expected_response: Annotated[str, "你预期用户看到回复后的反应（必填）。"],
+        thought: Annotated[str | None, "你的心理活动。"] = None,
+        **extra_kwargs: object,
+    ) -> tuple[bool, str]:
+        legacy_content = extra_kwargs.pop("content", None)
+        normalized_thought = (thought or "").strip()
+        if not normalized_thought and isinstance(legacy_content, str):
+            normalized_thought = legacy_content.strip()
+            if normalized_thought:
+                logger.warning("action-think 收到兼容字段 content，已映射到 thought")
+
+        if not normalized_thought:
+            logger.warning(
+                "action-think 缺少 thought/content，已按 mood/decision/expected_response 降级记录"
+            )
+
+        if extra_kwargs:
+            logger.warning(
+                "action-think 收到未知参数，已忽略: %s",
+                sorted(extra_kwargs.keys()),
+            )
+
+        _ = (mood, decision, expected_response, normalized_thought)
+        return True, "思考动作已记录。请在同一轮内继续调用 life_send_text 发送最终回复。"
+
+
+class LifeScheduleFollowupMessageAction(BaseAction):
+    """登记一条延迟续话计划。"""
+
+    action_name = "schedule_followup_message"
+    action_description = (
+        "当你刚刚已经发出一条回复，但觉得过一小会儿在对方还没回复时"
+        "可能还想补一句时使用。它不会立刻发送消息，而是登记一条延迟续话计划。"
+        "这个动作会复用主动续话运行层的调度能力。"
+    )
+
+    chatter_allow: list[str] = ["life_chatter"]
+
+    async def execute(
+        self,
+        delay_seconds: Annotated[float, "过多久后再检查一次，单位秒。"],
+        thought: Annotated[str, "你此刻为什么还想继续说。"],
+        topic: Annotated[str, "这次续话围绕的话题。"],
+        followup_type: Annotated[
+            str,
+            "续话类型，例如 add_detail / clarify / soft_emotion / share_new_thought。",
+        ] = "share_new_thought",
+    ) -> tuple[bool, str]:
+        life_plugin = get_plugin_manager().get_plugin("proactive_message_plugin")
+        if life_plugin is None:
+            return False, "proactive_message_plugin 未加载，无法登记延迟续话"
+
+        schedule = getattr(life_plugin, "schedule_followup_for_stream", None)
+        if not callable(schedule):
+            return False, "proactive_message_plugin 当前不可登记延迟续话"
+
+        chat_stream = getattr(self, "chat_stream", None)
+        if chat_stream is None:
+            return False, "缺少当前聊天流，无法登记延迟续话"
+
+        try:
+            ok, message = await schedule(
+                chat_stream,
+                delay_seconds=delay_seconds,
+                thought=thought,
+                topic=topic,
+                followup_type=followup_type,
+                source="life_engine",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return False, f"登记延迟续话失败: {exc}"
+
+        return ok, message
+
+
+class LifeMessageNucleusTool(_DefaultMessageNucleusTool):
+    """向生命中枢留言，不等待即时回复。"""
+
+    chatter_allow: list[str] = ["life_chatter"]
+
+    async def execute(
+        self,
+        content: Annotated[str, "要转交给生命中枢的话。应直接写想问或想说的内容。"],
+        stream_id: Annotated[str, "当前对话流 ID。通常留空，由系统自动填充。"] = "",
+        platform: Annotated[str, "当前平台名。通常留空，由系统自动填充。"] = "",
+        chat_type: Annotated[str, "当前聊天类型。通常留空，由系统自动填充。"] = "",
+        sender_name: Annotated[str, "当前说话身份展示名。通常留空，由系统自动填充。"] = "",
+    ) -> tuple[bool, str]:
+        text = str(content or "").strip()
+        if not text:
+            return False, "content 不能为空"
+
+        life_plugin = get_plugin_manager().get_plugin("life_engine")
+        if life_plugin is None:
+            return False, "life_engine 未加载，无法转交到生命中枢"
+
+        service = getattr(life_plugin, "service", None)
+        if service is None or not hasattr(service, "enqueue_outer_message"):
+            return False, "life_engine 服务不可用，无法转交到生命中枢"
+
+        try:
+            receipt: dict[str, Any] = await service.enqueue_outer_message(
+                message=text,
+                stream_id=str(stream_id or "").strip(),
+                platform=str(platform or "").strip(),
+                chat_type=str(chat_type or "").strip(),
+                sender_name=str(sender_name or "").strip(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return False, f"转交到生命中枢失败: {exc}"
+
+        event_id = str(receipt.get("event_id") or "unknown")
+        return True, (
+            f"已把这句话转交给生命中枢（event_id={event_id}）。"
+            "不要等待即时回复；等它整理好后，会自己回到对话里。"
+        )
+
+
+class LifeConsultNucleusTool(_DefaultConsultNucleusTool):
+    """同步查询当前状态层信息。"""
+
+    chatter_allow: list[str] = ["life_chatter"]
+
+    async def execute(
+        self,
+        query: Annotated[
+            str,
+            "想问中枢的状态问题，例如“最近在想什么”“现在有什么 TODO”“最近写了什么日记”",
+        ],
+    ) -> tuple[bool, str]:
+        query_text = str(query or "").strip()
+        if not query_text:
+            return False, "query 不能为空"
+
+        try:
+            life_plugin = get_plugin_manager().get_plugin("life_engine")
+            if life_plugin is None:
+                return False, "life_engine 未加载，无法查询中枢"
+
+            service = getattr(life_plugin, "service", None)
+            if service is None:
+                return False, "life_engine 服务不可用"
+
+            if hasattr(service, "query_outer_context"):
+                result = await service.query_outer_context(query_text)
+            else:
+                result = await service.query_actor_context(query_text)
+
+            if not result:
+                return True, "暂时没有找到相关状态信息"
+            return True, result
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"查询生命中枢状态失败: {exc}")
+            return False, f"查询失败: {exc}"
+
+
+class LifeSearchLifeMemoryTool(_DefaultSearchLifeMemoryTool):
+    """同步检索 life_engine 深层记忆。"""
+
+    chatter_allow: list[str] = ["life_chatter"]
+
+    async def execute(
+        self,
+        query: Annotated[str, "要检索的记忆主题或关键词"],
+        top_k: Annotated[int, "最多返回多少条主结果，默认 5"] = 5,
+    ) -> tuple[bool, str]:
+        query_text = str(query or "").strip()
+        if not query_text:
+            return False, "query 不能为空"
+
+        resolved_top_k = max(1, min(int(top_k), 10))
+        try:
+            life_plugin = get_plugin_manager().get_plugin("life_engine")
+            if life_plugin is None:
+                return False, "life_engine 未加载"
+
+            service = getattr(life_plugin, "service", None)
+            if service is None:
+                return False, "life_engine 服务不可用"
+
+            if hasattr(service, "search_outer_memory"):
+                result = await service.search_outer_memory(query_text, top_k=resolved_top_k)
+            else:
+                result = await service.search_actor_memory(query_text, top_k=resolved_top_k)
+
+            if not result:
+                return True, "暂时没有检索到相关记忆"
+            return True, result
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"检索 life memory 失败: {exc}")
+            return False, f"检索失败: {exc}"
+
+
+class LifeRetrieveMemoryTool(BaseTool):
+    """智能记忆检索工具。"""
+
+    tool_name = "retrieve_memory"
+    tool_description = (
+        "智能检索生命中枢的记忆，自动决定检索策略和详细程度。"
+        "适合查询过去聊过的事、旧计划、历史文件记录、被记住的线索。"
+        "如果需要翻过去的记忆文件或旧计划，请直接使用 search_life_memory / fetch_life_memory。"
+    )
+    chatter_allow: list[str] = ["life_chatter"]
+
+    async def execute(
+        self,
+        query: Annotated[str, "要检索的记忆主题或关键词"],
+        detail_level: Annotated[str, "详细程度：brief/normal/detailed/auto"] = "normal",
+        max_results: Annotated[int, "最多返回几条记忆"] = 3,
+    ) -> tuple[bool, str]:
+        query_text = str(query or "").strip()
+        if not query_text:
+            return False, "query 不能为空"
+
+        detail_level = str(detail_level or "normal").strip().lower()
+        if detail_level not in {"brief", "normal", "detailed", "auto"}:
+            detail_level = "normal"
+
+        max_results = max(1, min(int(max_results), 5))
+
+        try:
+            life_plugin = get_plugin_manager().get_plugin("life_engine")
+            if not life_plugin:
+                return False, "life_engine 未加载"
+
+            registry = ToolRegistry()
+            search_tool_cls = None
+            fetch_tool_cls = None
+
+            for tool in getattr(life_plugin, "tools", []):
+                if getattr(tool, "tool_name", "") == "search_life_memory":
+                    search_tool_cls = tool.__class__
+                    registry.register(search_tool_cls)
+                elif getattr(tool, "tool_name", "") == "fetch_life_memory":
+                    fetch_tool_cls = tool.__class__
+                    registry.register(fetch_tool_cls)
+
+            if not search_tool_cls:
+                return False, "search_life_memory 工具未找到"
+
+            agent_prompt = f"""你是生命中枢的记忆检索专家。你的任务是帮助当前运行模式检索相关记忆。
+
+**检索需求**：
+- 主题/关键词：{query_text}
+- 详细程度：{detail_level}
+- 最多返回：{max_results} 条
+
+**可用工具**：
+- search_life_memory: 检索记忆摘要
+- fetch_life_memory: 获取完整文件内容
+
+**你的任务**：
+1. 使用 search_life_memory 检索相关记忆
+2. 根据 detail_level 决定是否需要调用 fetch_life_memory：
+   - brief: 只返回 search 的摘要
+   - normal: 对最相关的 1-2 条记忆调用 fetch（限制 500 字符）
+   - detailed: 对所有相关记忆调用 fetch（限制 1000 字符）
+   - auto: 根据摘要质量自动判断
+3. 整合结果，返回清晰的摘要
+
+**返回格式**：
+【记忆1】标题
+相关度：0.XX
+内容：...
+
+【记忆2】标题
+相关度：0.XX
+内容：...
+
+**注意**：
+- 如果没有找到相关记忆，明确说明
+- 控制返回长度，避免过长
+- 优先返回最相关的记忆
+- 直接返回整合后的结果，不要说“我已经检索完成”之类的元信息
+"""
+
+            model_set = get_model_set_by_task("sub_actor")
+            request = create_llm_request(
+                model_set=model_set,
+                request_name="memory_retrieval_agent",
+            )
+            request.add_payload(LLMPayload(ROLE.SYSTEM, Text(agent_prompt)))
+            request.add_payload(LLMPayload(ROLE.TOOL, list(registry.get_all())))
+            request.add_payload(LLMPayload(ROLE.USER, Text(f"请检索关于「{query_text}」的记忆")))
+
+            max_rounds = 5
+            response = await request.send(stream=False)
+            final_result = ""
+
+            for _ in range(max_rounds):
+                response_text = await response
+                call_list = list(getattr(response, "call_list", []) or [])
+
+                if not call_list:
+                    final_result = str(response_text or "").strip()
+                    break
+
+                for call in call_list:
+                    tool_name = getattr(call, "name", "") or ""
+                    args = dict(getattr(call, "args", {}) or {})
+
+                    usable_cls = registry.get(tool_name)
+                    if usable_cls:
+                        tool_instance = usable_cls(plugin=life_plugin)
+                        success, result = await tool_instance.execute(**args)
+                        result_text = str(result) if success else f"失败: {result}"
+                    else:
+                        result_text = f"未知工具: {tool_name}"
+
+                    call_id = getattr(call, "id", None)
+                    response.add_payload(
+                        LLMPayload(
+                            ROLE.TOOL_RESULT,
+                            ToolResult(value=result_text, call_id=call_id, name=tool_name),
+                        )
+                    )
+
+                response = await response.send(stream=False)
+            else:
+                final_result = str(response_text or "").strip() if response_text else f"子代理在 {max_rounds} 轮内未完成"
+
+            if not final_result:
+                final_result = "暂时没有检索到相关记忆"
+            return True, final_result
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"执行智能记忆检索失败: {exc}", exc_info=True)
+            return False, f"执行失败: {exc}"

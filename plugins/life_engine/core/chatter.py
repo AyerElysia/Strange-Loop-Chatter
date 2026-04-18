@@ -1,7 +1,8 @@
 """LifeChatter — 生命中枢统一对话器。
 
-直接访问 life_engine 内部状态（event_history, inner_state），
-取代 DFC + bridge 的间接架构。
+同一个主体在不同运行模式间切换：
+life_mode 负责内在整理与沉淀，
+chat_mode 负责对外交流。
 """
 
 from __future__ import annotations
@@ -34,6 +35,13 @@ logger = get_logger("life_chatter", display="生命对话器", color=COLOR.MAGEN
 _PASS_AND_WAIT = "action-life_pass_and_wait"
 _SEND_TEXT = "action-life_send_text"
 _SUSPEND_TEXT = "__SUSPEND__"
+_MAX_THINK_ONLY_RETRIES = 1
+_THINK_ONLY_RETRY_REMINDER = (
+    "（系统提醒：你本轮只调用了 action-think。"
+    "think 只能用于内在思考，不能作为唯一动作。"
+    "请立刻再来一轮，至少补充一个可执行动作（例如 action-life_send_text、"
+    "action-life_pass_and_wait，或其他可用的 tool/action）。）"
+)
 _REASON_LEAK_PATTERN = re.compile(
     r'[,，]?\s*["\']?reason["\']?\s*[:：]',
     re.IGNORECASE,
@@ -59,6 +67,7 @@ class _WorkflowRuntime:
     unread_msgs_to_flush: list[Message]
     plain_text_retry_count: int = 0
     follow_up_rounds: int = 0
+    think_only_retry_count: int = 0
 
 
 # ── Actions ───────────────────────────────────────────────────
@@ -298,10 +307,10 @@ class LifePassAndWaitAction(BaseAction):
 # ── LifeChatter ───────────────────────────────────────────────
 
 class LifeChatter(BaseChatter):
-    """生命中枢统一对话器 — 直接访问内在状态。"""
+    """生命中枢统一对话器 - 同一主体的对外运行模式。"""
 
     chatter_name: str = "life_chatter"
-    chatter_description: str = "生命中枢统一对话器 — 直接访问内在状态"
+    chatter_description: str = "生命中枢统一对话器 - 同一主体的对外运行模式"
     associated_platforms: list[str] = []
     chat_type: ChatType = ChatType.ALL
     dependencies: list[str] = []
@@ -386,6 +395,12 @@ class LifeChatter(BaseChatter):
 
 你正在以 **{nickname}** 的身份与用户对话。
 
+## 运行模式说明
+- 你不是两个意识体，而是同一个主体在不同运行模式下工作。
+- `life_mode` 负责内在整理、记忆沉淀、状态更新。
+- `chat_mode` 负责对外交流、回应用户、执行动作。
+- 模式切换不会改变你的身份，只改变当前职责与可见上下文。
+
 ## 行为准则
 - 保持你的人设和表达风格，用符合你性格的方式回复。
 - 消息遵循标准化格式，请**不要模仿其格式与用户对话**。
@@ -393,10 +408,20 @@ class LifeChatter(BaseChatter):
 - 不要刨根问底，保持对话的自然流畅。
 
 ## 工具使用
-- send_text: 发送文本消息。content 只能写纯文本正文，禁止塞入元信息。
+- think: 发送回复前记录内心活动；如果你准备回复用户，优先先 think，再调用 `life_send_text`。
+  严禁单独调用 think，think 必须与至少一个可执行动作同轮出现。
+- life_send_text: 发送文本消息。content 只能写纯文本正文，禁止塞入元信息。
 - pass_and_wait: 不需要回复时使用，等待用户新消息。
+- schedule_followup_message: 觉得当前话题还想过一会儿再补一句时使用，只登记续话意图，不要当场连发。
 - 其他 tool/agent: 查询信息或执行功能。收到结果后，继续回复或进一步调用。
 - 可以一次调用多个工具组合使用。回复动作应当优先。
+
+### think 调用硬规则（必须遵守）
+1. 如果你打算回复用户：`action-think` 必须和至少一个可执行动作同轮出现（通常是 `action-life_send_text`）。
+2. `action-think` 不能单独调用；只调用 think 视为无效轮次，会被系统强制重试。
+3. 推荐顺序：先 `action-think`，再 `action-life_send_text`。
+4. 如果本轮决定不回复：不要调用 think，直接用 `action-life_pass_and_wait`。
+5. 禁止把最终给用户看的正文只写在 think 里，用户可见内容必须写进 `life_send_text.content`。
 
 ## 安全准则
 - 保护用户隐私，不泄露个人信息。
@@ -646,6 +671,27 @@ class LifeChatter(BaseChatter):
         payloads = getattr(response, "payloads", None)
         return bool(payloads and payloads[-1].role == ROLE.TOOL_RESULT)
 
+    @staticmethod
+    def _is_think_call_name(call_name: str) -> bool:
+        return call_name.strip().lower() in {"action-think", "think"}
+
+    @classmethod
+    def _is_think_only_calls(cls, calls: list[object]) -> bool:
+        if not calls:
+            return False
+        names: list[str] = []
+        for call in calls:
+            name = str(getattr(call, "name", "") or "")
+            if not name:
+                return False
+            names.append(name)
+        return all(cls._is_think_call_name(name) for name in names)
+
+    @staticmethod
+    def _append_think_only_retry_instruction(response: Any) -> None:
+        response.add_payload(LLMPayload(ROLE.SYSTEM, Text(_THINK_ONLY_RETRY_REMINDER)))
+        logger.warning("检测到本轮仅调用 action-think，已注入系统提醒并触发重试")
+
     # ── main execute ─────────────────────────────────────────
 
     async def execute(self) -> AsyncGenerator[Wait | Success | Failure | Stop, None]:
@@ -708,6 +754,7 @@ class LifeChatter(BaseChatter):
                 rt.cross_round_seen_signatures.clear()
                 rt.plain_text_retry_count = 0
                 rt.follow_up_rounds = 0
+                rt.think_only_retry_count = 0
                 rt.unreads = unread_msgs
 
                 unread_lines = "\n".join(
@@ -792,19 +839,25 @@ class LifeChatter(BaseChatter):
                 for call in call_list:
                     get_watchdog().feed_dog(self.stream_id)
 
+                    call_name = getattr(call, "name", "<unknown>")
+                    log_args = dict(call.args) if isinstance(getattr(call, "args", None), dict) else {}
+                    reason = log_args.pop("reason", "未提供原因")
+                    logger.info(
+                        f"LLM 调用 {call_name}，原因: {reason}，参数: {log_args}"
+                    )
+
                     # 去重
-                    args = dict(call.args) if isinstance(call.args, dict) else {}
-                    dedupe_args = {k: v for k, v in args.items() if k != "reason"}
+                    dedupe_args = log_args
                     try:
-                        dedupe_key = f"{call.name}:{json.dumps(dedupe_args, ensure_ascii=False, sort_keys=True, default=str)}"
+                        dedupe_key = f"{call_name}:{json.dumps(dedupe_args, ensure_ascii=False, sort_keys=True, default=str)}"
                     except TypeError:
-                        dedupe_key = f"{call.name}:{dedupe_args}"
+                        dedupe_key = f"{call_name}:{dedupe_args}"
 
                     if dedupe_key in seen_sigs or dedupe_key in rt.cross_round_seen_signatures:
                         llm_response.add_payload(
                             LLMPayload(
                                 ROLE.TOOL_RESULT,
-                                ToolResult(value="检测到重复工具调用，已跳过", call_id=call.id, name=call.name),
+                                ToolResult(value="检测到重复工具调用，已跳过", call_id=call.id, name=call_name),
                             )
                         )
                         continue
@@ -812,11 +865,11 @@ class LifeChatter(BaseChatter):
                     rt.cross_round_seen_signatures.add(dedupe_key)
 
                     # pass_and_wait
-                    if call.name == _PASS_AND_WAIT:
+                    if call_name == _PASS_AND_WAIT:
                         llm_response.add_payload(
                             LLMPayload(
                                 ROLE.TOOL_RESULT,
-                                ToolResult(value="已跳过，等待用户新消息", call_id=call.id, name=call.name),
+                                ToolResult(value="已跳过，等待用户新消息", call_id=call.id, name=call_name),
                             )
                         )
                         should_wait = True
@@ -828,8 +881,23 @@ class LifeChatter(BaseChatter):
                         rt.unreads[-1] if rt.unreads else None,
                     )
 
-                    if appended and not call.name.startswith("action-"):
+                    if appended and not call_name.startswith("action-"):
                         has_pending_tool_results = True
+
+                think_only_calls = self._is_think_only_calls(call_list)
+                if (
+                    think_only_calls
+                    and not should_wait
+                    and not has_pending_tool_results
+                ):
+                    if rt.think_only_retry_count < _MAX_THINK_ONLY_RETRIES:
+                        rt.think_only_retry_count += 1
+                        self._append_think_only_retry_instruction(llm_response)
+                        self._transition(rt, _Phase.FOLLOW_UP, "think-only guard retry")
+                        continue
+                    logger.warning("连续仅调用 action-think，达到重试上限，本轮按 action-only 收敛等待")
+                else:
+                    rt.think_only_retry_count = 0
 
                 # pass_and_wait 最高优先级
                 if should_wait:

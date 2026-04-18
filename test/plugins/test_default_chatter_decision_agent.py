@@ -118,3 +118,55 @@ async def test_decide_should_respond_requests_sub_actor_reminder(
         "max_context": 5,
         "with_reminder": "sub_actor",
     }
+
+
+@pytest.mark.asyncio
+async def test_decide_should_respond_allows_missing_fallback_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """fallback_prompt 省略时也应继续工作。"""
+
+    class _FakeResponse:
+        message = '{"should_respond": false, "reason": "skip"}'
+
+        def add_payload(self, _payload: Any) -> None:
+            return None
+
+        async def send(self, stream: bool = False) -> "_FakeResponse":
+            _ = stream
+            return self
+
+        def __await__(self):  # type: ignore[no-untyped-def]
+            async def _done() -> "_FakeResponse":
+                return self
+
+            return _done().__await__()
+
+    class _FakeChatter:
+        def create_request(
+            self,
+            task: str = "actor",
+            request_name: str = "",
+            max_context: int | None = None,
+            with_reminder: str | None = None,
+        ) -> _FakeResponse:
+            _ = (task, request_name, max_context, with_reminder)
+            return _FakeResponse()
+
+    monkeypatch.setattr(
+        "plugins.default_chatter.decision_agent.get_core_config",
+        lambda: SimpleNamespace(personality=SimpleNamespace(nickname="Neo")),
+    )
+    monkeypatch.setattr(
+        "plugins.default_chatter.decision_agent.get_prompt_manager",
+        lambda: SimpleNamespace(get_template=lambda _name: None),
+    )
+
+    result = await decide_should_respond(
+        chatter=_FakeChatter(),
+        logger=SimpleNamespace(info=lambda *_a, **_k: None, warning=lambda *_a, **_k: None, debug=lambda *_a, **_k: None, error=lambda *_a, **_k: None),
+        unreads_text="hello",
+        chat_stream=SimpleNamespace(stream_id="s1"),
+    )
+
+    assert result == {"should_respond": False, "reason": "skip"}

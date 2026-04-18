@@ -1,8 +1,8 @@
 """life_engine 生命中枢服务核心模块。
 
-生命中枢是一个独立于 DFC（对话流控制器）的并行存在系统。
-它通过周期性心跳来处理堆积的消息、进行内部思考、并为未来的
-工具调用、主动与 DFC 通信等功能提供基础骨架。
+生命中枢是同一个主体在不同运行模式间切换的骨架。
+它通过周期性心跳来处理堆积的消息、进行内部思考，并为工具调用、
+对外交流与状态沉淀提供基础能力。
 """
 
 from __future__ import annotations
@@ -198,10 +198,18 @@ class LifeEngineService(BaseService):
         """计算距离上一次传话给 DFC 过去了多少分钟。"""
         return minutes_since_time(self._state.last_tell_dfc_at)
 
+    def _minutes_since_outer_sync(self) -> int | None:
+        """计算距离上一次同步给对外运行模式过去了多少分钟。"""
+        return self._minutes_since_tell_dfc()
+
     def record_tell_dfc(self) -> None:
         """记录一次传话给 DFC 的时间。"""
         self._state.last_tell_dfc_at = _now_iso()
         self._state.tell_dfc_count += 1
+
+    def record_outer_sync(self) -> None:
+        """记录一次同步给对外运行模式的时间。"""
+        self.record_tell_dfc()
 
     def _workspace_dir(self) -> Path:
         """返回 life workspace 目录。"""
@@ -233,6 +241,227 @@ class LifeEngineService(BaseService):
             data["neuromod_state"] = self._inner_state.get_full_state()
         return data
 
+    @staticmethod
+    def _message_time_display(message: Message) -> tuple[str, str]:
+        """返回消息时间的 ISO 与简洁显示。"""
+        raw_time = getattr(message, "time", None)
+        try:
+            if raw_time is None:
+                raise ValueError("missing time")
+            iso_time = datetime.fromtimestamp(float(raw_time), tz=timezone.utc).astimezone().isoformat()
+        except Exception:
+            iso_time = _now_iso()
+        return iso_time, _format_time_display(iso_time)
+
+    @staticmethod
+    def _format_message_text(message: Message, *, max_length: int = 240) -> str:
+        """格式化消息正文。"""
+        raw_text = getattr(message, "processed_plain_text", None)
+        if raw_text is None:
+            raw_text = getattr(message, "content", "")
+        return _shorten_text(str(raw_text or "").strip() or "（空消息）", max_length=max_length)
+
+    @staticmethod
+    def _message_sender_label(message: Message) -> str:
+        """格式化消息发送者标签。"""
+        return str(
+            getattr(message, "sender_cardname", None)
+            or getattr(message, "sender_name", None)
+            or getattr(message, "sender_id", None)
+            or "未知发送者"
+        )
+
+    @staticmethod
+    def _serialize_life_event(event: LifeEngineEvent) -> dict[str, Any]:
+        """将 life 事件转换为可视化数据。"""
+        return {
+            "scope": "life",
+            "event_id": event.event_id,
+            "event_type": event.event_type.value,
+            "timestamp": event.timestamp,
+            "time_display": _format_time_display(event.timestamp),
+            "sequence": event.sequence,
+            "source": event.source,
+            "source_detail": event.source_detail,
+            "content": _shorten_text(event.content or "", max_length=240),
+            "content_full": event.content or "",
+            "content_type": event.content_type,
+            "sender": event.sender,
+            "chat_type": event.chat_type,
+            "stream_id": event.stream_id,
+            "heartbeat_index": event.heartbeat_index,
+            "tool_name": event.tool_name,
+            "tool_args": event.tool_args or {},
+            "tool_success": event.tool_success,
+        }
+
+    def _serialize_stream_message(
+        self,
+        message: Message,
+        *,
+        stream_name: str,
+        source: str,
+    ) -> dict[str, Any]:
+        """将聊天流消息转换为可视化数据。"""
+        iso_time, time_display = self._message_time_display(message)
+        sender_role = str(getattr(message, "sender_role", "") or "").lower()
+        direction = "sent" if sender_role == "bot" else "received"
+        return {
+            "scope": "chatter",
+            "stream_id": str(getattr(message, "stream_id", "") or ""),
+            "stream_name": stream_name,
+            "platform": str(getattr(message, "platform", "") or ""),
+            "chat_type": str(getattr(message, "chat_type", "") or ""),
+            "message_id": str(getattr(message, "message_id", "") or ""),
+            "time": iso_time,
+            "time_display": time_display,
+            "direction": direction,
+            "sender_role": sender_role or None,
+            "sender_name": self._message_sender_label(message),
+            "content": self._format_message_text(message),
+            "content_full": str(
+                getattr(message, "processed_plain_text", None)
+                or getattr(message, "content", "")
+                or ""
+            ),
+            "reply_to": getattr(message, "reply_to", None),
+            "source": source,
+            "is_inner_monologue": bool(getattr(message, "is_inner_monologue", False)),
+            "is_proactive_followup_trigger": bool(
+                getattr(message, "is_proactive_followup_trigger", False)
+            ),
+        }
+
+    async def get_message_observability_snapshot(
+        self,
+        *,
+        event_limit: int = 24,
+        stream_limit: int = 12,
+        message_limit: int = 8,
+    ) -> dict[str, Any]:
+        """返回 life 与 chatter 的联合消息观测快照。"""
+        async with self._get_lock():
+            pending_events = list(self._pending_events)
+            event_history = list(self._event_history)
+            state_snapshot = asdict(self._state)
+            inner_state = self._inner_state
+
+        life_events = [
+            self._serialize_life_event(event)
+            for event in (event_history[-max(1, event_limit) :] if event_limit > 0 else event_history)
+        ]
+        pending_life_events = [
+            self._serialize_life_event(event)
+            for event in (pending_events[-max(1, min(event_limit, len(pending_events))) :] if pending_events else [])
+        ]
+
+        life_latest_event = life_events[-1] if life_events else (pending_life_events[-1] if pending_life_events else None)
+
+        try:
+            from src.core.managers import get_stream_manager
+
+            stream_manager = get_stream_manager()
+            stream_items = list(getattr(stream_manager, "_streams", {}).values())
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"读取聊天流快照失败: {exc}")
+            stream_items = []
+
+        stream_snapshots: list[dict[str, Any]] = []
+        for stream in stream_items:
+            stream_id = str(getattr(stream, "stream_id", "") or "")
+            if not stream_id:
+                continue
+            context = getattr(stream, "context", None)
+            if context is None:
+                continue
+
+            history_messages = list(getattr(context, "history_messages", []) or [])
+            unread_messages = list(getattr(context, "unread_messages", []) or [])
+            current_message = getattr(context, "current_message", None)
+
+            candidate_messages = history_messages[-max(1, message_limit) :]
+            recent_messages = [
+                self._serialize_stream_message(
+                    msg,
+                    stream_name=str(getattr(stream, "stream_name", "") or stream_id[:8] or "unknown"),
+                    source="history",
+                )
+                for msg in candidate_messages
+            ]
+
+            latest_message = None
+            if unread_messages:
+                latest_message = self._serialize_stream_message(
+                    unread_messages[-1],
+                    stream_name=str(getattr(stream, "stream_name", "") or stream_id[:8] or "unknown"),
+                    source="unread",
+                )
+            elif history_messages:
+                latest_message = self._serialize_stream_message(
+                    history_messages[-1],
+                    stream_name=str(getattr(stream, "stream_name", "") or stream_id[:8] or "unknown"),
+                    source="history",
+                )
+            elif current_message is not None:
+                latest_message = self._serialize_stream_message(
+                    current_message,
+                    stream_name=str(getattr(stream, "stream_name", "") or stream_id[:8] or "unknown"),
+                    source="current",
+                )
+
+            last_message_time = getattr(context, "last_message_time", None)
+            last_active_time = getattr(stream, "last_active_time", None)
+            stream_snapshots.append(
+                {
+                    "stream_id": stream_id,
+                    "stream_name": str(getattr(stream, "stream_name", "") or stream_id[:8] or "unknown"),
+                    "platform": str(getattr(stream, "platform", "") or ""),
+                    "chat_type": str(getattr(stream, "chat_type", "") or ""),
+                    "bot_nickname": str(getattr(stream, "bot_nickname", "") or ""),
+                    "is_active": bool(getattr(stream, "is_active", True)),
+                    "is_chatter_processing": bool(getattr(context, "is_chatter_processing", False)),
+                    "last_active_time": last_active_time,
+                    "last_message_time": last_message_time,
+                    "unread_count": len(unread_messages),
+                    "history_count": len(history_messages),
+                    "latest_message": latest_message,
+                    "recent_messages": recent_messages,
+                    "sort_ts": float(last_active_time or last_message_time or 0.0),
+                }
+            )
+
+        stream_snapshots.sort(key=lambda item: item["sort_ts"], reverse=True)
+        stream_snapshots = stream_snapshots[: max(1, stream_limit)]
+
+        inner_state_snapshot: dict[str, Any] | None = None
+        if inner_state is not None:
+            try:
+                inner_state_snapshot = inner_state.get_full_state()
+            except Exception:
+                try:
+                    inner_state_snapshot = asdict(inner_state)  # type: ignore[arg-type]
+                except Exception:
+                    inner_state_snapshot = {"status": "unavailable"}
+
+        return {
+            "generated_at": _now_iso(),
+            "life": {
+                "state": state_snapshot,
+                "inner_state": inner_state_snapshot,
+                "pending_events": pending_life_events,
+                "recent_events": life_events,
+                "latest_event": life_latest_event,
+            },
+            "streams": stream_snapshots,
+            "summary": {
+                "active_stream_count": len(stream_snapshots),
+                "pending_life_events": len(pending_events),
+                "recent_life_events": len(life_events),
+                "heartbeat_count": int(state_snapshot.get("heartbeat_count", 0) or 0),
+                "last_model_reply": state_snapshot.get("last_model_reply"),
+            },
+        }
+
     def health(self) -> dict[str, Any]:
         """返回一个轻量健康信息。"""
         return self.snapshot()
@@ -243,12 +472,20 @@ class LifeEngineService(BaseService):
             self._dfc_integration = DFCIntegration(self)
         return await self._dfc_integration.get_state_digest()
 
+    async def get_state_digest_for_outer_mode(self) -> str:
+        """生成给对外运行模式的状态摘要。"""
+        return await self.get_state_digest_for_dfc()
+
     async def query_actor_context(self, query: str) -> str:
         """供 DFC 同步查询当前状态、TODO 与最近日记。"""
         del query
         if self._dfc_integration is None:
             self._dfc_integration = DFCIntegration(self)
         return await self._dfc_integration.query_actor_context()
+
+    async def query_outer_context(self, query: str) -> str:
+        """供对外运行模式同步查询当前状态、TODO 与最近日记。"""
+        return await self.query_actor_context(query)
 
     async def search_actor_memory(self, query: str, top_k: int = 5) -> str:
         """供 DFC 深度检索 life memory。"""
@@ -414,6 +651,24 @@ class LifeEngineService(BaseService):
             "queued": True,
         }
 
+    async def enqueue_outer_message(
+        self,
+        message: str,
+        *,
+        stream_id: str = "",
+        platform: str = "",
+        chat_type: str = "",
+        sender_name: str = "",
+    ) -> dict[str, Any]:
+        """接收来自对外运行模式的异步留言。"""
+        return await self.enqueue_dfc_message(
+            message,
+            stream_id=stream_id,
+            platform=platform,
+            chat_type=chat_type,
+            sender_name=sender_name,
+        )
+
     async def enqueue_direct_message(
         self,
         message: str,
@@ -561,6 +816,10 @@ class LifeEngineService(BaseService):
             lines.append(line)
 
         return "\n".join(lines)
+
+    async def search_outer_memory(self, query: str, top_k: int = 5) -> str:
+        """供对外运行模式深度检索 life memory。"""
+        return await self.search_actor_memory(query, top_k=top_k)
 
     def _simplify_source(self, source: str) -> str:
         """简化消息来源显示。"""
@@ -731,19 +990,19 @@ class LifeEngineService(BaseService):
             "3. **读取文件** → `nucleus_read_file`",
             "4. **写点东西** → `nucleus_write_file` / `nucleus_edit_file`",
             "5. **建立关联** → `nucleus_relate_file`",
-            "6. **传话给DFC** → `nucleus_tell_dfc`",
+            "6. **传递给对外运行模式** → `nucleus_tell_dfc`",
             "7. **联网搜索** → `nucleus_web_search`",
             "8. **网页浏览** → `nucleus_browser_fetch`", "",
             "### 🧭 `nucleus_tell_dfc` 的核心判定：信息差", "",
-            "判断标准不是语气，而是：**你是否握有 DFC 目前没有的增量信息**。", "",
+            "判断标准不是语气，而是：**你是否握有对外运行模式目前没有的增量信息**。", "",
             "应该使用 `nucleus_tell_dfc`：",
-            "- 你得到新信息，且会改变 DFC 的判断/语气/优先级",
+            "- 你得到新信息，且会改变对外运行模式的判断/语气/优先级",
             "- 你形成了新关联（把分散线索连接成新结论）",
             "- 你发现了新风险（误解风险、情绪风险、节奏风险）",
             "- 你状态显著变化，且这个变化会影响外在对话", "",
             "不应该使用 `nucleus_tell_dfc`：",
             "- 没有信息差，只是在复述已知内容",
-            "- 只是把动作要求丢给 DFC（任务分配）",
+            "- 只是把动作要求丢给对外运行模式（任务分配）",
             "- 直接转发用户对 life 的命令原句", "",
             "### 🧱 工具边界", "",
             "- `nucleus_search_memory` 是历史检索，不要反复重搜同一主题",

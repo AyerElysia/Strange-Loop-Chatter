@@ -138,6 +138,27 @@ class _FakeChatter:
 
 
 @pytest.mark.asyncio
+async def test_get_life_state_for_current_turn_uses_service_api(monkeypatch) -> None:
+    """Life State 应通过 service_api 获取，而不是 plugin_api。"""
+
+    class _FakeLifeService:
+        async def get_state_digest_for_dfc(self) -> str:
+            return "life-state-ok"
+
+    from plugins.default_chatter import runners as runners_mod
+
+    monkeypatch.setattr(
+        "src.app.plugin_system.api.service_api.get_service",
+        lambda _sig: _FakeLifeService(),
+    )
+
+    result = await runners_mod._get_life_state_for_current_turn(  # type: ignore[attr-defined]
+        SimpleNamespace(warning=lambda *_a, **_k: None),
+    )
+    assert result == "life-state-ok"
+
+
+@pytest.mark.asyncio
 async def test_run_enhanced_prioritizes_tool_followup_when_tool_result_tail() -> None:
     """当上下文尾部是 TOOL_RESULT 时，应优先续轮，不注入 USER。
 
@@ -178,4 +199,3 @@ async def test_run_enhanced_prioritizes_tool_followup_when_tool_result_tail() ->
     result = await anext(gen)
     assert isinstance(result, Stop)
     assert chatter.create_request_calls == [("actor", "actor")]
-
