@@ -123,7 +123,10 @@ class DefaultChatterPromptBuilder:
         """构建系统提示词。"""
         from src.app.plugin_system.api import adapter_api
 
-        bot_info = await adapter_api.get_bot_info_by_platform(chat_stream.platform) or {}
+        platform = str(chat_stream.platform or "").strip()
+        bot_info: dict[str, str] = {}
+        if platform:
+            bot_info = await adapter_api.get_bot_info_by_platform(platform) or {}
         platform_name = str(
             bot_info.get("bot_name")
             or chat_stream.bot_nickname

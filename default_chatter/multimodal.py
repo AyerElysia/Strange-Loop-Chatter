@@ -115,41 +115,78 @@ def build_multimodal_content(
 def _extract_media_data(media_type: str, raw_data: Any) -> str:
     """提取媒体原始数据（base64/data-url/path）。"""
     if isinstance(raw_data, str):
-        return raw_data
+        return _normalize_multimodal_media_data(raw_data)
 
     if isinstance(raw_data, dict):
         if media_type == "video":
-            for key in ("base64", "data", "video_base64"):
-                value = raw_data.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value
+            keys = ("base64", "data", "video_base64", "url", "path", "file")
         else:
-            value = raw_data.get("data")
+            keys = ("data", "base64", "url", "path", "file")
+
+        for key in keys:
+            value = raw_data.get(key)
             if isinstance(value, str) and value.strip():
                 return value
-            value = raw_data.get("base64")
-            if isinstance(value, str) and value.strip():
-                return value
+
+        nested_media = raw_data.get("media")
+        if isinstance(nested_media, list):
+            for item in nested_media:
+                if not isinstance(item, dict):
+                    continue
+                for key in ("data", "base64", "url", "path", "file"):
+                    value = item.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return _normalize_multimodal_media_data(value)
     return ""
+
+
+def _normalize_multimodal_media_data(value: str) -> str:
+    """把不同来源的媒体前缀统一成多模态链路可消费的形式。"""
+    if value.startswith("base64://"):
+        return f"base64|{value[len('base64://'):]}"
+    return value
 
 
 def get_media_list(msg: Message) -> list[dict[str, Any]]:
     """从 Message 对象中提取 media 列表。"""
+    collected: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def extend_media(source: Any) -> None:
+        if not isinstance(source, list):
+            return
+        for item in source:
+            if not isinstance(item, dict):
+                continue
+            media_type = str(item.get("type", "")).lower()
+            if not media_type:
+                continue
+            raw_key = (
+                item.get("data")
+                or item.get("base64")
+                or item.get("path")
+                or item.get("url")
+                or item.get("file")
+            )
+            key = (media_type, str(raw_key))
+            if key in seen:
+                continue
+            seen.add(key)
+            collected.append(item)
+
     content = getattr(msg, "content", None)
     if isinstance(content, dict):
-        media = content.get("media")
-        if isinstance(media, list) and media:
-            return media
+        extend_media(content.get("media"))
 
     extra = getattr(msg, "extra", {})
     if isinstance(extra, dict):
-        media = extra.get("media")
-        if isinstance(media, list) and media:
-            return media
+        extend_media(extra.get("media"))
 
     media = getattr(msg, "media", None)
-    if isinstance(media, list) and media:
-        return media
+    extend_media(media)
+
+    if collected:
+        return collected
 
     msg_type = getattr(msg, "message_type", None)
     if (
