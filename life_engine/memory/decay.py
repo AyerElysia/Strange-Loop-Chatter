@@ -9,6 +9,11 @@ from __future__ import annotations
 import math
 import sqlite3
 import time
+
+from src.app.plugin_system.api.log_api import get_logger
+
+logger = get_logger("life_engine.memory.decay")
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -78,6 +83,9 @@ async def apply_decay(db: sqlite3.Connection) -> int:
     Returns:
         更新的节点数量
     """
+    logger.info("Starting memory decay process")
+    start_time = time.time()
+
     cursor = db.cursor()
     cursor.execute("SELECT * FROM memory_nodes")
     rows = cursor.fetchall()
@@ -115,7 +123,11 @@ async def apply_decay(db: sqlite3.Connection) -> int:
                 )
 
     db.commit()
-    logger.info(f"遗忘衰减完成，更新了 {updated} 个节点")
+
+    elapsed = time.time() - start_time
+    logger.info(
+        f"Memory decay completed: {updated} nodes updated in {elapsed:.2f}s"
+    )
     return updated
 
 

@@ -2,12 +2,19 @@
 
 提供两类能力（均基于 Tavily API）：
 1. nucleus_web_search：联网检索最新信息
-2. nucleus_browser_fetch：像“浏览器打开页面”一样提取网页正文
+2. nucleus_browser_fetch：像"浏览器打开页面"一样提取网页正文
 """
 
 from __future__ import annotations
 
 import asyncio
+import urllib.parse
+from pathlib import Path
+from typing import Any
+
+from src.app.plugin_system.api.log_api import get_logger
+
+logger = get_logger("life_engine.web_tools")
 import ipaddress
 import json
 import os
@@ -40,8 +47,36 @@ _BLOCKED_HOSTS = {
     "::1",
 }
 
-_TAVILY_TARGET_LOCK = threading.Lock()
-_TAVILY_TARGET_CURSOR = 0
+
+class TavilyTargetSelector:
+    """Tavily API 目标选择器（线程安全）。"""
+
+    def __init__(self) -> None:
+        """初始化选择器。"""
+        self._lock = threading.Lock()
+        self._cursor = 0
+
+    def next_target(
+        self, keys: list[str], base_urls: list[str]
+    ) -> tuple[str, str]:
+        """选择下一个 API key 和 base URL。
+
+        Args:
+            keys: API key 列表
+            base_urls: Base URL 列表
+
+        Returns:
+            (api_key, base_url) 元组
+        """
+        with self._lock:
+            cursor = self._cursor
+            self._cursor += 1
+            api_key = keys[cursor % len(keys)]
+            base_url = base_urls[cursor % len(base_urls)]
+            return api_key, base_url
+
+
+_tavily_selector = TavilyTargetSelector()
 
 
 def _get_life_config(plugin: Any) -> LifeEngineConfig | None:
@@ -112,14 +147,7 @@ def _pick_tavily_target(plugin: Any) -> tuple[str, str]:
     if not base_urls:
         base_urls = [_DEFAULT_TAVILY_BASE_URL]
 
-    global _TAVILY_TARGET_CURSOR
-    with _TAVILY_TARGET_LOCK:
-        cursor = _TAVILY_TARGET_CURSOR
-        _TAVILY_TARGET_CURSOR += 1
-
-    api_key = keys[cursor % len(keys)]
-    base_url = base_urls[cursor % len(base_urls)]
-    return api_key, base_url
+    return _tavily_selector.next_target(keys, base_urls)
 
 
 def _resolve_search_timeout(plugin: Any) -> int:
@@ -157,8 +185,10 @@ def _resolve_endpoint(base_url: str, path: str) -> str:
     try:
         parsed = urllib.parse.urlparse(base)
         if parsed.scheme not in ("http", "https"):
+            logger.warning(f"Invalid URL scheme in base: {base}, using default")
             base = _DEFAULT_TAVILY_BASE_URL
-    except Exception:
+    except ValueError as e:
+        logger.warning(f"URL parse failed for base '{base}': {e}, using default")
         base = _DEFAULT_TAVILY_BASE_URL
     return base.rstrip("/") + "/" + path.lstrip("/")
 
@@ -242,7 +272,8 @@ def _is_blocked_host(hostname: str) -> bool:
 def _validate_public_url(url: str) -> tuple[bool, str]:
     try:
         parsed = urllib.parse.urlparse(url)
-    except Exception:
+    except ValueError as e:
+        logger.debug(f"URL parse failed: {e}")
         return False, "URL 格式无效"
 
     if parsed.scheme not in ("http", "https"):
@@ -278,7 +309,8 @@ def _sync_post_json(url: str, payload: dict[str, Any], timeout_seconds: int) -> 
         detail = ""
         try:
             detail = exc.read().decode("utf-8", errors="replace")
-        except Exception:
+        except (OSError, UnicodeDecodeError) as e:
+            logger.debug(f"Failed to read HTTP error detail: {e}")
             detail = str(exc)
         raise RuntimeError(f"Tavily 请求失败（HTTP {exc.code}）: {detail[:500]}") from exc
     except urllib.error.URLError as exc:

@@ -9,11 +9,84 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from src.app.plugin_system.api.log_api import get_logger
+
+logger = get_logger("life_engine.audit")
+
 LOG_DIR = Path("logs/life_engine")
 LOG_FILE = LOG_DIR / "life.log"
 _LOGGER_NAME = "life_engine.audit"
-_LOCK = Lock()
-_HANDLER: RotatingFileHandler | None = None
+
+
+class AuditLoggerManager:
+    """审计日志管理器（单例）。"""
+
+    _instance: AuditLoggerManager | None = None
+    _lock = Lock()
+
+    def __init__(self) -> None:
+        """初始化管理器。"""
+        self._handler: RotatingFileHandler | None = None
+        self._setup_lock = Lock()
+
+    @classmethod
+    def get_instance(cls) -> AuditLoggerManager:
+        """获取单例实例。"""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance
+
+    def setup(self) -> Path:
+        """初始化日志处理器。"""
+        with self._setup_lock:
+            if self._handler is not None:
+                return LOG_FILE
+
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+            audit_logger = logging.getLogger(_LOGGER_NAME)
+            audit_logger.setLevel(logging.INFO)
+            audit_logger.propagate = False
+
+            handler = RotatingFileHandler(
+                LOG_FILE,
+                maxBytes=10 * 1024 * 1024,
+                backupCount=10,
+                encoding="utf-8",
+            )
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+            )
+
+            # 清理旧处理器
+            for existing in list(audit_logger.handlers):
+                audit_logger.removeHandler(existing)
+                try:
+                    existing.close()
+                except (OSError, ValueError) as e:
+                    logger.debug(f"Failed to close old handler: {e}")
+
+            audit_logger.addHandler(handler)
+            self._handler = handler
+            return LOG_FILE
+
+    def cleanup(self) -> None:
+        """清理日志处理器。"""
+        with self._setup_lock:
+            if self._handler is not None:
+                audit_logger = logging.getLogger(_LOGGER_NAME)
+                try:
+                    audit_logger.removeHandler(self._handler)
+                except ValueError as e:
+                    logger.debug(f"Handler already removed: {e}")
+                try:
+                    self._handler.close()
+                except (OSError, ValueError) as e:
+                    logger.debug(f"Failed to close handler: {e}")
+                finally:
+                    self._handler = None
 
 
 def get_life_log_dir() -> Path:
@@ -28,55 +101,13 @@ def get_life_log_file() -> Path:
 
 def setup_life_audit_logger() -> Path:
     """初始化 life_engine 的文件日志处理器。"""
-    global _HANDLER
-
-    with _LOCK:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-        if _HANDLER is not None:
-            return LOG_FILE
-
-        logger = logging.getLogger(_LOGGER_NAME)
-        logger.setLevel(logging.INFO)
-        logger.propagate = False
-
-        handler = RotatingFileHandler(
-            LOG_FILE,
-            maxBytes=10 * 1024 * 1024,
-            backupCount=10,
-            encoding="utf-8",
-        )
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
-        )
-
-        for existing in list(logger.handlers):
-            logger.removeHandler(existing)
-            try:
-                existing.close()
-            except Exception:
-                pass
-
-        logger.addHandler(handler)
-        _HANDLER = handler
-        return LOG_FILE
+    return AuditLoggerManager.get_instance().setup()
 
 
 def teardown_life_audit_logger() -> None:
     """释放 life_engine 文件日志处理器。"""
-    global _HANDLER
+    AuditLoggerManager.get_instance().cleanup()
 
-    with _LOCK:
-        logger = logging.getLogger(_LOGGER_NAME)
-        if _HANDLER is not None:
-            try:
-                logger.removeHandler(_HANDLER)
-            except Exception:
-                pass
-            try:
-                _HANDLER.close()
-            finally:
-                _HANDLER = None
 
 
 def _emit(payload: dict[str, Any], *, level: str = "info") -> None:

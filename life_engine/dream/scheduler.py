@@ -8,6 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+
+from src.app.plugin_system.api.log_api import get_logger
+
+logger = get_logger("life_engine.dream.scheduler")
 import random
 import time
 import uuid
@@ -180,31 +185,53 @@ class DreamScheduler:
         )
 
         try:
+            # NREM 阶段
             self._current_phase = DreamPhase.NREM
-            self._emit_visual_event("dream.phase_change", {"phase": "nrem", "dream_id": report.dream_id})
+            self._emit_visual_event(
+                "dream.phase_change", {"phase": "nrem", "dream_id": report.dream_id}
+            )
             report.phase_sequence.append("nrem")
-            logger.info(f"🌙 Dream [{report.dream_id}] NREM 回放阶段开始")
+            logger.info(f"🌙 Dream [{report.dream_id}] NREM phase started")
 
             if self._snn is not None and self._snn_bridge is not None:
                 report.nrem = await self._run_nrem(event_history)
+                logger.info(
+                    f"🌙 Dream [{report.dream_id}] NREM phase completed: "
+                    f"{report.nrem.episodes_replayed if report.nrem else 0} episodes replayed"
+                )
 
+            # 梦种子生成
             report.seed_report = await self._generate_dream_seeds(event_history)
-            self._emit_visual_event("dream.seeds_extracted", {
-                "seeds": [_seed_to_dict(s) for s in report.seed_report]
-            })
+            logger.info(
+                f"🌙 Dream [{report.dream_id}] Seeds generated: {len(report.seed_report)}"
+            )
+            self._emit_visual_event(
+                "dream.seeds_extracted",
+                {"seeds": [_seed_to_dict(s) for s in report.seed_report]},
+            )
 
+            # REM 阶段
             self._current_phase = DreamPhase.REM
-            self._emit_visual_event("dream.phase_change", {"phase": "rem", "dream_id": report.dream_id})
+            self._emit_visual_event(
+                "dream.phase_change", {"phase": "rem", "dream_id": report.dream_id}
+            )
             report.phase_sequence.append("rem")
-            logger.info(f"🌙 Dream [{report.dream_id}] REM 联想阶段开始")
+            logger.info(f"🌙 Dream [{report.dream_id}] REM phase started")
 
             seed_node_ids = collect_seed_node_ids(report.seed_report)
             if self._memory is not None:
                 report.rem = await self._run_rem(seed_node_ids)
+                logger.info(
+                    f"🌙 Dream [{report.dream_id}] REM phase completed: "
+                    f"{report.rem.nodes_activated} nodes activated, "
+                    f"{report.rem.new_edges_created} new edges created"
+                )
 
-            self._emit_visual_event("dream.rem_stats", {
-                "nodes_activated": report.rem.nodes_activated,
-                "new_edges_created": report.rem.new_edges_created,
+            self._emit_visual_event(
+                "dream.rem_stats",
+                {
+                    "nodes_activated": report.rem.nodes_activated,
+                    "new_edges_created": report.rem.new_edges_created,
                 "edges_pruned": report.rem.edges_pruned
             })
 

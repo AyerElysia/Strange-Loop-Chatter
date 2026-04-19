@@ -78,17 +78,17 @@ class LifeMemoryService:
     PRUNE_THRESHOLD = 0.1
     RRF_K = 60
 
-    def __init__(self, plugin: Any):
+    def __init__(self, plugin: Any) -> None:
         """初始化记忆服务。
 
         Args:
             plugin: 插件实例（用于获取配置）
         """
         self.plugin = plugin
-        self._workspace_override: Optional[Path] = None
+        self._workspace_override: Path | None = None
         if isinstance(plugin, (str, Path)):
             self._workspace_override = Path(plugin)
-        self._db: Optional[sqlite3.Connection] = None
+        self._db: sqlite3.Connection | None = None
         self._initialized = False
         self._chroma_collection = None
 

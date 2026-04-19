@@ -8,6 +8,12 @@ from __future__ import annotations
 import asyncio
 import json
 import traceback
+from datetime import datetime
+from typing import Any
+
+from src.app.plugin_system.api.log_api import get_logger
+
+logger = get_logger("life_engine.integrations")
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +25,7 @@ from .event_builder import (
     EventType,
     LifeEngineEvent,
     _format_time_display,
+    _now_iso,
     _shorten_text,
     INTERNAL_PLATFORM,
 )
@@ -52,15 +59,15 @@ def to_jsonable(value: Any) -> Any:
     if callable(tolist):
         try:
             return to_jsonable(tolist())
-        except Exception:
-            pass
+        except (TypeError, ValueError, AttributeError) as e:
+            logger.debug(f"tolist() conversion failed for {type(value)}: {e}")
 
     item = getattr(value, "item", None)
     if callable(item):
         try:
             return item()
-        except Exception:
-            pass
+        except (TypeError, ValueError, AttributeError) as e:
+            logger.debug(f"item() conversion failed for {type(value)}: {e}")
 
     enum_value = getattr(value, "value", None)
     if isinstance(enum_value, (str, int, float, bool)):
@@ -97,61 +104,95 @@ class DFCIntegration:
         Returns:
             格式化的状态摘要文本
         """
+        snapshot = await self.get_dfc_snapshot()
+        return str(snapshot.get("state_digest") or "")
+
+    async def get_dfc_snapshot(self) -> dict[str, Any]:
+        """生成供 DFC 消费的结构化快照。
+
+        这个快照是 DFC 的单一状态来源：
+        - state_digest: 给 prompt / 状态查询用的简短摘要
+        - active_todo_lines: 活跃 TODO 的短行摘要
+        - recent_diary_lines: 最近日记的短行摘要
+        """
         async with self._service._get_lock():
-            parts = []
+            state_digest = self._build_state_digest_locked()
+            todo_lines = self._load_active_todo_lines()
+            diary_lines = self._load_recent_diary_lines()
 
-            # 1. 调质层状态（如果启用）
-            if self._service._inner_state is not None:
-                try:
-                    mood_dict = self._service._inner_state.modulators.get_discrete_dict()
-                    mood_items = []
-                    priority_dims = ["curiosity", "energy", "contentment"]
-                    for name in priority_dims:
-                        if name in mood_dict:
-                            mod = self._service._inner_state.modulators.get(name)
-                            if mod:
-                                mood_items.append(f"{mod.cn_name}{mood_dict[name]}")
-                    if mood_items:
-                        parts.append(f"【内在状态】{'、'.join(mood_items)}")
-                except Exception as e:
-                    logger.warning(f"获取调质层状态失败: {e}")
+        return {
+            "generated_at": _now_iso(),
+            "state_digest": state_digest,
+            "active_todo_lines": todo_lines,
+            "recent_diary_lines": diary_lines,
+        }
 
-            # 2. 最近思考（最近1-2条心跳独白）
-            heartbeat_events = [
-                e for e in self._service._event_history
-                if e.event_type == EventType.HEARTBEAT
-            ][-2:]
+    def _build_state_digest_locked(self) -> str:
+        """在持锁前提下构建轻量状态摘要。"""
+        parts = []
 
-            if heartbeat_events:
-                thoughts = []
-                for event in heartbeat_events:
-                    time_display = _format_time_display(event.timestamp)
-                    thought = _shorten_text(event.content, max_length=40)
-                    thoughts.append(f"  [{time_display}] {thought}")
-                if thoughts:
-                    parts.append("【最近思考】")
-                    parts.extend(thoughts)
+        # 1. 调质层状态（如果启用）
+        if self._service._inner_state is not None:
+            try:
+                mood_dict = self._service._inner_state.modulators.get_discrete_dict()
+                mood_items = []
+                priority_dims = ["curiosity", "energy", "contentment"]
+                for name in priority_dims:
+                    if name in mood_dict:
+                        mod = self._service._inner_state.modulators.get(name)
+                        if mod:
+                            mood_items.append(f"{mod.cn_name}{mood_dict[name]}")
+                if mood_items:
+                    parts.append(f"【内在状态】{'、'.join(mood_items)}")
+            except Exception as e:
+                logger.warning(f"获取调质层状态失败: {e}")
 
-            # 3. 工具使用偏好
-            tool_events = [
-                e for e in self._service._event_history[-30:]
-                if e.event_type == EventType.TOOL_CALL
-            ]
+        # 2. 最近思考（最近1-2条心跳独白）
+        heartbeat_events = [
+            e for e in self._service._event_history
+            if e.event_type == EventType.HEARTBEAT
+        ][-2:]
 
-            if tool_events:
-                tool_counts: dict[str, int] = {}
-                for event in tool_events:
-                    name = event.tool_name
-                    if name and name.startswith("nucleus_"):
-                        short_name = name.replace("nucleus_", "")
-                        tool_counts[short_name] = tool_counts.get(short_name, 0) + 1
+        if heartbeat_events:
+            thoughts = []
+            for event in heartbeat_events:
+                time_display = _format_time_display(event.timestamp)
+                thought = _shorten_text(event.content, max_length=40)
+                thoughts.append(f"  [{time_display}] {thought}")
+            if thoughts:
+                parts.append("【最近思考】")
+                parts.extend(thoughts)
 
-                if tool_counts:
-                    top_tools = sorted(tool_counts.items(), key=lambda x: x[1], reverse=True)[:2]
-                    tool_names = [name for name, _ in top_tools]
-                    parts.append(f"【工具偏好】{', '.join(tool_names)}")
+        # 3. 工具使用偏好
+        tool_events = [
+            e for e in self._service._event_history[-30:]
+            if e.event_type == EventType.TOOL_CALL
+        ]
 
-            return "\n".join(parts) if parts else ""
+        if tool_events:
+            tool_counts: dict[str, int] = {}
+            for event in tool_events:
+                name = event.tool_name
+                if name and name.startswith("nucleus_"):
+                    short_name = name.replace("nucleus_", "")
+                    tool_counts[short_name] = tool_counts.get(short_name, 0) + 1
+
+            if tool_counts:
+                top_tools = sorted(tool_counts.items(), key=lambda x: x[1], reverse=True)[:2]
+                tool_names = [name for name, _ in top_tools]
+                parts.append(f"【工具偏好】{', '.join(tool_names)}")
+
+        if self._service._dream_scheduler is not None:
+            try:
+                dream_payload = str(
+                    self._service._dream_scheduler.get_active_residue_payload("dfc") or ""
+                ).strip()
+                if dream_payload:
+                    parts.append(dream_payload)
+            except Exception as e:
+                logger.debug(f"读取 DFC 梦后余韵失败: {e}")
+
+        return "\n".join(parts) if parts else ""
 
     def build_dream_record_payload_text(self, report: Any) -> str:
         """把 DreamReport 构建为完整 assistant payload 文本。
@@ -251,17 +292,18 @@ class DFCIntegration:
         Returns:
             格式化的上下文摘要
         """
+        snapshot = await self.get_dfc_snapshot()
         parts: list[str] = []
 
-        state_digest = await self.get_state_digest()
+        state_digest = str(snapshot.get("state_digest") or "").strip()
         if state_digest:
             parts.append(state_digest)
 
-        todo_lines = self._load_active_todo_lines()
+        todo_lines = [str(line).strip() for line in snapshot.get("active_todo_lines") or [] if str(line).strip()]
         if todo_lines:
             parts.append("【活跃 TODO】\n" + "\n".join(todo_lines))
 
-        diary_lines = self._load_recent_diary_lines()
+        diary_lines = [str(line).strip() for line in snapshot.get("recent_diary_lines") or [] if str(line).strip()]
         if diary_lines:
             parts.append("【最近日记】\n" + "\n".join(diary_lines))
 
