@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Life / Chatter Timeline | Neo-MoFox</title>
+  <style>
+    :root {
+      --bg0: #05070d;
+      --bg1: #0b1120;
+      --panel: rgba(10, 15, 28, 0.78);
+      --panel-strong: rgba(16, 22, 39, 0.94);
+      --border: rgba(255, 255, 255, 0.09);
+      --text: #eef4ff;
+      --muted: rgba(238, 244, 255, 0.62);
+      --life: #7dd3fc;
+      --life-2: #38bdf8;
+      --chat: #f9a8d4;
+      --chat-2: #fb7185;
+      --accent: #a78bfa;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.38);
+      --radius: 22px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(circle at 12% 18%, rgba(56, 189, 248, 0.15), transparent 26%),
+        radial-gradient(circle at 82% 14%, rgba(167, 139, 250, 0.18), transparent 24%),
+        radial-gradient(circle at 78% 88%, rgba(249, 168, 212, 0.12), transparent 28%),
+        linear-gradient(180deg, var(--bg0), var(--bg1) 48%, #04060b 100%);
+      color: var(--text);
+      font-family: "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: radial-gradient(circle at center, black 35%, transparent 92%);
+      pointer-events: none;
+      opacity: 0.45;
+    }
+
+    .shell {
+      position: relative;
+      max-width: 1560px;
+      margin: 0 auto;
+      padding: 28px 22px 34px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.7fr 1fr;
+      gap: 18px;
+      align-items: stretch;
+      margin-bottom: 18px;
+    }
+
+    .hero-main,
+    .hero-side,
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      border-radius: var(--radius);
+    }
+
+    .hero-main {
+      padding: 26px 26px 20px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .hero-main::after {
+      content: "";
+      position: absolute;
+      inset: auto -120px -120px auto;
+      width: 260px;
+      height: 260px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(125, 211, 252, 0.18), transparent 68%);
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.06);
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--ok);
+      box-shadow: 0 0 18px var(--ok);
+      animation: pulse 1.8s infinite ease-in-out;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(0.9); opacity: 0.65; }
+      50% { transform: scale(1.25); opacity: 1; }
+    }
+
+    h1 {
+      margin: 14px 0 10px;
+      font-size: clamp(30px, 4vw, 48px);
+      line-height: 1.02;
+      letter-spacing: -0.04em;
+    }
+
+    .sub {
+      max-width: 820px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.8;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.06);
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    .chip strong { font-size: 13px; }
+
+    .hero-side {
+      padding: 18px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .stat {
+      padding: 14px;
+      border-radius: 18px;
+      background: var(--panel-strong);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .stat-label {
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .stat-value {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+
+    .stat-note {
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin: 10px 2px 16px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .toolbar-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .button {
+      appearance: none;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      padding: 9px 14px;
+      border-radius: 999px;
+      cursor: pointer;
+      font: inherit;
+      transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+    }
+
+    .button:hover {
+      transform: translateY(-1px);
+      border-color: rgba(125, 211, 252, 0.42);
+      background: rgba(125, 211, 252, 0.12);
+    }
+
+    .button.active {
+      border-color: rgba(52, 211, 153, 0.42);
+      background: rgba(52, 211, 153, 0.14);
+    }
+
+    .input {
+      appearance: none;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.05);
+      color: var(--text);
+      padding: 9px 12px;
+      border-radius: 999px;
+      min-width: 220px;
+      font: inherit;
+      outline: none;
+    }
+
+    .input:focus {
+      border-color: rgba(125, 211, 252, 0.5);
+      box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.18);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1.05fr 1.2fr;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      padding: 18px;
+    }
+
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+      letter-spacing: -0.02em;
+    }
+
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    .panel-sub {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .latest-card {
+      padding: 16px;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
+      margin-bottom: 14px;
+    }
+
+    .badge-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .badge {
+      font-size: 11px;
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.08);
+      color: var(--muted);
+    }
+
+    .badge.life { color: var(--life); border-color: rgba(125, 211, 252, 0.28); }
+    .badge.chat { color: var(--chat); border-color: rgba(249, 168, 212, 0.28); }
+    .badge.warn { color: var(--warn); border-color: rgba(251, 191, 36, 0.28); }
+    .badge.ok { color: var(--ok); border-color: rgba(52, 211, 153, 0.28); }
+
+    .latest-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 8px;
+    }
+
+    .latest-title strong {
+      font-size: 16px;
+      line-height: 1.35;
+    }
+
+    .latest-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .latest-body {
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.72;
+      color: rgba(238, 244, 255, 0.92);
+      font-size: 14px;
+    }
+
+    .feed {
+      display: grid;
+      gap: 10px;
+      max-height: 46vh;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .feed-item, .stream-card {
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      padding: 13px 14px;
+    }
+
+    .feed-item.life { border-left: 3px solid rgba(125, 211, 252, 0.85); }
+    .feed-item.chat { border-left: 3px solid rgba(249, 168, 212, 0.85); }
+
+    .feed-top,
+    .stream-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .feed-name {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .feed-time {
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .feed-content, .stream-message {
+      color: rgba(238, 244, 255, 0.9);
+      line-height: 1.68;
+      font-size: 13px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .streams-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .stream-card {
+      background: linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.03));
+    }
+
+    .stream-card.active {
+      border-color: rgba(52, 211, 153, 0.35);
+      box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.08) inset;
+    }
+
+    .stream-name {
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: -0.02em;
+    }
+
+    .stream-sub {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    .stream-meta {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+      margin-bottom: 12px;
+    }
+
+    .mini {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 9px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.05);
+      color: var(--muted);
+      font-size: 11px;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .mini strong {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .stream-latest {
+      padding: 12px;
+      border-radius: 16px;
+      background: rgba(0,0,0,0.18);
+      border: 1px solid rgba(255,255,255,0.05);
+      margin-bottom: 10px;
+    }
+
+    .recent-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .recent-item {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      padding: 10px 11px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.035);
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .recent-item .who {
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .recent-item .txt {
+      font-size: 12px;
+      line-height: 1.6;
+      color: rgba(238, 244, 255, 0.9);
+    }
+
+    .empty {
+      padding: 18px;
+      color: var(--muted);
+      text-align: center;
+      border: 1px dashed rgba(255,255,255,0.12);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.03);
+    }
+
+    .history-panel {
+      margin-top: 18px;
+    }
+
+    .history-list {
+      display: grid;
+      gap: 10px;
+      max-height: 34vh;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    @media (max-width: 1180px) {
+      .hero, .layout { grid-template-columns: 1fr; }
+      .feed { max-height: none; }
+    }
+
+    @media (max-width: 760px) {
+      .shell { padding: 14px 12px 24px; }
+      .hero-main, .panel, .hero-side { padding: 14px; border-radius: 18px; }
+      .stat-grid { grid-template-columns: 1fr; }
+      h1 { font-size: 28px; }
+      .toolbar { align-items: flex-start; flex-direction: column; }
+      .latest-title, .panel-head, .feed-top, .stream-top { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="hero-main">
+        <div class="eyebrow"><span class="live-dot"></span> live observability</div>
+        <h1>Life / Chatter 时间线</h1>
+        <div class="sub">
+          这里会实时展示 life_engine 最新事件、对话器最新消息，以及每个活跃聊天流的最近上下文。
+          你可以直接看见“life 现在在记什么”和“对话器现在刚收到/刚发了什么”。
+        </div>
+        <div class="chips" id="chips"></div>
+      </div>
+      <aside class="hero-side">
+        <div class="stat-grid" id="stats"></div>
+      </aside>
+    </section>
+
+    <div class="toolbar">
+      <div id="status-text">正在连接快照接口…</div>
+      <div class="toolbar-actions">
+        <input class="input" id="history-query" placeholder="历史检索关键词（会查被刷走上下文）" />
+        <button class="button" id="history-search-btn">检索历史</button>
+        <button class="button" id="refresh-btn">立即刷新</button>
+        <button class="button active" id="auto-btn">自动刷新：开</button>
+      </div>
+    </div>
+
+    <section class="layout">
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Life 最新事件</h2>
+            <div class="panel-sub">来自 `life_engine._event_history` 和待处理队列。</div>
+          </div>
+        </div>
+        <div class="latest-card" id="life-latest"></div>
+        <div class="feed" id="life-feed"></div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>对话器最新消息</h2>
+            <div class="panel-sub">每个活跃流都会显示最近消息、未读数和上下文。</div>
+          </div>
+        </div>
+        <div class="streams-grid" id="streams"></div>
+      </article>
+    </section>
+
+    <section class="panel history-panel">
+      <div class="panel-head">
+        <div>
+          <h2>历史检索（DB + NapCat 回补）</h2>
+          <div class="panel-sub">输入关键词后调用 `/message_timeline/api/history_search`，可找回被上下文窗口刷走的消息。</div>
+        </div>
+      </div>
+      <div id="history-meta" class="panel-sub">尚未执行历史检索</div>
+      <div class="history-list" id="history-results"></div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      auto: true,
+      lastSnapshot: null,
+      lastLifeId: null,
+      lastStreamIds: new Map(),
+      timer: null,
+      history: null,
+    };
+
+    const el = (id) => document.getElementById(id);
+
+    const fmt = (value, fallback = "—") => (value === null || value === undefined || value === "" ? fallback : String(value));
+    const esc = (value) => fmt(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+
+    function renderStats(snapshot) {
+      const life = snapshot.life?.state || {};
+      const summary = snapshot.summary || {};
+      const items = [
+        ["Heartbeat", fmt(summary.heartbeat_count, 0), "life_engine 当前累计心跳数"],
+        ["Streams", fmt(summary.active_stream_count, 0), "当前活跃聊天流数量"],
+        ["Pending", fmt(summary.pending_life_events, 0), "尚未注入时间线的 life 事件"],
+        ["Reply", fmt(life.last_model_reply, "暂无"), "最近一次 life 模型回复"],
+      ];
+      el("stats").innerHTML = items.map(([label, value, note]) => `
+        <div class="stat">
+          <div class="stat-label">${esc(label)}</div>
+          <div class="stat-value">${esc(value)}</div>
+          <div class="stat-note">${esc(note)}</div>
+        </div>
+      `).join("");
+
+      const chips = [
+        `更新时间 <strong>${esc(new Date(snapshot.generated_at).toLocaleTimeString())}</strong>`,
+        `最近 life event <strong>${esc(snapshot.life?.latest_event?.time_display || "—")}</strong>`,
+        `最近 model reply <strong>${esc(fmt(life.last_model_reply, "—").slice(0, 32))}</strong>`,
+        `自动刷新 <strong>${state.auto ? "开启" : "暂停"}</strong>`,
+      ];
+      el("chips").innerHTML = chips.map((text) => `<span class="chip">${text}</span>`).join("");
+    }
+
+    function renderLife(snapshot) {
+      const life = snapshot.life || {};
+      const latest = life.latest_event;
+      const latestBox = el("life-latest");
+      if (!latest) {
+        latestBox.innerHTML = `<div class="empty">暂无 life 事件</div>`;
+      } else {
+        const badge = latest.event_type === "message" ? "life" : "warn";
+        latestBox.innerHTML = `
+          <div class="badge-row">
+            <span class="badge ${badge}">${esc(latest.event_type)}</span>
+            <span class="badge">${esc(fmt(latest.source_detail, latest.source))}</span>
+            <span class="badge">${esc(fmt(latest.time_display))}</span>
+          </div>
+          <div class="latest-title">
+            <strong>${esc(latest.content_full || latest.content || "（空）")}</strong>
+            <span class="latest-meta">#${esc(latest.sequence)} · ${esc(fmt(latest.event_id))}</span>
+          </div>
+          <div class="latest-meta">
+            sender: ${esc(fmt(latest.sender))} · stream: ${esc(fmt(latest.stream_id))}
+            ${latest.tool_name ? ` · tool: ${esc(latest.tool_name)}` : ""}
+          </div>
+        `;
+      }
+
+      const events = [...(life.pending_events || []), ...(life.recent_events || [])].slice(-24).reverse();
+      const feed = el("life-feed");
+      if (!events.length) {
+        feed.innerHTML = `<div class="empty">没有可显示的 life 事件</div>`;
+        return;
+      }
+
+      feed.innerHTML = events.map((item) => {
+        const isMsg = item.event_type === "message";
+        const cls = isMsg ? "life" : "chat";
+        return `
+          <div class="feed-item ${cls}">
+            <div class="feed-top">
+              <div class="feed-name">${esc(item.event_type)} · ${esc(fmt(item.source_detail, item.source))}</div>
+              <div class="feed-time">${esc(fmt(item.time_display))}</div>
+            </div>
+            <div class="feed-content">${esc(item.content_full || item.content || "")}</div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderStreams(snapshot) {
+      const streams = snapshot.streams || [];
+      const wrap = el("streams");
+      if (!streams.length) {
+        wrap.innerHTML = `<div class="empty">当前没有活跃聊天流</div>`;
+        return;
+      }
+
+      wrap.innerHTML = streams.map((stream) => {
+        const latest = stream.latest_message;
+        const recent = stream.recent_messages || [];
+        const active = stream.is_chatter_processing ? "active" : "";
+        const latestKey = latest ? `${latest.message_id}:${latest.time}` : "none";
+        const changed = state.lastStreamIds.get(stream.stream_id) !== latestKey;
+        state.lastStreamIds.set(stream.stream_id, latestKey);
+
+        return `
+          <div class="stream-card ${active}">
+            <div class="stream-top">
+              <div>
+                <div class="stream-name">${esc(stream.stream_name || stream.stream_id)}</div>
+                <div class="stream-sub">${esc(stream.platform || "unknown")} · ${esc(stream.chat_type || "unknown")} · ${esc(stream.stream_id)}</div>
+              </div>
+              <div class="badge-row" style="margin:0;">
+                <span class="badge ${stream.is_active ? 'ok' : 'warn'}">${stream.is_active ? 'active' : 'idle'}</span>
+                ${stream.is_chatter_processing ? `<span class="badge chat">processing</span>` : ""}
+                ${changed ? `<span class="badge life">new</span>` : ""}
+              </div>
+            </div>
+
+            <div class="stream-meta">
+              <span class="mini">unread <strong>${esc(stream.unread_count)}</strong></span>
+              <span class="mini">history <strong>${esc(stream.history_count)}</strong></span>
+              <span class="mini">last active <strong>${esc(stream.last_active_time ? new Date(stream.last_active_time * 1000).toLocaleTimeString() : "—")}</strong></span>
+              <span class="mini">last msg <strong>${esc(stream.last_message_time ? new Date(stream.last_message_time * 1000).toLocaleTimeString() : "—")}</strong></span>
+            </div>
+
+            <div class="stream-latest">
+              <div class="badge-row">
+                <span class="badge ${latest?.direction === 'sent' ? 'chat' : 'life'}">${esc(latest?.direction || 'n/a')}</span>
+                <span class="badge">${esc(latest?.time_display || "—")}</span>
+                <span class="badge">${esc(latest?.sender_name || "—")}</span>
+                ${latest?.is_inner_monologue ? `<span class="badge warn">inner_monologue</span>` : ""}
+                ${latest?.is_proactive_followup_trigger ? `<span class="badge warn">followup_trigger</span>` : ""}
+              </div>
+              <div class="stream-message">${esc(latest?.content_full || latest?.content || "（暂无消息）")}</div>
+            </div>
+
+            <div class="recent-list">
+              ${(recent.slice(-5).reverse().map((msg) => `
+                <div class="recent-item">
+                  <div class="who">${esc(msg.time_display)}<br>${esc(msg.sender_name || "—")}</div>
+                  <div class="txt">${esc(msg.content_full || msg.content || "")}</div>
+                </div>
+              `).join(""))}
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function updateToolbar(snapshot) {
+      const generatedAt = snapshot.generated_at ? new Date(snapshot.generated_at) : null;
+      const life = snapshot.life?.state || {};
+      el("status-text").textContent = generatedAt
+        ? `快照已更新 · ${generatedAt.toLocaleString()} · life heartbeat #${fmt(life.heartbeat_count, 0)}`
+        : "快照已更新";
+    }
+
+    function renderHistoryResult(data) {
+      state.history = data;
+      const matches = data?.matches || [];
+      const stats = data?.stats || {};
+      el("history-meta").textContent =
+        `返回 ${fmt(stats.returned_matches, 0)} 条 · 本地命中 ${fmt(stats.local_matches, 0)} · ` +
+        `回补命中 ${fmt(stats.backfill_matches, 0)} · 候选流 ${fmt(stats.candidate_streams, 0)}`;
+
+      const wrap = el("history-results");
+      if (!matches.length) {
+        wrap.innerHTML = `<div class="empty">没有匹配结果</div>`;
+        return;
+      }
+
+      wrap.innerHTML = matches.map((item) => `
+        <div class="feed-item ${item.source === "adapter_backfill" ? "chat" : "life"}">
+          <div class="feed-top">
+            <div class="feed-name">${esc(item.stream_id || "unknown")} · ${esc(item.source || "unknown")}</div>
+            <div class="feed-time">${esc(item.time || "—")}</div>
+          </div>
+          <div class="panel-sub">${esc(item.sender_name || item.sender_id || "unknown")} · ${esc(item.platform || "—")} · ${esc(item.chat_type || "—")}</div>
+          <div class="feed-content">${esc(item.content_full || item.content || "")}</div>
+        </div>
+      `).join("");
+    }
+
+    async function runHistorySearch() {
+      const query = el("history-query").value || "";
+      const params = new URLSearchParams({
+        query,
+        cross_stream: "true",
+        limit: "20",
+        source_mode: "auto",
+        include_tool_calls: "true",
+      });
+      try {
+        const res = await fetch(`./api/history_search?${params.toString()}`, { cache: "no-store" });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.error || `HTTP ${res.status}`);
+        }
+        renderHistoryResult(data);
+      } catch (error) {
+        el("history-meta").textContent = `历史检索失败：${error.message}`;
+        el("history-results").innerHTML = `<div class="empty">历史检索失败，请检查日志</div>`;
+      }
+    }
+
+    async function loadSnapshot() {
+      try {
+        const res = await fetch("./api/snapshot?event_limit=24&stream_limit=12&message_limit=8", {
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const snapshot = await res.json();
+        state.lastSnapshot = snapshot;
+        renderStats(snapshot);
+        renderLife(snapshot);
+        renderStreams(snapshot);
+        updateToolbar(snapshot);
+      } catch (error) {
+        el("status-text").textContent = `快照加载失败：${error.message}`;
+      }
+    }
+
+    function toggleAuto() {
+      state.auto = !state.auto;
+      const btn = el("auto-btn");
+      btn.classList.toggle("active", state.auto);
+      btn.textContent = `自动刷新：${state.auto ? "开" : "关"}`;
+      if (state.auto && !state.timer) {
+        state.timer = setInterval(loadSnapshot, 1500);
+      } else if (!state.auto && state.timer) {
+        clearInterval(state.timer);
+        state.timer = null;
+      }
+    }
+
+    el("refresh-btn").addEventListener("click", loadSnapshot);
+    el("auto-btn").addEventListener("click", toggleAuto);
+    el("history-search-btn").addEventListener("click", runHistorySearch);
+    el("history-query").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") runHistorySearch();
+    });
+
+    loadSnapshot();
+    state.timer = setInterval(loadSnapshot, 1500);
+  </script>
+</body>
+</html>

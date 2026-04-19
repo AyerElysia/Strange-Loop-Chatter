@@ -10,6 +10,19 @@ from pydantic import field_validator
 
 from src.core.components.base.config import BaseConfig, Field, SectionBase, config_section
 
+from ..constants import (
+    HEARTBEAT_IDLE_CRITICAL_THRESHOLD,
+    HEARTBEAT_IDLE_WARNING_THRESHOLD,
+    EXTERNAL_MESSAGE_ACTIVE_WINDOW_MINUTES,
+    TODO_URGENT_DAYS_THRESHOLD,
+    RRF_K,
+    SPREAD_DECAY,
+    SPREAD_THRESHOLD,
+    DECAY_LAMBDA,
+    PRUNE_THRESHOLD,
+    DREAM_LEARNING_RATE,
+)
+
 
 # 默认工作空间路径
 _DEFAULT_WORKSPACE = str(Path(__file__).parent.parent.parent / "data" / "life_engine_workspace")
@@ -74,6 +87,73 @@ class LifeEngineConfig(BaseConfig):
         task_name: str = Field(
             default="life",
             description="中枢任务使用的模型任务名称，对应 config/model.toml 中的 [model_tasks.life]。",
+        )
+
+    @config_section("history_retrieval")
+    class HistoryRetrievalSection(SectionBase):
+        """聊天历史检索与回补配置。"""
+
+        enabled: bool = Field(
+            default=True,
+            description="是否启用聊天历史检索工具。",
+        )
+
+        default_cross_stream: bool = Field(
+            default=True,
+            description="未显式指定 stream_id 时，是否默认跨 stream 检索。",
+        )
+
+        adapter_signature: str = Field(
+            default="napcat_adapter:adapter:napcat_adapter",
+            description="用于回补历史的适配器签名。",
+        )
+
+        group_history_actions: list[str] = Field(
+            default_factory=lambda: ["get_group_msg_history"],
+            description="群聊历史回补 action 候选列表（按顺序尝试）。",
+        )
+
+        private_history_actions: list[str] = Field(
+            default_factory=lambda: [
+                "get_friend_msg_history",
+                "get_private_msg_history",
+            ],
+            description="私聊历史回补 action 候选列表（按顺序尝试）。",
+        )
+
+        adapter_timeout_seconds: int = Field(
+            default=8,
+            ge=1,
+            le=60,
+            description="适配器回补超时时间（秒）。",
+        )
+
+        max_candidate_streams: int = Field(
+            default=12,
+            ge=1,
+            le=100,
+            description="跨 stream 检索时最多扫描多少个候选流。",
+        )
+
+        max_scan_rows_per_stream: int = Field(
+            default=240,
+            ge=20,
+            le=2000,
+            description="每个 stream 最多扫描多少条历史消息。",
+        )
+
+        tool_default_limit: int = Field(
+            default=20,
+            ge=1,
+            le=100,
+            description="历史检索工具默认返回条数。",
+        )
+
+        tool_max_limit: int = Field(
+            default=100,
+            ge=10,
+            le=500,
+            description="历史检索工具允许返回的最大条数。",
         )
 
     @config_section("web")
@@ -267,12 +347,109 @@ class LifeEngineConfig(BaseConfig):
             description="是否启用白天小憩做梦（空闲触发）。",
         )
 
+    @config_section("thresholds")
+    class ThresholdsSection(SectionBase):
+        """阈值配置。"""
+
+        external_active_minutes: int = Field(
+            default=EXTERNAL_MESSAGE_ACTIVE_WINDOW_MINUTES,
+            ge=1,
+            description="外部消息活跃时间窗口（分钟）",
+        )
+
+        idle_warning_threshold: int = Field(
+            default=HEARTBEAT_IDLE_WARNING_THRESHOLD,
+            ge=1,
+            description="心跳空闲警告阈值",
+        )
+
+        idle_critical_threshold: int = Field(
+            default=HEARTBEAT_IDLE_CRITICAL_THRESHOLD,
+            ge=1,
+            description="心跳空闲严重警告阈值",
+        )
+
+        todo_urgent_days: int = Field(
+            default=TODO_URGENT_DAYS_THRESHOLD,
+            ge=1,
+            description="TODO 紧急截止天数阈值",
+        )
+
+    @config_section("memory_algorithm")
+    class MemoryAlgorithmSection(SectionBase):
+        """记忆算法参数配置。"""
+
+        rrf_k: int = Field(
+            default=RRF_K,
+            ge=1,
+            description="RRF 融合参数",
+        )
+
+        spread_decay: float = Field(
+            default=SPREAD_DECAY,
+            ge=0.0,
+            le=1.0,
+            description="激活扩散衰减系数",
+        )
+
+        spread_threshold: float = Field(
+            default=SPREAD_THRESHOLD,
+            ge=0.0,
+            le=1.0,
+            description="激活扩散阈值",
+        )
+
+        decay_lambda: float = Field(
+            default=DECAY_LAMBDA,
+            ge=0.0,
+            le=1.0,
+            description="遗忘衰减系数",
+        )
+
+        prune_threshold: float = Field(
+            default=PRUNE_THRESHOLD,
+            ge=0.0,
+            le=1.0,
+            description="边剪枝阈值",
+        )
+
+        dream_learning_rate: float = Field(
+            default=DREAM_LEARNING_RATE,
+            ge=0.0,
+            le=1.0,
+            description="梦境学习率",
+        )
+
+    @config_section("chatter")
+    class ChatterSection(SectionBase):
+        """统一对话器配置。"""
+
+        enabled: bool = Field(
+            default=False,
+            description="启用后 life_engine 直接处理对话，作为同一主体的对外运行模式。",
+        )
+
+        mode: str = Field(
+            default="enhanced",
+            description="执行模式: enhanced / classical",
+        )
+
+        max_rounds_per_chat: int = Field(
+            default=5,
+            ge=1,
+            description="对话模式单轮最大工具调用轮数。",
+        )
+
     settings: SettingsSection = Field(default_factory=SettingsSection)
     model: ModelSection = Field(default_factory=ModelSection)
+    history_retrieval: HistoryRetrievalSection = Field(default_factory=HistoryRetrievalSection)
     web: WebSection = Field(default_factory=WebSection)
     snn: SNNSection = Field(default_factory=SNNSection)
     neuromod: NeuromodSection = Field(default_factory=NeuromodSection)
     dream: DreamSection = Field(default_factory=DreamSection)
+    thresholds: ThresholdsSection = Field(default_factory=ThresholdsSection)
+    memory_algorithm: MemoryAlgorithmSection = Field(default_factory=MemoryAlgorithmSection)
+    chatter: ChatterSection = Field(default_factory=ChatterSection)
 
     @field_validator("settings")
     @classmethod

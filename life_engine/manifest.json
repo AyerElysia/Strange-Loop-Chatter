@@ -163,6 +163,30 @@
       "component_name": "fetch_life_memory",
       "dependencies": [],
       "enabled": true
+    },
+    {
+      "component_type": "chatter",
+      "component_name": "life_chatter",
+      "dependencies": [],
+      "enabled": true
+    },
+    {
+      "component_type": "action",
+      "component_name": "life_send_text",
+      "dependencies": [],
+      "enabled": true
+    },
+    {
+      "component_type": "action",
+      "component_name": "life_pass_and_wait",
+      "dependencies": [],
+      "enabled": true
+    },
+    {
+      "component_type": "action",
+      "component_name": "schedule_followup_message",
+      "dependencies": [],
+      "enabled": true
     }
   ],
   "entry_point": "core/plugin.py",

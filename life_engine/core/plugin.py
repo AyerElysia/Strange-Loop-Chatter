@@ -20,6 +20,14 @@ from ..tools.todo_tools import TODO_TOOLS
 from ..memory.tools import MEMORY_TOOLS
 from ..tools.grep_tools import GREP_TOOLS
 from ..tools.web_tools import WEB_TOOLS
+from .compat_tools import (
+    LifeThinkAction,
+    LifeScheduleFollowupMessageAction,
+    LifeMessageNucleusTool,
+    LifeConsultNucleusTool,
+    LifeSearchLifeMemoryTool,
+    LifeRetrieveMemoryTool,
+)
 
 
 logger = get_logger("life_engine", display="life_engine")
@@ -29,7 +37,7 @@ logger = get_logger("life_engine", display="life_engine")
 class LifeEnginePlugin(BasePlugin):
     """生命中枢插件。
 
-    提供一个独立于 DFC 的并行存在系统，使用统一的事件流模型处理
+    提供同一主体的内外运行模式切换能力，使用统一的事件流模型处理
     消息、心跳、工具调用等交互，保持时间连续性。
 
     特性：
@@ -65,20 +73,42 @@ class LifeEnginePlugin(BasePlugin):
         from ..snn.router import SNNRouter
         from ..memory.router import MemoryRouter
         from ..dream.router import DreamRouter
+        from ..monitor.router import MessageTimelineRouter
 
-        return [
+        components: list[type] = [
             LifeEngineService,
             LifeEngineMessageCollectorHandler,
             LifeEngineCommandHandler,
             SNNRouter,
             MemoryRouter,
             DreamRouter,
+            MessageTimelineRouter,
             *ALL_TOOLS,
             *TODO_TOOLS,
             *MEMORY_TOOLS,
             *GREP_TOOLS,
             *WEB_TOOLS,
         ]
+
+        # 启用 LifeChatter 时注册对话器及其专用 Action
+        if isinstance(self.config, LifeEngineConfig) and getattr(
+            getattr(self.config, "chatter", None), "enabled", False
+        ):
+            from .chatter import LifeChatter, LifeSendTextAction, LifePassAndWaitAction
+
+            components.extend([
+                LifeChatter,
+                LifeSendTextAction,
+                LifePassAndWaitAction,
+                LifeThinkAction,
+                LifeScheduleFollowupMessageAction,
+                LifeMessageNucleusTool,
+                LifeConsultNucleusTool,
+                LifeSearchLifeMemoryTool,
+                LifeRetrieveMemoryTool,
+            ])
+
+        return components
 
     async def on_plugin_loaded(self) -> None:
         """插件加载后启动心跳。"""
