@@ -89,6 +89,73 @@ class LifeEngineConfig(BaseConfig):
             description="中枢任务使用的模型任务名称，对应 config/model.toml 中的 [model_tasks.life]。",
         )
 
+    @config_section("history_retrieval")
+    class HistoryRetrievalSection(SectionBase):
+        """聊天历史检索与回补配置。"""
+
+        enabled: bool = Field(
+            default=True,
+            description="是否启用聊天历史检索工具。",
+        )
+
+        default_cross_stream: bool = Field(
+            default=True,
+            description="未显式指定 stream_id 时，是否默认跨 stream 检索。",
+        )
+
+        adapter_signature: str = Field(
+            default="napcat_adapter:adapter:napcat_adapter",
+            description="用于回补历史的适配器签名。",
+        )
+
+        group_history_actions: list[str] = Field(
+            default_factory=lambda: ["get_group_msg_history"],
+            description="群聊历史回补 action 候选列表（按顺序尝试）。",
+        )
+
+        private_history_actions: list[str] = Field(
+            default_factory=lambda: [
+                "get_friend_msg_history",
+                "get_private_msg_history",
+            ],
+            description="私聊历史回补 action 候选列表（按顺序尝试）。",
+        )
+
+        adapter_timeout_seconds: int = Field(
+            default=8,
+            ge=1,
+            le=60,
+            description="适配器回补超时时间（秒）。",
+        )
+
+        max_candidate_streams: int = Field(
+            default=12,
+            ge=1,
+            le=100,
+            description="跨 stream 检索时最多扫描多少个候选流。",
+        )
+
+        max_scan_rows_per_stream: int = Field(
+            default=240,
+            ge=20,
+            le=2000,
+            description="每个 stream 最多扫描多少条历史消息。",
+        )
+
+        tool_default_limit: int = Field(
+            default=20,
+            ge=1,
+            le=100,
+            description="历史检索工具默认返回条数。",
+        )
+
+        tool_max_limit: int = Field(
+            default=100,
+            ge=10,
+            le=500,
+            description="历史检索工具允许返回的最大条数。",
+        )
+
     @config_section("web")
     class WebSection(SectionBase):
         """网络搜索与网页提取能力配置（Tavily）。"""
@@ -373,8 +440,37 @@ class LifeEngineConfig(BaseConfig):
             description="对话模式单轮最大工具调用轮数。",
         )
 
+    @config_section("streams")
+    class StreamsSection(SectionBase):
+        """思考流系统配置。"""
+
+        enabled: bool = Field(
+            default=True,
+            description="是否启用思考流系统。思考流给爱莉持久在意的兴趣线索，让她在心跳间有事可想。",
+        )
+
+        max_active_streams: int = Field(
+            default=5,
+            ge=1,
+            le=10,
+            description="同时活跃的思考流上限。超过后自动将好奇心最低的转入休眠。",
+        )
+
+        dormancy_threshold_hours: int = Field(
+            default=24,
+            ge=1,
+            le=72,
+            description="多久不推进后自动进入休眠（小时）。",
+        )
+
+        inject_to_heartbeat: bool = Field(
+            default=True,
+            description="是否将思考流状态注入心跳 prompt。",
+        )
+
     settings: SettingsSection = Field(default_factory=SettingsSection)
     model: ModelSection = Field(default_factory=ModelSection)
+    history_retrieval: HistoryRetrievalSection = Field(default_factory=HistoryRetrievalSection)
     web: WebSection = Field(default_factory=WebSection)
     snn: SNNSection = Field(default_factory=SNNSection)
     neuromod: NeuromodSection = Field(default_factory=NeuromodSection)
@@ -382,6 +478,7 @@ class LifeEngineConfig(BaseConfig):
     thresholds: ThresholdsSection = Field(default_factory=ThresholdsSection)
     memory_algorithm: MemoryAlgorithmSection = Field(default_factory=MemoryAlgorithmSection)
     chatter: ChatterSection = Field(default_factory=ChatterSection)
+    streams: StreamsSection = Field(default_factory=StreamsSection)
 
     @field_validator("settings")
     @classmethod

@@ -39,6 +39,7 @@ from .audit import (
     log_wake_context_injected,
 )
 from ..core.config import LifeEngineConfig
+from ..streams.manager import ThoughtStreamManager
 from ..constants import (
     HEARTBEAT_IDLE_CRITICAL_THRESHOLD,
     HEARTBEAT_IDLE_WARNING_THRESHOLD,
@@ -126,6 +127,9 @@ class LifeEngineService(BaseService):
 
         # 事件构建器
         self._event_builder = EventBuilder(self._next_sequence)
+
+        # 思考流系统
+        self._thought_manager: ThoughtStreamManager | None = None
 
         # 状态持久化
         self._state_persistence: StatePersistence | None = None
@@ -1048,6 +1052,14 @@ class LifeEngineService(BaseService):
                 if neuromod_text:
                     lines.extend([neuromod_text, ""])
 
+        # 思考流注入
+        if self._thought_manager is not None:
+            streams_cfg = getattr(cfg, "streams", None)
+            if streams_cfg is None or getattr(streams_cfg, "inject_to_heartbeat", True):
+                streams_text = self._thought_manager.format_for_prompt(max_items=3)
+                if streams_text:
+                    lines.extend([streams_text, ""])
+
         if idle_warning:
             lines.extend([idle_warning, ""])
 
@@ -1228,8 +1240,9 @@ class LifeEngineService(BaseService):
         """获取中枢可用的工具类列表。"""
         from ..tools import ALL_TOOLS, TODO_TOOLS, WEB_TOOLS
         from ..memory.tools import MEMORY_TOOLS
+        from ..streams.tools import STREAM_TOOLS
 
-        return ALL_TOOLS + TODO_TOOLS + MEMORY_TOOLS + WEB_TOOLS
+        return ALL_TOOLS + TODO_TOOLS + MEMORY_TOOLS + WEB_TOOLS + STREAM_TOOLS
 
     async def _execute_heartbeat_tool_call(
         self,
@@ -1443,6 +1456,18 @@ class LifeEngineService(BaseService):
         await self._snn_integration.init_snn()
 
         self._dfc_integration = DFCIntegration(self)
+
+        # 初始化思考流管理器
+        streams_cfg = getattr(cfg, "streams", None)
+        if streams_cfg is None or getattr(streams_cfg, "enabled", True):
+            max_active = getattr(streams_cfg, "max_active_streams", 5) if streams_cfg else 5
+            dormancy_hours = getattr(streams_cfg, "dormancy_threshold_hours", 24) if streams_cfg else 24
+            self._thought_manager = ThoughtStreamManager(
+                workspace_path=cfg.settings.workspace_path,
+                max_active=max_active,
+                dormancy_hours=dormancy_hours,
+            )
+            logger.info(f"思考流系统已初始化: max_active={max_active}")
 
         self._state.running = True
         self._state.started_at = _now_iso()
