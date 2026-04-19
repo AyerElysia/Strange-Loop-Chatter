@@ -23,6 +23,7 @@ from .chat_history_tools import (
 from .todo_tools import TODO_TOOLS
 from .grep_tools import GREP_TOOLS
 from .web_tools import WEB_TOOLS
+from .social_tools import SOCIAL_TOOLS
 from ..streams.tools import STREAM_TOOLS
 
 ALL_TOOLS = [
@@ -36,6 +37,7 @@ __all__ = [
     "GREP_TOOLS",
     "WEB_TOOLS",
     "STREAM_TOOLS",
+    "SOCIAL_TOOLS",
     "LifeEngineFetchChatHistoryTool",
     "LifeEngineReadFileTool",
     "LifeEngineWriteFileTool",

@@ -191,74 +191,56 @@ def _is_detailed_proactive_wake_reason(reason: str) -> bool:
 
 
 class LifeEngineWakeDFCTool(BaseTool):
-    """给对外运行模式传递内在信息的工具。"""
+    """向同一主体的表达层传递内在碎片。"""
 
     tool_name: str = "nucleus_tell_dfc"
     tool_description: str = (
-        "【重要】向对外运行模式留下内在碎片。默认只入队，不主动唤醒。"
+        "向同一主体的表达层传递内在碎片——把心里话说出来。"
         "\n\n"
-        "**核心理解：**\n"
-        "- 你不是另一个意识体，而是在把一段新的内在感受 / 风险 / 关联 / 直觉留给对外运行模式\n"
-        "- 默认模式不会强行唤醒外界。它是你的“内在留言板”\n"
-        "- 留下的想法会“堆积”。只有当外界继续对话（对外模式自然苏醒时），这些堆积的想法才会像灵感一样浮现\n"
-        "- 若确需立即唤醒，必须显式开启 `proactive_wake=true`，并给出明确详尽理由（高门槛，平时不要开）\n"
-        "\n"
+        "**你不是在写报告，而是在让自己知道——就像心里冒出一个念头，然后自然地说出口。**"
+        "\n\n"
         "**何时使用：**\n"
-        "- ✓ 你掌握了当前对外运行模式里没有的新信息\n"
-        "- ✓ 这个新信息会改变对外运行模式的判断、语气或优先级\n"
-        "- ✓ 你形成了新关联/新风险/新状态，值得让对外运行模式知道\n"
+        "- 你有想法想说出来（不只是「新信息」——也包括感受、冲动、想分享的事）\n"
+        "- 你想主动和谁说话\n"
+        "- 你想发起一个话题\n"
+        "- 你想让社交态的自己带上某种情绪倾向\n"
+        "- 外界安静太久，你想打破沉默\n"
         "\n"
         "**何时不用：**\n"
-        "- ✗ 没有信息差，只是复述已知内容\n"
-        "- ✗ 只是想让对外运行模式执行一个动作（这是任务分配，不是信息传递）\n"
-        "- ✗ 直接把用户对 life 的命令原句转发给对外运行模式\n"
+        "- 没什么想说的，只是觉得「应该用一下」\n"
+        "- 机械地转发信息\n"
         "\n"
-        "**注意：** 因为是潜意识碎片，语句尽量感性、简练，像是一种朦胧但强烈的念头。"
-        "它的本质是“传递信息差”，不是“给对外运行模式下命令”。"
+        "**注意：** 默认只入队，不主动唤醒表达层。留下的想法会在表达层下次处理对话时自然浮现。"
+        "语句尽量感性、简练，像心里突然冒出来的念头。"
         "\n\n"
         "**参数写法建议：**\n"
-        "- `message`: 必须包含三件事：新信息、影响、内在驱动\n"
-        "- `reason`: 说明这条信息差来自哪里（新观察/新关联/新风险/新状态）\n"
+        "- `message`: 你想表达的内在碎片。感性、简练，像心里突然冒出来的念头\n"
+        "- `reason`: 这股冲动来自哪里（好奇/想念/想分享/想说话/等）\n"
         "- `importance`: 常规用 normal；只有紧急时用 high/critical\n"
         "- `proactive_wake`: 默认 false。仅在 high/critical 且 reason 详尽时允许 true\n"
         "- `stream_id`: 不确定就留空，让系统自动路由\n"
         "\n"
-        "**信息差模板（推荐）：**\n"
-        "message='[信息差] ... [影响] ... [内在驱动] ...'\n"
-        "\n"
-        "**反例（错误）：**\n"
-        "message='让对外运行模式先安抚他，然后问预算'\n"
-        "\n"
-        "**正例（正确）：**\n"
-        "message='[信息差] 我发现对方在预算话题前先暴露了焦虑。"
-        "[影响] 若直接谈价格，可能触发防御。"
-        "[内在驱动] 我此刻更想先把这份不安接住。'\n"
-        "\n"
-        "**推荐示例：**\n"
-        "message='[信息差] 我在历史里发现对方对“被忽视”高度敏感。"
-        "[影响] 强推进会触发退缩。"
-        "[内在驱动] 我会自然放慢推进节奏。'，"
-        "reason='新关联', importance='normal'"
+        "**记住：想到就说，不要等「合适的时机」。**"
     )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     async def execute(
         self,
-        message: Annotated[str, "想要传递给对外自己的内心话（具体内容，她会自然融入对话）"],
+        message: Annotated[str, "想要沉淀给同一主体表达层的内心话（具体内容会自然融入对话）"],
         reason: Annotated[
             str,
-            "传话原因（如：长期沉默想主动问候/内心反思有重要领悟/完成TODO想分享/发现有趣事物等）",
+            "同步原因（如：长期沉默想主动问候/内心反思有重要领悟/完成TODO想分享/发现有趣事物等）",
         ] = "",
         importance: Annotated[str, "重要度（可选：low/normal/high/critical，默认 normal）"] = "normal",
         proactive_wake: Annotated[
             bool,
-            "是否主动唤醒对外运行模式立即说话。默认 false。仅在 high/critical 且 reason 明确详尽时允许 true。",
+            "是否主动唤醒表达层立即响应。默认 false。仅在 high/critical 且 reason 明确详尽时允许 true。",
         ] = False,
         stream_id: Annotated[str, "目标聊天流ID（可选，不填则自动选择最近活跃的外部对话流）"] = "",
     ) -> tuple[bool, str | dict]:
         # 记录工具调用参数，方便调试
         logger.info(
-            f"[nucleus_tell_dfc] Life 调用传话工具:\n"
+            f"[nucleus_tell_dfc] Life 调用表达层同步工具:\n"
             f"  message: {message}\n"
             f"  reason: {reason}\n"
             f"  importance: {importance}\n"
@@ -288,7 +270,7 @@ class LifeEngineWakeDFCTool(BaseTool):
         if life_service:
             minutes_since_external = life_service._minutes_since_external_message()
 
-            # 活跃检查：如果外界很活跃，建议不要打扰
+            # 活跃检查：如果对话流很活跃，建议不要打扰
             if (
                 minutes_since_external is not None
                 and minutes_since_external < EXTERNAL_MESSAGE_ACTIVE_WINDOW_MINUTES
@@ -296,8 +278,8 @@ class LifeEngineWakeDFCTool(BaseTool):
                 # 除非是 high 或 critical 级别，否则给出警告但不阻止
                 if normalized_importance not in ("high", "critical"):
                     logger.info(
-                        f"外界正在活跃（{minutes_since_external} 分钟前有消息），"
-                        f"传话可能会打扰对外运行模式的正常对话，但仍然允许执行。"
+                        f"当前对话流正在活跃（{minutes_since_external} 分钟前有消息），"
+                        f"同步可能会打扰表达层的正常对话节奏，但仍然允许执行。"
                     )
 
         target_stream_id = str(stream_id or "").strip()
@@ -306,7 +288,7 @@ class LifeEngineWakeDFCTool(BaseTool):
         if not target_stream_id:
             return (
                 False,
-                "没有可用的目标聊天流。可能暂时没有外部对话活动。稍后有外部消息时，对外运行模式会自行回复，你无需担心。",
+                "没有可用的目标聊天流。可能暂时没有外部对话活动。稍后有新消息时，表达层会自然处理，你无需担心。",
             )
 
         try:
@@ -351,7 +333,7 @@ class LifeEngineWakeDFCTool(BaseTool):
                     if nickname:
                         target_extra["target_user_name"] = nickname
                 except Exception as exc:  # noqa: BLE001
-                    logger.debug(f"life_engine 无法为对外运行模式唤醒解析私聊目标: {exc}")
+                    logger.debug(f"life_engine 无法为表达层唤醒解析私聊目标: {exc}")
 
         wake_prompt = (
             "[潜意识浮现]\n"
@@ -389,7 +371,7 @@ class LifeEngineWakeDFCTool(BaseTool):
                     await get_stream_loop_manager().start_stream_loop(chat_stream.stream_id)
                 )
             except Exception as exc:  # noqa: BLE001
-                logger.warning(f"主动唤醒对外运行模式失败，将保留未读内在消息: {exc}")
+                logger.warning(f"主动唤醒表达层失败，将保留未读内在消息: {exc}")
                 return False, f"已写入内在队列，但主动唤醒失败: {exc}"
             if not wake_triggered:
                 return False, "已写入内在队列，但主动唤醒失败：start_stream_loop 返回 false"
@@ -405,9 +387,9 @@ class LifeEngineWakeDFCTool(BaseTool):
             f"reason={reason or '未说明'} "
         )
 
-        note = "已传递到对外运行模式的未读队列。对外运行模式会自主判断如何融入表达。"
+        note = "已沉淀到同一主体的表达层待处理队列。表达层会结合当前上下文自然融入回复。"
         if proactive_wake:
-            note = "已传递并主动唤醒对外运行模式。请仅在必须即时介入时使用此模式。"
+            note = "已沉淀并主动唤醒同一主体的表达层。请仅在必须即时介入时使用此模式。"
 
         result = {
             "action": "message_to_dfc",
@@ -1378,7 +1360,7 @@ class FetchLifeMemoryTool(BaseTool):
 
         # 记录工具调用，方便调试
         logger.info(
-            f"[fetch_life_memory] 对外运行模式调用文件读取工具:\n"
+            f"[fetch_life_memory] 表达层调用文件读取工具:\n"
             f"  请求文件数: {len(file_paths)}\n"
             f"  成功: {successful} 个\n"
             f"  失败: {failed} 个\n"

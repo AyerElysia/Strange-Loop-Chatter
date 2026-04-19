@@ -1262,11 +1262,11 @@ class LifeEngineService(BaseService):
 
     def _get_nucleus_tools(self) -> list[type]:
         """获取中枢可用的工具类列表。"""
-        from ..tools import ALL_TOOLS, TODO_TOOLS, WEB_TOOLS
+        from ..tools import ALL_TOOLS, TODO_TOOLS, WEB_TOOLS, SOCIAL_TOOLS
         from ..memory.tools import MEMORY_TOOLS
         from ..streams.tools import STREAM_TOOLS
 
-        return ALL_TOOLS + TODO_TOOLS + MEMORY_TOOLS + WEB_TOOLS + STREAM_TOOLS
+        return ALL_TOOLS + TODO_TOOLS + MEMORY_TOOLS + WEB_TOOLS + STREAM_TOOLS + SOCIAL_TOOLS
 
     async def _execute_heartbeat_tool_call(
         self,
