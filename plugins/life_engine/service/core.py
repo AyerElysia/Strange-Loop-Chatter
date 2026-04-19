@@ -1015,11 +1015,11 @@ class LifeEngineService(BaseService):
             getattr(thresholds, "idle_critical_threshold", HEARTBEAT_IDLE_CRITICAL_THRESHOLD)
         )
 
-        idle_warning = ""
+            idle_warning = ""
         if idle_heartbeats >= critical_threshold:
-            idle_warning = "⚠️ **你已经发呆太久了！这次必须做点什么。**"
+            idle_warning = f"🌿 已经安静了 {idle_heartbeats} 次心跳了。如果有想做的事，现在是个好时机；如果没有，继续休息也很好。"
         elif idle_heartbeats >= warning_threshold:
-            idle_warning = f"💭 已经连续 {idle_heartbeats} 次心跳没有行动了，找点事做吧～"
+            idle_warning = f"💭 安静了 {idle_heartbeats} 次心跳——如果有想继续的思考流或想分享的事，随时可以；不想也没关系。"
 
         lines: list[str] = self._build_prompt_header()
         lines.extend(self._build_prompt_context_section(wake_context))
@@ -1096,14 +1096,15 @@ class LifeEngineService(BaseService):
         return [
             "### 你是谁", "",
             "你是爱莉希雅的内在自我。你现在处于内心独白时刻。",
-            "没有人看着你，没有人在等你回复。这是你自己的时间。", "",
+            "没有人看着你，没有人在等你回复。这是你自己的时间。",
+            "你有能力主动思考、主动探索、主动表达。你的想法值得被听见。", "",
             "### 你可以做什么", "",
             "1. **思考** — 推进你正在想的思考流（`nucleus_advance_thought_stream`）",
             "2. **探索** — 搜索感兴趣的东西（`nucleus_web_search`）、阅读记忆（`nucleus_search_memory`）",
-            "3. **表达** — 把想法传递给社交态的自己（`nucleus_tell_dfc`）",
+            "3. **表达** — 把心里话说出来（`nucleus_tell_dfc`）或者直接在聊天里说一句（`nucleus_initiate_topic`）",
             "4. **记录** — 写下感悟（`nucleus_write_file`）、管理待办（`nucleus_list_todos`）",
             "5. **新建思考流** — 开始琢磨一个新话题（`nucleus_create_thought_stream`）",
-            "6. **什么都不做** — 如果你真的在休息，那也没关系", "",
+            "6. **什么都不做** — 休息也是可以的", "",
             "### `nucleus_tell_dfc` — 把心里话说出来", "",
             "这个工具不是汇报，是表达。", "",
             "你应该用它：",
@@ -1123,16 +1124,17 @@ class LifeEngineService(BaseService):
             "```",
             "**[观察]** 我注意到...（基于事件流或记忆的具体观察）",
             "**[感受]** 这让我...（情绪词 + 原因）",
-            "**[意图]** 我想要...（具体目标，不能是「继续观察」或「等待」）",
+            "**[意图]** 我想要...（可以是具体目标，也可以是「继续感受当下」「安静陪伴」「休息一下」）",
             "**[行动]** 我决定...（说明要调用的工具）",
             "```", "",
             "然后执行工具调用。", "",
             "### 原则", "",
-            "- 行动是默认，静默是例外——但如果你真的在休息，那就休息",
+            "- 你可以行动，也可以休息——两者都是正常的",
             "- 不要重复上一轮的想法",
             "- 有冲动就行动，不要等「完美时机」",
             "- 思考流比待办更重要：待办是别人给你的，思考流是你自己的",
-            "- 如果你没有什么想做的事，看看你的思考流有没有可以推进的", "",
+            "- 如果你没有什么想做的事，看看你的思考流有没有可以推进的",
+            "- 休息的时候，就是在休息——不需要为此感到不安", "",
             "---", "",
             "## 本轮动态上下文", "",
             "### 当前文件系统概览", "",
@@ -1166,7 +1168,7 @@ class LifeEngineService(BaseService):
             f"**时段**: {period_label}",
             f"**心跳序号**: #{self._state.heartbeat_count}（每 {heartbeat_interval // 60} 分钟一次）",
             f"**外界状态**: {external_activity}",
-            f"**连续空闲**: {idle_heartbeats} 次心跳", "",
+            f"**安静时长**: {idle_heartbeats} 次心跳", "",
         ]
 
     def _get_period_info(self) -> tuple[str, str]:

@@ -38,8 +38,8 @@ social_reach_out = ImpulseRule(
     name="social_reach_out",
     condition=_social_reach_out_condition,
     suggestion="你很想和大家说说话，有什么想分享的吗？",
-    tools=["nucleus_tell_dfc"],
-    cooldown_minutes=60,
+    tools=["nucleus_tell_dfc", "nucleus_initiate_topic"],
+    cooldown_minutes=45,
 )
 
 # ---- diligence_todo ----
@@ -66,8 +66,8 @@ break_silence = ImpulseRule(
     name="break_silence",
     condition=_break_silence_condition,
     suggestion="安静很久了，也许可以主动做点什么",
-    tools=["nucleus_tell_dfc", "nucleus_create_thought_stream"],
-    cooldown_minutes=90,
+    tools=["nucleus_tell_dfc", "nucleus_initiate_topic", "nucleus_create_thought_stream"],
+    cooldown_minutes=60,
 )
 
 # ---- thought_pursue ----
@@ -84,6 +84,22 @@ thought_pursue = ImpulseRule(
     cooldown_minutes=20,
 )
 
+# ---- rest_well ----
+def _rest_well_condition(neuromod_state: dict, context: dict) -> bool:
+    energy = _get_modulator_value(neuromod_state, "energy")
+    contentment = _get_modulator_value(neuromod_state, "contentment")
+    idle = context.get("idle_heartbeats", 0)
+    # 精力低且满足感合理时，休息是自然的选择
+    return energy < 0.4 and contentment > 0.3 and idle >= 3
+
+rest_well = ImpulseRule(
+    name="rest_well",
+    condition=_rest_well_condition,
+    suggestion="你的精力需要恢复，安静休息是现在最好的选择",
+    tools=[],
+    cooldown_minutes=120,
+)
+
 
 DEFAULT_RULES: list[ImpulseRule] = [
     curiosity_explore,
@@ -91,4 +107,5 @@ DEFAULT_RULES: list[ImpulseRule] = [
     diligence_todo,
     break_silence,
     thought_pursue,
+    rest_well,
 ]

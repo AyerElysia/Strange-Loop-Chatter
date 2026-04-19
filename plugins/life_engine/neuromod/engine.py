@@ -54,9 +54,9 @@ class Modulator:
         elif self.value > 0.55:
             return "适中"
         elif self.value > 0.35:
-            return "偏低"
+            return "平静"
         else:
-            return "匮乏"
+            return "休憩"
 
 
 class ModulatorSystem:
@@ -139,9 +139,10 @@ class ModulatorSystem:
         # --- energy ---
         rest_drive = snn_drives.get("rest_drive", 0.0)
         idle_beats = event_stats.get("idle_beats", 0)
+        # 空转不再额外消耗精力——安静时刻是自然的休息，不是效率损失
         stimuli["energy"] = (
-            0.3 * (circadian_energy - 0.5) * 2.0  # 映射到 [-1, 1]
-            - 0.2 * min(idle_beats / 10.0, 1.0)  # 持续空转消耗精力
+            0.3 * (circadian_energy - 0.5) * 2.0  # 昼夜节律
+            + 0.1 * min(idle_beats / 10.0, 1.0)  # 安静时刻缓慢回复精力（休息效应）
             + 0.2 * rest_drive  # 休息驱动回复精力
         )
 

@@ -96,7 +96,7 @@ class ImpulseEngine:
             lines.append(f"- {s.suggestion}")
 
         lines.append("")
-        lines.append("（这些只是建议，你可以选择遵循或不遵循。但不要无动于衷。）")
+        lines.append("（这些只是建议，你可以选择遵循或不遵循。）")
         lines.append("")
 
         return "\n".join(lines)

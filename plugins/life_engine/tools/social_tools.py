@@ -33,12 +33,12 @@ class NucleusInitiateTopicTool(BaseTool):
         "- nucleus_initiate_topic: 直接送出消息，立即可见\n"
         "\n"
         "**注意：** 这是较强力的主动行为，请确保有真正的表达欲，不要频繁使用。"
-        "每小时最多主动发起 2 次话题。"
+        "每小时最多主动发起 5 次话题。"
     )
     chatter_allow: list[str] = ["life_engine_internal"]
 
     # 主动发起频率限制
-    _MAX_INITIATES_PER_HOUR: int = 2
+    _MAX_INITIATES_PER_HOUR: int = 5
 
     def __init__(self, plugin) -> None:
         super().__init__(plugin)
@@ -76,7 +76,21 @@ class NucleusInitiateTopicTool(BaseTool):
             target_stream_id = _pick_latest_target_stream_id(self.plugin) or ""
 
         if not target_stream_id:
-            return False, "没有可用的目标聊天流。请稍后再试。"
+            # 尝试从活跃聊天流中寻找候选
+            try:
+                from src.core.managers import get_stream_manager
+                sm = get_stream_manager()
+                if sm:
+                    candidates = sm.get_active_streams(limit=5) if hasattr(sm, 'get_active_streams') else []
+                    for s in candidates:
+                        if getattr(s, 'stream_type', '') in ("group", "private"):
+                            target_stream_id = s.stream_id
+                            break
+            except Exception:
+                pass
+
+        if not target_stream_id:
+            return False, "暂时没有可用的聊天流，下次有对话时再说吧。没关系的～"
 
         # 发送消息
         try:
