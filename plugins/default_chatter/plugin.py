@@ -244,9 +244,16 @@ class SendTextAction(BaseAction):
 
     chatter_allow: list[str] = ["default_chatter"]
 
+    def _is_programmatic_controller_enabled(self) -> bool:
+        """读取程序化控制器开关。"""
+        plugin_config = getattr(self.plugin, "config", None)
+        return not isinstance(plugin_config, DefaultChatterConfig) or bool(
+            plugin_config.plugin.enable_programmatic_controller
+        )
+
     def _mark_sub_agent_bonus_on_success(self, success: bool) -> None:
         """发送成功后提高下一次 tick 的 sub-agent 直通概率。"""
-        if success:
+        if success and self._is_programmatic_controller_enabled():
             _set_next_tick_sub_agent_bonus(
                 self.chat_stream,
                 _SUB_AGENT_NEXT_TICK_REPLY_BONUS,
@@ -584,6 +591,13 @@ class DefaultChatter(BaseChatter):
 
         return capped_probability, "，".join(reasons)
 
+    def _is_programmatic_controller_enabled(self) -> bool:
+        """读取程序化控制器开关。"""
+        plugin_config = getattr(self.plugin, "config", None)
+        return not isinstance(plugin_config, DefaultChatterConfig) or bool(
+            plugin_config.plugin.enable_programmatic_controller
+        )
+
     def _build_negative_behaviors_extra(self) -> str:
         """若配置启用，构建用于 user extra 板块的负面行为再次强调文本。
 
@@ -691,15 +705,16 @@ class DefaultChatter(BaseChatter):
                 "should_respond": True,
             }
 
-        bypass_probability, bypass_reason = self._compute_sub_agent_bypass_probability(
-            unread_msgs,
-            chat_stream,
-        )
-        if random.random() < bypass_probability:
-            return {
-                "reason": f"概率直通响应：{bypass_reason}",
-                "should_respond": True,
-            }
+        if self._is_programmatic_controller_enabled():
+            bypass_probability, bypass_reason = self._compute_sub_agent_bypass_probability(
+                unread_msgs,
+                chat_stream,
+            )
+            if random.random() < bypass_probability:
+                return {
+                    "reason": f"概率直通响应：{bypass_reason}",
+                    "should_respond": True,
+                }
 
         return await decide_should_respond(
             chatter=self,

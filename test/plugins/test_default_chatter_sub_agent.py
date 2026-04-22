@@ -25,6 +25,15 @@ def _build_chatter() -> DefaultChatter:
     return DefaultChatter(stream_id="test_stream", plugin=plugin)
 
 
+def _build_chatter_with_config(plugin_overrides: dict[str, object]) -> DefaultChatter:
+    """使用指定插件配置覆盖项构造默认聊天器实例。"""
+    config = DefaultChatterConfig.from_dict(
+        {"plugin": {"enabled": True, "mode": "enhanced", **plugin_overrides}}
+    )
+    plugin = DefaultChatterPlugin(config=config)
+    return DefaultChatter(stream_id="test_stream", plugin=plugin)
+
+
 @pytest.mark.asyncio
 async def test_sub_agent_is_disabled_in_private_chat(monkeypatch: pytest.MonkeyPatch) -> None:
     """私聊场景应跳过 decide_should_respond。"""
@@ -132,3 +141,64 @@ async def test_send_text_marks_next_tick_bonus_after_success(
 
     assert success is True
     assert getattr(stream.context, "_default_chatter_next_tick_bonus", None) == 0.5
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_skips_programmatic_controller_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """关闭程序化控制器后，群聊应始终回退到 decide_should_respond。"""
+    chatter = _build_chatter_with_config({"enable_programmatic_controller": False})
+    stream = ChatStream(
+        stream_id="s_group",
+        platform="qq",
+        chat_type="group",
+        bot_nickname="Neo",
+    )
+    setattr(stream.context, "_default_chatter_next_tick_bonus", 0.5)
+    unread_msgs = [Message(content="Neo 你在吗", processed_plain_text="Neo 你在吗")]
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_decide(**kwargs: Any) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"reason": "llm only", "should_respond": False}
+
+    monkeypatch.setattr(
+        "plugins.default_chatter.plugin.get_core_config",
+        lambda: SimpleNamespace(
+            personality=SimpleNamespace(
+                nickname="Neo",
+                alias_names=["小狐狸"],
+            )
+        ),
+    )
+    monkeypatch.setattr("plugins.default_chatter.plugin.decide_should_respond", _fake_decide)
+    monkeypatch.setattr("plugins.default_chatter.plugin.random.random", lambda: 0.0)
+
+    result = await chatter.sub_agent("group-msg", unread_msgs, stream)
+
+    assert result == {"reason": "llm only", "should_respond": False}
+    assert captured["chatter"] is chatter
+    assert getattr(stream.context, "_default_chatter_next_tick_bonus", None) == 0.5
+
+
+@pytest.mark.asyncio
+async def test_send_text_does_not_mark_bonus_when_controller_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """关闭程序化控制器后，send_text 不应写入下一 tick 加成。"""
+    stream = ChatStream(stream_id="s_group", platform="qq", chat_type="group")
+    plugin = DefaultChatterPlugin(
+        config=DefaultChatterConfig.from_dict(
+            {"plugin": {"enable_programmatic_controller": False}}
+        )
+    )
+    action = SendTextAction(chat_stream=stream, plugin=plugin)
+
+    monkeypatch.setattr(action, "_send_to_stream", AsyncMock(return_value=True))
+
+    success, _detail = await action.execute(content="你好")
+
+    assert success is True
+    assert getattr(stream.context, "_default_chatter_next_tick_bonus", None) in (None, 0.0)
