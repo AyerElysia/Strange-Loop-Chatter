@@ -190,7 +190,7 @@ async def test_run_enhanced_prioritizes_tool_followup_when_tool_result_tail() ->
     )
     chatter = _FakeChatter(fake_response)
 
-    chat_stream = cast(Any, SimpleNamespace(stream_id="s1"))
+    chat_stream = cast(Any, SimpleNamespace(stream_id="s1", stream_name="测试流"))
     fake_logger = cast(
         Any,
         _FakeLogger(),
@@ -269,19 +269,31 @@ async def test_run_enhanced_does_not_yield_wait_when_pending_tool_results(monkey
     assert isinstance(first, Stop)
     assert resp.send_count == 2
     assert chatter.create_request_calls == [("actor", "actor")]
-    assert fake_logger.panels == []
+    assert fake_logger.panels == [
+        (
+            "聊天流名称：s1\n\n"
+            "思考：（无）\n"
+            "调用工具：\n"
+            "    tool-x",
+            "Actor 决策",
+            "cyan",
+        )
+    ]
 
 
 @pytest.mark.asyncio
-async def test_run_enhanced_prints_actor_message_panel_before_processing_tool_calls(
+async def test_run_enhanced_prints_actor_decision_panel_before_processing_tool_calls(
     monkeypatch: Any,
 ) -> None:
-    """actor 返回 message + tool call 时，也应打印思考面板。"""
+    """actor 返回 message + tool call 时，应打印本次决策摘要面板。"""
 
     from plugins.default_chatter import runners as runners_mod
 
     resp = _FakeResponse(payload_roles=[ROLE.USER], message="先回一句，再调工具")
-    resp.call_list = [SimpleNamespace(name="tool-x", args={}, id="1")]
+    resp.call_list = [
+        SimpleNamespace(name="tool-x", args={"reason": "测试", "foo": "bar"}, id="1"),
+        SimpleNamespace(name="tool-y", args={"count": 2}, id="2"),
+    ]
 
     async def _fake_process_tool_calls(**_kwargs: Any) -> Any:
         return SimpleNamespace(
@@ -295,7 +307,7 @@ async def test_run_enhanced_prints_actor_message_panel_before_processing_tool_ca
     monkeypatch.setattr(runners_mod, "process_tool_calls", _fake_process_tool_calls)
 
     chatter = _FakeChatterAllowUser(resp)
-    chat_stream = cast(Any, SimpleNamespace(stream_id="s1"))
+    chat_stream = cast(Any, SimpleNamespace(stream_id="s1", stream_name="测试流"))
     fake_logger = cast(Any, _FakeLogger())
 
     gen = run_enhanced(
@@ -310,4 +322,14 @@ async def test_run_enhanced_prints_actor_message_panel_before_processing_tool_ca
 
     first = await anext(gen)
     assert first.__class__.__name__ == "Wait"
-    assert fake_logger.panels == [("先回一句，再调工具", "Actor 思考", "cyan")]
+    assert fake_logger.panels == [
+        (
+            "聊天流名称：测试流\n\n"
+            "思考：先回一句，再调工具\n"
+            "调用工具：\n"
+            "    tool-x (foo: bar)\n"
+            "    tool-y (count: 2)",
+            "Actor 决策",
+            "cyan",
+        )
+    ]

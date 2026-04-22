@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import AsyncGenerator, TypeGuard
+from typing import Any, AsyncGenerator, TypeGuard
 
 from src.core.components.base import Wait, Success, Failure, Stop
 from src.core.models.message import Message
@@ -72,18 +72,60 @@ def _require_response(response: LLMConversationState) -> LLMResponseLike:
     raise TypeError("当前会话状态尚未进入响应阶段")
 
 
-def _print_actor_message_panel(response: LLMResponseLike, logger: Logger) -> None:
-    """在 actor 返回 message 时打印思考面板。"""
-    if not response.call_list:
-        return
+def _format_tool_args(args: Any) -> str:
+    """格式化单个工具调用的参数展示。"""
+    if not isinstance(args, dict):
+        return ""
 
-    message = response.message.strip() if response.message else ""
-    if not message:
+    display_items: list[str] = []
+    for key, value in args.items():
+        if key == "reason":
+            continue
+        display_items.append(f"{key}: {value}")
+    return ", ".join(display_items)
+
+
+def _build_actor_decision_panel(chat_stream: ChatStream, response: LLMResponseLike) -> str:
+    """构建 actor 本次决策摘要面板内容。"""
+    stream_name = (
+        getattr(chat_stream, "stream_name", "")
+        or getattr(chat_stream, "stream_id", "")
+        or "未知聊天流"
+    )
+    thought = response.message.strip() if response.message else "（无）"
+
+    tool_lines = []
+    for call in response.call_list or []:
+        formatted_args = _format_tool_args(call.args)
+        if formatted_args:
+            tool_lines.append(f"    {call.name} ({formatted_args})")
+        else:
+            tool_lines.append(f"    {call.name}")
+
+    tools_text = "\n".join(tool_lines) if tool_lines else "    （无）"
+    return (
+        f"聊天流名称：{stream_name}\n\n"
+        f"思考：{thought}\n"
+        f"调用工具：\n{tools_text}"
+    )
+
+
+def _print_actor_decision_panel(
+    chat_stream: ChatStream,
+    response: LLMResponseLike,
+    logger: Logger,
+) -> None:
+    """当 actor 给出 tool call 时打印本次决策摘要。"""
+    if not response.call_list:
         return
 
     print_panel = getattr(logger, "print_panel", None)
     if callable(print_panel):
-        print_panel(message, title="Actor 思考", border_style="cyan")
+        print_panel(
+            _build_actor_decision_panel(chat_stream, response),
+            title="Actor 决策",
+            border_style="cyan",
+        )
 
 
 def _transition(
@@ -214,7 +256,7 @@ async def run_enhanced(
         if rt.phase == _ToolCallWorkflowPhase.TOOL_EXEC:
             llm_response = _require_response(rt.response)
 
-            _print_actor_message_panel(llm_response, logger)
+            _print_actor_decision_panel(chat_stream, llm_response, logger)
 
             if not llm_response.call_list:
                 if llm_response.message and llm_response.message.strip():
@@ -346,7 +388,7 @@ async def run_classical(
                 yield Failure("LLM 请求失败", error)
                 break
 
-            _print_actor_message_panel(response, logger)
+            _print_actor_decision_panel(chat_stream, response, logger)
 
             if not response.call_list:
                 if response.message and response.message.strip():
