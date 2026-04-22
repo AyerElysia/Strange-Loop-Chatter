@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import datetime
+import random
 from typing import AsyncGenerator
 
 from src.core.components.types import ChatType
@@ -39,6 +40,30 @@ from .runners import run_classical, run_enhanced
 from .type_defs import LLMConversationState, LLMResponseLike, SubAgentDecision
 
 logger = get_logger("default_chatter")
+
+_SUB_AGENT_BASE_BYPASS_PROBABILITY = 0.1
+_SUB_AGENT_NAME_MENTION_BONUS = 0.7
+_SUB_AGENT_ALIAS_MENTION_BONUS = 0.4
+_SUB_AGENT_UNREAD_MESSAGE_BONUS = 0.05
+_SUB_AGENT_NEXT_TICK_REPLY_BONUS = 0.5
+_SUB_AGENT_NEXT_TICK_BONUS_ATTR = "_default_chatter_next_tick_bonus"
+
+
+def _set_next_tick_sub_agent_bonus(chat_stream: ChatStream, bonus: float) -> None:
+    """为下一次群聊 sub-agent 判定写入概率加成。"""
+    current_bonus = getattr(chat_stream.context, _SUB_AGENT_NEXT_TICK_BONUS_ATTR, 0.0)
+    setattr(
+        chat_stream.context,
+        _SUB_AGENT_NEXT_TICK_BONUS_ATTR,
+        max(float(current_bonus), bonus),
+    )
+
+
+def _consume_next_tick_sub_agent_bonus(chat_stream: ChatStream) -> float:
+    """读取并清空下一次群聊 sub-agent 判定的概率加成。"""
+    bonus = float(getattr(chat_stream.context, _SUB_AGENT_NEXT_TICK_BONUS_ATTR, 0.0))
+    setattr(chat_stream.context, _SUB_AGENT_NEXT_TICK_BONUS_ATTR, 0.0)
+    return bonus
 
 # ─── 系统提示词构建 ─────────────────────────────────────────────
 system_prompt = """<introduce>
@@ -217,6 +242,14 @@ class SendTextAction(BaseAction):
 
     chatter_allow: list[str] = ["default_chatter"]
 
+    def _mark_sub_agent_bonus_on_success(self, success: bool) -> None:
+        """发送成功后提高下一次 tick 的 sub-agent 直通概率。"""
+        if success:
+            _set_next_tick_sub_agent_bonus(
+                self.chat_stream,
+                _SUB_AGENT_NEXT_TICK_REPLY_BONUS,
+            )
+
     async def execute(
         self,
         content: str,
@@ -316,14 +349,16 @@ class SendTextAction(BaseAction):
             from src.core.transport.message_send import get_message_sender
             sender = get_message_sender()
             success = await sender.send_message(message)
+            self._mark_sub_agent_bonus_on_success(success)
             return success, f"已发送消息:{content}"
         else:
             # 非引用回复时可使用显式 at 参数；reply_to 存在时已在上分支处理并忽略 at。
             at_hint = (at or at_prefix_hint or "").strip().lstrip("@").strip()
 
             if not at_hint:
-                await self._send_to_stream(content)
-                return True, f"已发送消息:{content}"
+                success = await self._send_to_stream(content)
+                self._mark_sub_agent_bonus_on_success(success)
+                return success, f"已发送消息:{content}"
 
             target_stream_id = self.chat_stream.stream_id
             platform = self.chat_stream.platform
@@ -332,8 +367,9 @@ class SendTextAction(BaseAction):
 
             if chat_type != "group":
                 # 私聊场景不需要显式 @，按普通发送处理。
-                await self._send_to_stream(content)
-                return True, f"已发送消息:{content}"
+                success = await self._send_to_stream(content)
+                self._mark_sub_agent_bonus_on_success(success)
+                return success, f"已发送消息:{content}"
 
             from src.core.managers.adapter_manager import get_adapter_manager
             from src.core.utils.user_query_helper import get_user_query_helper
@@ -390,6 +426,7 @@ class SendTextAction(BaseAction):
 
             sender = get_message_sender()
             success = await sender.send_message(message)
+            self._mark_sub_agent_bonus_on_success(success)
             return success, f"已发送消息:{content}"
 
 
@@ -456,6 +493,94 @@ class DefaultChatter(BaseChatter):
         """读取 DefaultChatter 执行模式。"""
         plugin_config = getattr(self.plugin, "config", None)
         return DefaultChatterPromptBuilder.get_mode(plugin_config)
+
+    @staticmethod
+    def _message_text_for_probability(message: Message) -> str:
+        """提取消息文本，供 sub-agent 概率门做关键词判定。"""
+        if isinstance(message.processed_plain_text, str) and message.processed_plain_text:
+            return message.processed_plain_text
+        if isinstance(message.content, str):
+            return message.content
+        return str(message.content)
+
+    @classmethod
+    def _messages_contain_any_name(
+        cls,
+        unread_msgs: list[Message],
+        names: list[str],
+    ) -> bool:
+        """判断任意未读消息是否包含指定名字或别名。"""
+        normalized_names = [name.strip().lower() for name in names if name.strip()]
+        if not normalized_names:
+            return False
+
+        for unread_msg in unread_msgs:
+            lowered_text = cls._message_text_for_probability(unread_msg).lower()
+            if any(name in lowered_text for name in normalized_names):
+                return True
+        return False
+
+    @staticmethod
+    def _get_sub_agent_identity_names(chat_stream: ChatStream) -> tuple[str, list[str]]:
+        """获取 sub-agent 概率门使用的 bot 名字与别名。"""
+        fallback_nickname = (
+            chat_stream.bot_nickname.strip()
+            if isinstance(chat_stream.bot_nickname, str)
+            else ""
+        )
+        try:
+            personality = get_core_config().personality
+        except RuntimeError:
+            return fallback_nickname, []
+
+        nickname = (
+            personality.nickname.strip()
+            if isinstance(personality.nickname, str) and personality.nickname.strip()
+            else fallback_nickname
+        )
+        alias_names = [
+            alias_name.strip()
+            for alias_name in personality.alias_names
+            if isinstance(alias_name, str) and alias_name.strip()
+        ]
+        return nickname, alias_names
+
+    def _compute_sub_agent_bypass_probability(
+        self,
+        unread_msgs: list[Message],
+        chat_stream: ChatStream,
+    ) -> tuple[float, str]:
+        """计算本地概率直通 sub-agent 的放行概率。"""
+        nickname, alias_names = self._get_sub_agent_identity_names(chat_stream)
+
+        probability = _SUB_AGENT_BASE_BYPASS_PROBABILITY
+        reasons = [f"基础概率 {_SUB_AGENT_BASE_BYPASS_PROBABILITY:.2f}"]
+
+        if nickname and self._messages_contain_any_name(unread_msgs, [nickname]):
+            probability += _SUB_AGENT_NAME_MENTION_BONUS
+            reasons.append(f"命中名字 +{_SUB_AGENT_NAME_MENTION_BONUS:.2f}")
+
+        if self._messages_contain_any_name(unread_msgs, alias_names):
+            probability += _SUB_AGENT_ALIAS_MENTION_BONUS
+            reasons.append(f"命中别名 +{_SUB_AGENT_ALIAS_MENTION_BONUS:.2f}")
+
+        unread_bonus = len(unread_msgs) * _SUB_AGENT_UNREAD_MESSAGE_BONUS
+        if unread_bonus > 0:
+            probability += unread_bonus
+            reasons.append(
+                f"{len(unread_msgs)} 条未读 +{unread_bonus:.2f}"
+            )
+
+        next_tick_bonus = _consume_next_tick_sub_agent_bonus(chat_stream)
+        if next_tick_bonus > 0:
+            probability += next_tick_bonus
+            reasons.append(f"上次回复后的下一 tick +{next_tick_bonus:.2f}")
+
+        capped_probability = min(probability, 1.0)
+        if capped_probability != probability:
+            reasons.append("封顶 1.00")
+
+        return capped_probability, "，".join(reasons)
 
     def _build_negative_behaviors_extra(self) -> str:
         """若配置启用，构建用于 user extra 板块的负面行为再次强调文本。
@@ -561,6 +686,16 @@ class DefaultChatter(BaseChatter):
         if str(chat_stream.chat_type).lower() == "private":
             return {
                 "reason": "私聊场景跳过 sub-agent，直接响应",
+                "should_respond": True,
+            }
+
+        bypass_probability, bypass_reason = self._compute_sub_agent_bypass_probability(
+            unread_msgs,
+            chat_stream,
+        )
+        if random.random() < bypass_probability:
+            return {
+                "reason": f"概率直通响应：{bypass_reason}",
                 "should_respond": True,
             }
 
