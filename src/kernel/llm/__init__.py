@@ -23,6 +23,7 @@ from .types import ModelEntry, ModelSet, RequestType
 
 from .payload import (
 	Audio,
+	Video,
 	Content,
 	Image,
 	LLMPayload,

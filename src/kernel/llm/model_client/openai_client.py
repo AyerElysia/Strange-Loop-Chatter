@@ -367,7 +367,7 @@ def _payloads_to_openai_messages(
                 url = _image_to_data_url(part.value)
                 parts.append({"type": "image_url", "image_url": {"url": url}})
             elif isinstance(part, Video):
-                data_url = f"data:video/mp4;base64,{part.value}"
+                data_url = f"data:{part.mime_type};base64,{part.value}"
                 parts.append({"type": "image_url", "image_url": {"url": data_url}})
             else:
                 parts.append({"type": "text", "text": str(part)})
