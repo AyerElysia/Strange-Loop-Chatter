@@ -1,6 +1,10 @@
 """request_inspector 结构化渲染测试。"""
 
-from src.kernel.llm.request_inspector import CapturedRequest, build_render_view
+from src.kernel.llm.request_inspector import (
+    CapturedRequest,
+    RequestInspector,
+    build_render_view,
+)
 
 
 def test_build_render_view_renders_messages_tools_and_overview() -> None:
@@ -119,3 +123,66 @@ def test_captured_request_to_full_includes_rendered_payload() -> None:
     assert detail["metadata"]["api_provider"] == "OpenAI"
     assert detail["estimated_input_tokens"] == 12
     assert detail["rendered"]["messages"][0]["blocks"][0]["text"] == "hello"
+
+
+def test_request_inspector_imports_raw_request_json() -> None:
+    """导入原始请求体 JSON 后应进入既有渲染链路。"""
+    inspector = RequestInspector()
+
+    imported = inspector.import_json(
+        {
+            "api_name": "chat.completions.create",
+            "model": "gpt-4.1",
+            "messages": [{"role": "user", "content": "请帮我排查问题"}],
+            "metadata": {"api_provider": "OpenAI"},
+        }
+    )
+
+    assert len(imported) == 1
+    detail = imported[0].to_full()
+    assert detail["api_name"] == "chat.completions.create"
+    assert detail["params"]["model"] == "gpt-4.1"
+    assert detail["rendered"]["messages"][0]["blocks"][0]["text"] == "请帮我排查问题"
+    assert detail["metadata"]["imported"] is True
+
+
+def test_request_inspector_imports_wrapped_requests_array() -> None:
+    """应支持导入包含 requests 数组的包装 JSON。"""
+    inspector = RequestInspector()
+
+    imported = inspector.import_json(
+        {
+            "requests": [
+                {
+                    "api_name": "chat.completions.create",
+                    "params": {
+                        "model": "demo-1",
+                        "messages": [{"role": "user", "content": "first"}],
+                    },
+                    "metadata": {"api_provider": "VendorA"},
+                },
+                {
+                    "params": {
+                        "model": "demo-2",
+                        "messages": [{"role": "assistant", "content": "second"}],
+                    }
+                },
+            ]
+        }
+    )
+
+    assert [record.model for record in imported] == ["demo-1", "demo-2"]
+    assert imported[0].metadata["api_provider"] == "VendorA"
+    assert imported[1].api_name == "imported.request"
+
+
+def test_request_inspector_rejects_unknown_import_shape() -> None:
+    """无法识别的导入结构应明确报错。"""
+    inspector = RequestInspector()
+
+    try:
+        inspector.import_json({"foo": "bar"})
+    except ValueError as exc:
+        assert "无法识别导入 JSON 结构" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
