@@ -208,9 +208,44 @@ class MessageConverter:
         """
         seg_list: list[SegPayload] = []
 
-        text = self._extract_outbound_text(message)
-        if text:
-            seg_list.append({"type": "text", "data": text})
+        # 非文本类型：根据 message_type 直接构建对应媒体段
+        _MEDIA_TYPES = {
+            MessageType.IMAGE,
+            MessageType.EMOJI,
+            MessageType.VOICE,
+            MessageType.VIDEO,
+            MessageType.FILE,
+        }
+        if message.message_type in _MEDIA_TYPES:
+            content = message.content
+            content_data: str
+            if isinstance(content, str):
+                content_data = content
+            elif isinstance(content, dict):
+                # send_file 等 API 传入 dict（如 {"path": "...", "name": "..."}）
+                # FILE 类型取 path 字段作为数据；其他类型取 data/path/url
+                if message.message_type == MessageType.FILE:
+                    content_data = content.get("path", "")
+                else:
+                    content_data = (
+                        content.get("data", "")
+                        or content.get("path", "")
+                        or content.get("url", "")
+                    )
+            else:
+                content_data = ""
+            if content_data:
+                seg_list.append({
+                    "type": message.message_type.value,
+                    "data": content_data,
+                })
+        else:
+            # 文本 / 混合消息
+            text = message.processed_plain_text or (
+                message.content if isinstance(message.content, str) else ""
+            )
+            if text:
+                seg_list.append({"type": "text", "data": text})
 
         primary_media = self._extract_primary_outbound_media(message)
         if primary_media:
@@ -239,6 +274,12 @@ class MessageConverter:
         # 如果有 reply_to，在段列表前面插入 reply 段
         if message.reply_to:
             seg_list.insert(0, {"type": "reply", "data": message.reply_to})
+
+        # 非引用回复时，支持显式 @ 指定用户。
+        # 由上层在 message.extra["at_user_id"] 传入目标平台用户 ID。
+        at_user_id = message.extra.get("at_user_id")
+        if at_user_id and not message.reply_to:
+            seg_list.insert(0, {"type": "at", "data": str(at_user_id)})
 
         target_user_id = message.extra.get("target_user_id")
         target_user_name = message.extra.get("target_user_name")
@@ -718,10 +759,11 @@ class MessageConverter:
         *,
         skip_image_emoji: bool = False,
     ) -> _ParseResult:
-        """使用 MediaManager 识别媒体内容（图片、表情包）并更新文本描述。
+        """使用 MediaManager 识别媒体内容（图片、表情包、语音、视频）并更新文本描述。
         
         Args:
             result: 解析结果
+            skip_image_emoji: 是否跳过图片/表情包的 VLM 识别
             
         Returns:
             更新后的解析结果
@@ -850,14 +892,8 @@ class MessageConverter:
         # 文本消息直接提供纯字符串
         if message_type == MessageType.TEXT:
             return result.plain_text
-        
-        # 含媒体时返回一个包含文本和媒体列表的字典，保持兼容性
-        return {
-            "text": result.plain_text,
-            "media": result.media,
-        }
 
-        # 含媒体时返回结构化内容
+        # 含媒体时返回一个包含文本和媒体列表的字典，保持兼容性
         return {
             "text": result.plain_text,
             "media": result.media,

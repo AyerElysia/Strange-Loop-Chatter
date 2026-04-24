@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime
 from typing import Annotated, Any, Literal, cast
 
@@ -36,10 +37,17 @@ class BookuMemoryReadTool(BaseTool):
     """
 
     tool_name: str = "memory_read"
-    tool_description: str = (
-        "使用固定工作流读取记忆，自动处理标签补全、层级检索与跨文件夹降级。"
-    )
-
+    tool_description: str = """在回答用户问题之前，必须优先调用此工具。用于检索用户的历史偏好、个人信息、过往对话重点。
+# 触发条件：
+1.对话开始时（必须调用，以识别用户身份）。
+2.用户提到“之前说过”、“还记得吗”等词汇时。
+3.需要个性化建议时（如推荐电影、食物，需先查喜好）。
+4.存在不能完全确定的个性化信息时（如用户提过喜欢某类型但未明确说喜欢某个具体选项）。
+5.需要从知识库中检索相关知识时（如用户询问专业知识、技术细节）。
+6.任何你无法完全确定是否需要调用记忆的情况时，优先调用此工具进行检索，获取相关信息后再决定如何回答。
+注意：如果不读取记忆直接回答，可能会忘记用户名字或偏好，导致用户体验极差。
+"""
+    
     async def execute(
         self,
         intent_text: Annotated[str, "检索意图文本，描述当前想了解的问题"],
@@ -68,6 +76,9 @@ class BookuMemoryReadTool(BaseTool):
         query = self._build_query_text(intent_text=intent_text, context=context)
         if not query:
             return False, "intent_text 不能为空"
+        task_name = (
+            f"{getattr(self.plugin, 'plugin_name', 'unknown_plugin')}:memory_read"
+        )
 
         # 与写工作流共用同一把锁，避免写入事务中读取到不一致状态。
         lock = self._get_db_lock()
@@ -85,7 +96,6 @@ class BookuMemoryReadTool(BaseTool):
                     logger.error(
                         "记忆读取任务失败",
                         task_name=task_name,
-                        title=title,
                         error=result,
                     )
                     return False, result
@@ -94,7 +104,6 @@ class BookuMemoryReadTool(BaseTool):
                 logger.error(
                     "记忆读取任务异常",
                     task_name=task_name,
-                    title=title,
                     exc_info=True,
                 )
                 return False, "记忆读取任务异常"
@@ -210,15 +219,18 @@ class BookuMemoryReadTool(BaseTool):
                 # 先用 grep 低成本探测可用性，再执行 retrieve。
                 grep_hit = await self._grep_probe(
                     layer=layer,
-                    folder_id=folder_id,
-                    query_text=query_text,
+                    folder_id=cast(_FOLDER_IDS, folder_id),
+                    probe_tags=self._merge_probe_tags(
+                        core_tags=normalized_core,
+                        diffusion_tags=normalized_diffusion,
+                    ),
                     topk=topk,
                 )
                 if not grep_hit:
                     continue
                 found_in_other = await self._retrieve_in_folder(
                     layer=layer,
-                    folder_id=folder_id,
+                    folder_id=cast(_FOLDER_IDS, folder_id),
                     query_text=query_text,
                     core_tags=normalized_core,
                     diffusion_tags=normalized_diffusion,
@@ -229,7 +241,7 @@ class BookuMemoryReadTool(BaseTool):
                     return True, self._format_found_result(
                         query_text=query_text,
                         layer=layer,
-                        folder_id=folder_id,
+                        folder_id=cast(_FOLDER_IDS, folder_id),
                         items=found_in_other,
                     )
 
@@ -283,23 +295,48 @@ class BookuMemoryReadTool(BaseTool):
         *,
         layer: _LAYER_IDS,
         folder_id: _FOLDER_IDS,
-        query_text: str,
+        probe_tags: list[str],
         topk: int,
     ) -> bool:
-        """对候选 folder 做关键词预探测，减少无效 retrieve 调用。"""
+        """对候选 folder 做关键词预探测，减少无效 retrieve 调用。
+
+        使用聚合标签构建正则表达式，只要命中任意一个标签即视为探测成功。
+        """
+        regex_query = self._build_probe_regex(probe_tags)
+        if not regex_query:
+            return False
         include_archived = layer == "archived"
         success, result = await BookuMemoryGrepTool(self.plugin).execute(
-            query=query_text,
+            query=regex_query,
             scopes=["title", "summary", "tags", "content"],
             folder_id=folder_id,
             include_archived=include_archived,
             topk=topk,
-            use_regex=False,
+            use_regex=True,
         )
         if not success or not isinstance(result, dict):
             return False
         total = int(result.get("total", 0) or 0)
         return total > 0
+
+    @staticmethod
+    def _merge_probe_tags(*, core_tags: list[str], diffusion_tags: list[str]) -> list[str]:
+        """合并并去重探测标签，保持原有顺序。"""
+        merged: list[str] = []
+        for tag in [*core_tags, *diffusion_tags]:
+            normalized = str(tag).strip()
+            if not normalized or normalized in merged:
+                continue
+            merged.append(normalized)
+        return merged
+
+    @staticmethod
+    def _build_probe_regex(tags: list[str]) -> str:
+        """将标签列表转换为“任意命中即成功”的正则表达式。"""
+        escaped_tags = [re.escape(str(tag).strip()) for tag in tags if str(tag).strip()]
+        if not escaped_tags:
+            return ""
+        return "|".join(escaped_tags)
 
     async def _find_non_empty_folders(
         self,
@@ -317,7 +354,7 @@ class BookuMemoryReadTool(BaseTool):
             if folder_id == skip_folder:
                 continue
             success, result = await BookuMemoryStatusTool(self.plugin).execute(
-                folder_id=folder_id,
+                folder_id=cast(_FOLDER_IDS, folder_id),
                 include_archived=True,
                 recent_limit=5,
             )

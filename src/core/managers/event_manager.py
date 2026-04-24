@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from src.core.components.base.plugin import BasePlugin
@@ -22,6 +24,12 @@ from src.core.components.base.event_handler import BaseEventHandler
 from src.core.components.types import EventType
 
 logger = get_logger("event_manager")
+
+TemporaryEventHandler = Callable[
+    [str, Dict[str, Any]],
+    tuple[EventDecision, Dict[str, Any]]
+    | Awaitable[tuple[EventDecision, Dict[str, Any]]],
+]
 
 
 class EventManager:
@@ -55,6 +63,8 @@ class EventManager:
         self._handler_wrappers: Dict[str, List[Callable[[], None]]] = (
             {}
         )  # signature -> unsubscribe functions
+        self._temporary_wrappers: Dict[str, List[Callable[[], None]]] = {}
+        self._temporary_handlers: Dict[str, TemporaryEventHandler] = {}
         self._lock = asyncio.Lock()
 
         logger.info("事件管理器初始化完成")
@@ -221,6 +231,109 @@ class EventManager:
         self._handler_map.pop(signature, None)
         logger.debug(f"已注销事件处理器: {signature}")
 
+    def _coerce_event_name(self, event: EventType | str) -> str:
+        """将事件类型统一转换为事件名称字符串。"""
+
+        return event.value if isinstance(event, EventType) else str(event)
+
+    async def create_temporary_handler(
+        self,
+        event_names: List[EventType | str],
+        handle_func: TemporaryEventHandler,
+        priority: int = 0,
+    ) -> str:
+        """创建运行时临时事件监听器。
+
+        临时监听器在任一次执行返回 ``EventDecision.SUCCESS`` 或
+        ``EventDecision.STOP`` 后会被自动清理；返回 ``PASS`` 时会继续保留。
+
+        Args:
+            event_names: 订阅的事件列表，至少包含一个事件名。
+            handle_func: 临时事件处理回调。
+            priority: 监听器优先级。
+
+        Returns:
+            str: 临时监听器 ID，可用于手动注销。
+        """
+
+        normalized_events = [
+            self._coerce_event_name(event)
+            for event in event_names
+            if self._coerce_event_name(event).strip()
+        ]
+        if not normalized_events:
+            raise ValueError("event_names 至少需要包含一个有效事件")
+        if not callable(handle_func):
+            raise ValueError("handle_func 必须是可调用对象")
+
+        temporary_id = f"temporary:{uuid4()}"
+        async with self._lock:
+            wrappers: list[Callable[[], None]] = []
+            wrapper = self._make_temporary_wrapper(temporary_id, handle_func)
+            for event_name in normalized_events:
+                unsubscribe = self._event_bus.subscribe(
+                    event_name,
+                    wrapper,
+                    priority=priority,
+                )
+                wrappers.append(unsubscribe)
+
+            self._temporary_handlers[temporary_id] = handle_func
+            self._temporary_wrappers[temporary_id] = wrappers
+
+        logger.debug(
+            f"已创建临时事件监听器: {temporary_id}, "
+            f"events={normalized_events}, priority={priority}"
+        )
+        return temporary_id
+
+    async def unregister_temporary_handler(self, temporary_id: str) -> bool:
+        """注销临时事件监听器。"""
+
+        async with self._lock:
+            return self._unregister_temporary_handler_locked(temporary_id)
+
+    def _unregister_temporary_handler_locked(self, temporary_id: str) -> bool:
+        """在已持有锁时注销临时监听器。"""
+
+        wrappers = self._temporary_wrappers.pop(temporary_id, None)
+        if wrappers is None:
+            return False
+
+        for unsubscribe in wrappers:
+            unsubscribe()
+        self._temporary_handlers.pop(temporary_id, None)
+        logger.debug(f"已注销临时事件监听器: {temporary_id}")
+        return True
+
+    def _make_temporary_wrapper(
+        self,
+        temporary_id: str,
+        handle_func: TemporaryEventHandler,
+    ) -> Callable[[str, Dict[str, Any]], Any]:
+        """为临时监听器创建自动清理包装。"""
+
+        async def safe_execute(
+            event_name: str, params: Dict[str, Any]
+        ) -> tuple[EventDecision, Dict[str, Any]]:
+            try:
+                result = handle_func(event_name, params)
+                if asyncio.iscoroutine(result) or isinstance(result, Awaitable):
+                    awaited_result = await result
+                    decision, next_params = awaited_result
+                else:
+                    decision, next_params = result
+            except Exception as e:
+                logger.error(f"临时事件监听器 {temporary_id} 执行失败: {e}")
+                return (EventDecision.PASS, params)
+
+            if decision != EventDecision.PASS:
+                async with self._lock:
+                    self._unregister_temporary_handler_locked(temporary_id)
+            return (decision, next_params)
+
+        return safe_execute
+
     def _make_safe_wrapper(
         self, handler: BaseEventHandler, signature: str
     ) -> Callable[[str, Dict[str, Any]], Any]:
@@ -282,7 +395,7 @@ class EventManager:
         # 通过 EventBus 发布事件
         # 注意：不能使用 str(event)，Python 3.11 中 str(StrEnum.member) 返回
         # "EnumName.member" 而非 value，会导致与直接用枚举订阅的 key 不匹配
-        event_name = event.value if isinstance(event, EventType) else str(event)
+        event_name = self._coerce_event_name(event)
         decision, final_params = await self._event_bus.publish(event_name, kwargs)
 
         logger.debug(f"事件 {event} 发布完成，最终决策: {decision}")
@@ -383,10 +496,15 @@ class EventManager:
         for signature in list(self._handler_wrappers.keys()):
             for unsubscribe in self._handler_wrappers[signature]:
                 unsubscribe()
+        for temporary_id in list(self._temporary_wrappers.keys()):
+            for unsubscribe in self._temporary_wrappers[temporary_id]:
+                unsubscribe()
 
         # 清空映射表
         self._handler_map.clear()
         self._handler_wrappers.clear()
+        self._temporary_handlers.clear()
+        self._temporary_wrappers.clear()
 
         logger.debug("已清除所有事件处理器订阅")
 
@@ -403,6 +521,7 @@ class EventManager:
         """
         return {
             "handler_count": len(self._handler_map),
+            "temporary_handler_count": len(self._temporary_handlers),
             "event_type_count": self._event_bus.event_count,
             "total_subscriptions": self._event_bus.handler_count,
         }

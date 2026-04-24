@@ -2,9 +2,11 @@
 
 为插件提供简洁的事件操作接口，将 EventManager 的类方法扁平化为独立函数。
 """
+from collections.abc import Callable
 from typing import Any
 
 from src.core.components import EventType, BaseEventHandler
+from src.kernel.event import EventDecision
 from src.core.managers import get_event_manager
 
 
@@ -89,6 +91,39 @@ async def build_subscription_map() -> None:
     """
     manager = get_event_manager()
     await manager.build_subscription_map()
+
+
+async def create_temporary_handler(
+    event_names: list[EventType | str],
+    handle_func: Callable[
+        [str, dict[str, Any]],
+        tuple[EventDecision, dict[str, Any]] | Any,
+    ],
+    priority: int = 0,
+) -> str:
+    """创建运行时临时事件监听器。
+
+    临时监听器执行后，只要回调返回的 decision 不是 PASS，
+    就会自动从所有订阅事件上清除。
+
+    Args:
+        event_names: 需要订阅的事件名称列表。
+        handle_func: 监听器回调，签名与 EventBus 订阅者协议一致。
+        priority: 监听器优先级。
+
+    Returns:
+        str: 临时监听器 ID，可用于手动注销。
+    """
+
+    manager = get_event_manager()
+    return await manager.create_temporary_handler(event_names, handle_func, priority)
+
+
+async def unregister_temporary_handler(temporary_id: str) -> bool:
+    """手动注销运行时临时事件监听器。"""
+
+    manager = get_event_manager()
+    return await manager.unregister_temporary_handler(temporary_id)
 
 # =============================================================================
 # 事件统计操作

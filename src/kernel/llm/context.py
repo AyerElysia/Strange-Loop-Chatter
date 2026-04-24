@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Callable
+
+from src.core.prompt import SystemReminderInsertType
 
 from .payload import LLMPayload
 from .payload.content import Content, Text
@@ -14,6 +17,14 @@ from .exceptions import LLMContextError
 
 CompressionHook = Callable[[list[list[LLMPayload]], list[LLMPayload]], list[LLMPayload]]
 TokenCounter = Callable[[list[LLMPayload]], int]
+
+
+@dataclass(slots=True, frozen=True)
+class RegisteredReminder:
+    """登记到上下文管理器中的 reminder。"""
+
+    text: str
+    insert_type: SystemReminderInsertType
 
 
 @dataclass(slots=True)
@@ -32,7 +43,7 @@ class LLMContextManager:
 
     max_payloads: int | None = None
     compression_hook: CompressionHook | None = None
-    _reminders: list[Text] | None = None
+    _reminders: list[RegisteredReminder] | None = None
 
     def validate_for_send(self, payloads: list[LLMPayload]) -> None:
         """在发起 LLM 请求前校验上下文结构。
@@ -204,6 +215,7 @@ class LLMContextManager:
         self,
         content: str | Text | list[str | Text],
         *,
+        insert_type: SystemReminderInsertType = SystemReminderInsertType.FIXED,
         wrap_with_system_tag: bool = False,
     ) -> None:
         """仅登记 reminder，不立即注入到 payload 列表。
@@ -224,8 +236,9 @@ class LLMContextManager:
                     f"{text}\n"
                     "</system_reminder>"
                 )
-            text_part = Text(text)
-            self._reminders.append(text_part)
+            self._reminders.append(
+                RegisteredReminder(text=text, insert_type=insert_type)
+            )
 
     def update_reminder(
         self,
@@ -242,46 +255,57 @@ class LLMContextManager:
         self.reminder(content, wrap_with_system_tag=wrap_with_system_tag)
 
     def _apply_reminders(self, payloads: list[LLMPayload]) -> list[LLMPayload]:
-        """将 reminder 注入为靠前的 SYSTEM 块。
-
-        关键：每次调用先**剥离**所有旧 reminder（通过 <system_reminder> 标签识别），
-        再注入当前最新 reminder，避免 reminder 在上下文中累积。
-        """
+        """根据插入类型将 reminder 注入目标 USER 消息首段。"""
 
         if not self._reminders:
             return payloads
 
-        reminder_parts: list[Content | LLMUsable] = [Text(item.text) for item in self._reminders]
         updated = list(payloads)
         cleaned_payloads: list[LLMPayload] = []
 
-        # 先从所有 payload 中剥离旧 reminder，兼容旧实现（曾注入在 USER 中）的遗留数据。
-        for payload in updated:
-            filtered = [
-                part
-                for part in payload.content
-                if not (
-                    isinstance(part, Text)
-                    and part.text.lstrip().startswith("<system_reminder>")
-                )
-            ]
-            if not filtered:
-                continue
-            if len(filtered) == len(payload.content):
-                cleaned_payloads.append(payload)
-            else:
-                cleaned_payloads.append(LLMPayload(payload.role, filtered))
+        user_indices = [idx for idx, payload in enumerate(updated) if payload.role == ROLE.USER]
+        if not user_indices:
+            return updated
 
-        # 将 reminder 作为稳定前置 SYSTEM 块插入到最前面的 SYSTEM 区之后。
-        insert_index = 0
-        while (
-            insert_index < len(cleaned_payloads)
-            and cleaned_payloads[insert_index].role == ROLE.SYSTEM
-        ):
-            insert_index += 1
+        first_user_index = user_indices[0]
+        last_user_index = user_indices[-1]
+        all_reminder_parts = [Text(item.text) for item in self._reminders]
+        target_parts: dict[int, list[Content | LLMUsable]] = {}
 
-        cleaned_payloads.insert(insert_index, LLMPayload(ROLE.SYSTEM, reminder_parts))
-        return cleaned_payloads
+        for reminder in self._reminders:
+            target_index = (
+                first_user_index
+                if reminder.insert_type == SystemReminderInsertType.FIXED
+                else last_user_index
+            )
+            target_parts.setdefault(target_index, []).append(Text(reminder.text))
+
+        for user_index in user_indices:
+            prefix_parts = target_parts.get(user_index, [])
+            existing = self._strip_registered_reminders(updated[user_index].content, all_reminder_parts)
+            rebuilt = prefix_parts + existing
+            updated[user_index] = LLMPayload(ROLE.USER, rebuilt)
+
+        return updated
+
+    def _strip_registered_reminders(
+        self,
+        content: Sequence[Content | LLMUsable],
+        reminder_parts: Sequence[Content | LLMUsable],
+    ) -> list[Content | LLMUsable]:
+        """移除内容开头已登记的 reminder 文本，便于按最新目标位置重建前缀。"""
+
+        offset = 0
+        while offset < len(content):
+            matched = any(
+                self._is_same_text_part(content[offset], reminder_part)
+                for reminder_part in reminder_parts
+            )
+            if not matched:
+                break
+            offset += 1
+
+        return list(content[offset:])
 
     def _is_same_text_part(self, left: Content | LLMUsable, right: Content | LLMUsable) -> bool:
         """判断两个内容片段是否为同一文本片段。"""

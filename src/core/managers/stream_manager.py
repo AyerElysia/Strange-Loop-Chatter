@@ -12,9 +12,7 @@
 每个 stream_id 对应一个全局唯一的 ChatStream 实例，一旦创建即永久存在。
 """
 
-import ast
 import asyncio
-import json
 import time
 from typing import TYPE_CHECKING, Any
 from async_lru import alru_cache
@@ -31,9 +29,9 @@ if TYPE_CHECKING:
 
 logger = get_logger("stream_manager", display="StreamMgr")
 
+# 含原始二进制的媒体类型，序列化入库时仅在 payload 过大时剔除 data 字段
 _BINARY_MEDIA_TYPES: frozenset[str] = frozenset({"image", "emoji", "voice", "video"})
 _MAX_MEDIA_DATA_BYTES = 1024
-_SENSITIVE_MEDIA_KEYS: frozenset[str] = frozenset({"data", "base64"})
 
 
 def _get_content_size_bytes(content: Any) -> int:
@@ -45,72 +43,44 @@ def _get_content_size_bytes(content: Any) -> int:
     return len(str(content).encode("utf-8"))
 
 
-def _sanitize_for_db(value: Any, *, parent_key: str | None = None) -> Any:
-    """递归清洗入库内容，移除所有 base64 / data URL 负载。"""
-    if isinstance(value, dict):
-        sanitized: dict[str, Any] = {}
-        media_type = str(value.get("type", "")) if isinstance(value.get("type", ""), str) else ""
-        for key, item in value.items():
-            if key in _SENSITIVE_MEDIA_KEYS:
-                sanitized[key] = "[removed]"
-                continue
+def _strip_oversized_media_data(item: dict[str, Any]) -> dict[str, Any]:
+    """移除超出阈值的媒体 data 字段，保留其余元信息。"""
+    media_data = item.get("data")
+    if media_data is None:
+        return item
 
-            if key == "media" and isinstance(item, list):
-                sanitized[key] = [_sanitize_for_db(child) for child in item if isinstance(child, (dict, list, str, int, float, bool, type(None)))]
-                continue
+    if _get_content_size_bytes(media_data) <= _MAX_MEDIA_DATA_BYTES:
+        return item
 
-            sanitized[key] = _sanitize_for_db(item, parent_key=key)
-
-        if media_type in _BINARY_MEDIA_TYPES:
-            for key in _SENSITIVE_MEDIA_KEYS:
-                if key in sanitized:
-                    sanitized[key] = "[removed]"
-        return sanitized
-
-    if isinstance(value, list):
-        return [_sanitize_for_db(item, parent_key=parent_key) for item in value]
-
-    if isinstance(value, str):
-        if parent_key in _SENSITIVE_MEDIA_KEYS:
-            return "[removed]"
-        if value.startswith("base64|") or value.startswith("data:"):
-            return "[removed]"
-    return value
+    return {key: value for key, value in item.items() if key != "data"}
 
 
-def _coerce_structured_content(content: Any) -> Any:
-    """尽量把字符串内容还原成结构化对象。"""
-    if isinstance(content, (dict, list)):
-        return content
-    if not isinstance(content, str):
-        return content
+def _serialize_content_for_db(content: Any) -> str:
+    """将消息 content 序列化为数据库存储字符串。
 
-    for parser in (json.loads, ast.literal_eval):
-        try:
-            parsed = parser(content)
-        except Exception:
+    内存中的 content 字典可能包含图片/表情包/语音的原始 base64 数据（供 Chatter 多模态
+    使用），但这些数据不需要持久化，持久化会造成数据库存储暴涨。本函数在序列化前检查
+    image/emoji/voice 媒体项中的 ``data`` 实际大小，超过阈值时剔除该字段，其余元信息保留。
+    """
+    if not isinstance(content, dict):
+        return str(content)
+
+    media = content.get("media")
+    if not isinstance(media, list):
+        return str(content)
+
+    stripped_media = []
+    for item in media:
+        if not isinstance(item, dict):
             continue
-        if isinstance(parsed, (dict, list)):
-            return parsed
-    return content
 
+        if item.get("type") in _BINARY_MEDIA_TYPES:
+            stripped_media.append(_strip_oversized_media_data(item))
+            continue
 
-def _serialize_content_for_db(content: Any, message_type: str | None = None) -> str:
-    """将消息 content 序列化为数据库存储字符串。"""
-    normalized = _coerce_structured_content(content)
-    normalized = _sanitize_for_db(normalized)
+        stripped_media.append(item)
 
-    if isinstance(normalized, dict):
-        return str(normalized)
-    if isinstance(normalized, list):
-        return str(normalized)
-    if message_type in _BINARY_MEDIA_TYPES and isinstance(normalized, str) and normalized:
-        return "[removed]"
-    if isinstance(normalized, str) and (
-        normalized.startswith("base64|") or normalized.startswith("data:")
-    ):
-        return "[removed]"
-    return str(normalized)
+    return str({**content, "media": stripped_media})
 
 
 class StreamManager:
@@ -379,7 +349,7 @@ class StreamManager:
                 "person_id": person_id,
                 "time": message.time,
                 "message_type": message.message_type.value,
-                "content": _serialize_content_for_db(message.content, message.message_type.value),
+                "content": _serialize_content_for_db(message.content),
                 "processed_plain_text": message.processed_plain_text,
                 "reply_to": message.reply_to,
                 "platform": message.platform,
@@ -432,7 +402,7 @@ class StreamManager:
                 "person_id": "bot",
                 "time": message.time,
                 "message_type": message.message_type.value,
-                "content": _serialize_content_for_db(message.content, message.message_type.value),
+                "content": _serialize_content_for_db(message.content),
                 "processed_plain_text": message.processed_plain_text,
                 "reply_to": message.reply_to,
                 "platform": message.platform,

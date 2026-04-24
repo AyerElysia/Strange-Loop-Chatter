@@ -9,7 +9,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime
 from dataclasses import dataclass
-import re
 from typing import TYPE_CHECKING, Any, AsyncGenerator, cast
 
 from src.core.components.types import ChatType
@@ -17,12 +16,6 @@ from src.core.components.base.action import BaseAction
 from src.core.components.base.agent import BaseAgent
 from src.core.components.base.tool import BaseTool
 from src.core.components.utils import should_strip_auto_reason_argument
-from src.core.managers import (
-    get_tool_use,
-    get_action_manager,
-    get_stream_manager,
-    get_plugin_manager,
-)
 from src.kernel.concurrency import get_task_manager
 from src.kernel.logger import get_logger, COLOR
 
@@ -243,6 +236,8 @@ class BaseChatter(ABC):
             list[type[LLMUsable]]: 修改后的组件列表
         """
 
+        from src.core.managers import get_stream_manager
+        
         logger = get_logger("chatter", display="聊天器", color=COLOR.MAGENTA)
         chat_stream = await get_stream_manager().get_or_create_stream(
             stream_id=self.stream_id
@@ -374,6 +369,7 @@ class BaseChatter(ABC):
 
         try:
             from src.core.components.types import parse_signature
+            from src.core.managers import get_plugin_manager
 
             plugin_name = parse_signature(signature)["plugin_name"]
         except Exception:
@@ -414,6 +410,8 @@ class BaseChatter(ABC):
         if not sig:
             raise ValueError("LLMUsable 组件未注入插件名称，无法执行")
 
+        from src.core.managers import get_tool_use, get_action_manager
+        
         if issubclass(usable_cls, BaseChatter):
             raise ValueError("无法直接执行 Chatter 组件")
 
@@ -485,89 +483,16 @@ class BaseChatter(ABC):
         if with_reminder is not None:
             from src.core.prompt import get_system_reminder_store
 
-            reminder_text = get_system_reminder_store().get(with_reminder)
-            reminder_text = self._filter_reminder_text_for_request(
-                reminder_text=reminder_text,
-                bucket=self._normalize_reminder_bucket(with_reminder),
-            )
-            if reminder_text:
+            reminder_items = get_system_reminder_store().get_items(with_reminder)
+            for reminder_item in reminder_items:
                 context_manager.reminder(
-                    reminder_text,
+                    reminder_item.render(),
+                    insert_type=reminder_item.insert_type,
                     wrap_with_system_tag=True,
                 )
 
         return request
 
-    @staticmethod
-    def _normalize_reminder_bucket(bucket: str | "SystemReminderBucket") -> str:
-        """将 reminder bucket 规范为字符串。"""
-        if hasattr(bucket, "value"):
-            value = getattr(bucket, "value")
-            if isinstance(value, str):
-                return value.strip()
-        return str(bucket).strip()
-
-    def _filter_reminder_text_for_request(
-        self,
-        *,
-        reminder_text: str,
-        bucket: str,
-    ) -> str:
-        """按 chatter 场景过滤 reminder 文本。"""
-        text = str(reminder_text or "").strip()
-        if not text:
-            return ""
-
-        # default_chatter 在 actor bucket 下不读取“生命中枢唤醒上下文”，
-        # 避免把长事件流塞进主对话；保留 subconscious 等其余 reminder。
-        if self.chatter_name == "default_chatter" and bucket == "actor":
-            return self._remove_named_reminder_block(
-                text=text,
-                blocked_name="生命中枢唤醒上下文",
-            )
-
-        return text
-
-    @staticmethod
-    def _remove_named_reminder_block(*, text: str, blocked_name: str) -> str:
-        """从 reminder 聚合文本中移除指定 name 的块。"""
-        lines = text.splitlines()
-        header_pattern = re.compile(r"^\[(.+)\]\s*$")
-
-        blocks: list[tuple[str, list[str]]] = []
-        current_name: str | None = None
-        current_lines: list[str] = []
-
-        def flush() -> None:
-            nonlocal current_name, current_lines
-            if current_name is not None:
-                blocks.append((current_name, current_lines))
-            current_name = None
-            current_lines = []
-
-        for line in lines:
-            match = header_pattern.match(line)
-            if match:
-                flush()
-                current_name = match.group(1).strip()
-                continue
-            if current_name is not None:
-                current_lines.append(line)
-
-        flush()
-
-        if not blocks:
-            return text
-
-        kept: list[str] = []
-        for name, body in blocks:
-            if name == blocked_name:
-                continue
-            content = "\n".join(body).strip()
-            if content:
-                kept.append(f"[{name}]\n{content}")
-
-        return "\n\n".join(kept).strip()
 
     async def inject_usables(self, request: Any) -> "ToolRegistry":
         """将可用工具过滤后注入 LLM 请求，返回工具注册表。
@@ -756,6 +681,8 @@ class BaseChatter(ABC):
         Returns:
             tuple[str, list[Message]]: (格式化后的未读消息文本，每条消息占一行, 未读消息列表)
         """
+        from src.core.managers import get_stream_manager
+        
         logger = get_logger("chatter")
 
         sm = get_stream_manager()
@@ -787,6 +714,8 @@ class BaseChatter(ABC):
         Returns:
             int: 实际 flush 的消息数量
         """
+        from src.core.managers import get_stream_manager
+        
         logger = get_logger("chatter")
 
         if not unread_messages:

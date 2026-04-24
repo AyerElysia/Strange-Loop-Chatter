@@ -33,9 +33,16 @@ class _FakeResponse:
     - 具备 message/call_list 供 runner 分支判断
     """
 
-    def __init__(self, payload_roles: list[str], *, message: str = "ok") -> None:
+    def __init__(
+        self,
+        payload_roles: list[str],
+        *,
+        message: str = "ok",
+        reasoning_content: str | None = None,
+    ) -> None:
         self.payloads: list[_FakePayload] = [_FakePayload(r) for r in payload_roles]
         self.message: str = message
+        self.reasoning_content: str | None = reasoning_content
         self.call_list: list[Any] = []
         self.send_count: int = 0
 
@@ -63,6 +70,33 @@ class _FakeToolRegistry:
 
     def get_all(self) -> list[Any]:
         return []
+
+
+class _FakeLogger:
+    """记录日志与 panel 输出的最小 logger 替身。"""
+
+    def __init__(self) -> None:
+        self.panels: list[tuple[str, str | None, str | None]] = []
+
+    @staticmethod
+    def info(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    @staticmethod
+    def warning(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    @staticmethod
+    def error(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    def print_panel(
+        self,
+        message: str,
+        title: str | None = None,
+        border_style: str | None = None,
+    ) -> None:
+        self.panels.append((message, title, border_style))
 
 
 class _FakeChatter:
@@ -137,6 +171,18 @@ class _FakeChatter:
         raise AssertionError("工具续轮阶段不应 flush 新未读")
 
 
+class _FakeChatterAllowUser(_FakeChatter):
+    """允许 enhanced 正常注入 USER payload 的 chatter 替身。"""
+
+    @staticmethod
+    def _upsert_pending_unread_payload(response: Any, formatted_text: str) -> None:
+        _ = formatted_text
+        response.add_payload(SimpleNamespace(role=ROLE.USER))
+
+    async def flush_unreads(self, _unread_messages: list[Any]) -> int:
+        return 0
+
+
 @pytest.mark.asyncio
 async def test_get_life_state_for_current_turn_uses_service_api(monkeypatch) -> None:
     """Life State 应通过 service_api 获取，而不是 plugin_api。"""
@@ -175,15 +221,10 @@ async def test_run_enhanced_prioritizes_tool_followup_when_tool_result_tail() ->
     )
     chatter = _FakeChatter(fake_response)
 
-    chat_stream = cast(Any, SimpleNamespace(stream_id="s1"))
+    chat_stream = cast(Any, SimpleNamespace(stream_id="s1", stream_name="测试流"))
     fake_logger = cast(
         Any,
-        SimpleNamespace(
-            info=lambda *_a, **_k: None,
-            debug=lambda *_a, **_k: None,
-            warning=lambda *_a, **_k: None,
-            error=lambda *_a, **_k: None,
-        ),
+        _FakeLogger(),
     )
 
     gen = run_enhanced(
@@ -199,3 +240,132 @@ async def test_run_enhanced_prioritizes_tool_followup_when_tool_result_tail() ->
     result = await anext(gen)
     assert isinstance(result, Stop)
     assert chatter.create_request_calls == [("actor", "actor")]
+    assert fake_logger.panels == []
+
+
+@pytest.mark.asyncio
+async def test_run_enhanced_does_not_yield_wait_when_pending_tool_results(monkeypatch: Any) -> None:
+    """当 should_wait 与 pending_tool_results 并存时，必须先 follow-up。
+
+    该场景模拟模型给出了矛盾控制流：既要求等待，又发起了需要后续推理的工具调用。
+    我们的约束是：先闭合 tool_result → assistant（follow-up），再进入等待。
+    """
+
+    # 1) 让 response 第一次 send 有 call_list，第二次 send 变为纯文本以结束。
+    resp = _FakeResponse(payload_roles=[ROLE.USER, ROLE.ASSISTANT, ROLE.TOOL_RESULT], message="")
+
+    async def _send(*, stream: bool = False) -> _FakeResponse:
+        _ = stream
+        resp.send_count += 1
+        if resp.send_count == 1:
+            resp.call_list = [SimpleNamespace(name="tool-x", args={}, id="1")]
+            resp.message = ""
+        else:
+            resp.call_list = []
+            resp.message = "finish"
+        return resp
+
+    resp.send = _send  # type: ignore[method-assign]
+
+    # 2) monkeypatch process_tool_calls：返回 should_wait=True 且 has_pending_tool_results=True
+    from plugins.default_chatter import runners as runners_mod
+
+    async def _fake_process_tool_calls(**_kwargs: Any) -> Any:
+        return SimpleNamespace(
+            should_wait=True,
+            should_stop=False,
+            stop_minutes=0.0,
+            sent_once=False,
+            has_pending_tool_results=True,
+        )
+
+    monkeypatch.setattr(runners_mod, "process_tool_calls", _fake_process_tool_calls)
+
+    # 3) chatter 依然需要提供接口，但不应注入 USER/flush。
+    chatter = _FakeChatterAllowUser(resp)
+    chat_stream = cast(Any, SimpleNamespace(stream_id="s1"))
+    fake_logger = cast(Any, _FakeLogger())
+
+    gen = run_enhanced(
+        chatter=cast(Any, chatter),
+        chat_stream=chat_stream,
+        logger=fake_logger,
+        pass_call_name="action-pass_and_wait",
+        stop_call_name="action-stop_conversation",
+        send_text_call_name="action-send_text",
+        suspend_text="__SUSPEND__",
+    )
+
+    first = await anext(gen)
+    assert isinstance(first, Stop)
+    assert resp.send_count == 2
+    assert chatter.create_request_calls == [("actor", "actor")]
+    assert fake_logger.panels == [
+        (
+            "聊天流名称：s1\n\n"
+            "思考：（无）\n"
+            "独白：（无）\n"
+            "调用工具：\n"
+            "    tool-x",
+            "Actor 决策",
+            "cyan",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_enhanced_prints_actor_decision_panel_before_processing_tool_calls(
+    monkeypatch: Any,
+) -> None:
+    """actor 返回 message + tool call 时，应打印本次决策摘要面板。"""
+
+    from plugins.default_chatter import runners as runners_mod
+
+    resp = _FakeResponse(
+        payload_roles=[ROLE.USER],
+        message="先回一句，再调工具",
+    )
+    resp.call_list = [
+        SimpleNamespace(name="tool-x", args={"reason": "测试", "foo": "bar"}, id="1"),
+        SimpleNamespace(name="tool-y", args={"count": 2}, id="2"),
+    ]
+
+    async def _fake_process_tool_calls(**_kwargs: Any) -> Any:
+        return SimpleNamespace(
+            should_wait=True,
+            should_stop=False,
+            stop_minutes=0.0,
+            sent_once=False,
+            has_pending_tool_results=False,
+        )
+
+    monkeypatch.setattr(runners_mod, "process_tool_calls", _fake_process_tool_calls)
+
+    chatter = _FakeChatterAllowUser(resp)
+    chat_stream = cast(Any, SimpleNamespace(stream_id="s1", stream_name="测试流"))
+    fake_logger = cast(Any, _FakeLogger())
+
+    gen = run_enhanced(
+        chatter=cast(Any, chatter),
+        chat_stream=chat_stream,
+        logger=fake_logger,
+        pass_call_name="action-pass_and_wait",
+        stop_call_name="action-stop_conversation",
+        send_text_call_name="action-send_text",
+        suspend_text="__SUSPEND__",
+    )
+
+    first = await anext(gen)
+    assert first.__class__.__name__ == "Wait"
+    assert fake_logger.panels == [
+        (
+            "聊天流名称：测试流\n\n"
+            "思考：（无）\n"
+            "独白：先回一句，再调工具\n"
+            "调用工具：\n"
+            "    tool-x (foo: bar)\n"
+            "    tool-y (count: 2)",
+            "Actor 决策",
+            "cyan",
+        )
+    ]

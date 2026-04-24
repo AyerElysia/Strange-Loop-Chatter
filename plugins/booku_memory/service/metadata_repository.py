@@ -1,4 +1,4 @@
-﻿"""Booku Memory 元数据仓储（基于 PluginDatabase）。
+"""Booku Memory 元数据仓储（基于 PluginDatabase）。
 
 使用 :class:`~src.app.plugin_system.api.storage_api.PluginDatabase` 替代原有
 直接操作 ``sqlite3`` 的实现，与核心数据库使用相同的 ORM 接口风格。
@@ -576,6 +576,34 @@ class BookuMemoryMetadataRepository:
             qb = qb.filter(is_deleted=0)
         rows = await qb.order_by("-updated_at").limit(max(1, limit)).all()
         return [self._to_record(r) for r in rows]  # type: ignore[arg-type]
+
+    async def list_knowledge_chunk_titles(
+        self,
+        *,
+        folder_id: str = "default",
+    ) -> list[str]:
+        """查询知识库中所有 chunk 的去重标题，不受数量限制。
+
+        与 list_records_by_bucket 不同，此方法使用 SELECT DISTINCT title 直接去重，
+        不会因 limit 截断而遗漏旧文档，专用于 export_document_titles 等需要枚举
+        知识库全集的场景。
+
+        Args:
+            folder_id: 限定文件夹 ID，默认 "default"。
+
+        Returns:
+            去重后的 chunk 标题字符串列表（包含"-片段N"后缀，由调用方规整）。
+        """
+        R = BookuMemoryRecordModel
+        stmt = (
+            select(distinct(R.title))
+            .where(R.bucket == "knowledge")
+            .where(R.folder_id == folder_id)
+            .where(R.is_deleted == 0)
+        )
+        async with self._db.session() as s:
+            result = await s.execute(stmt)
+            return [str(row[0]) for row in result.fetchall()]
 
     async def list_records_by_bucket(
         self,

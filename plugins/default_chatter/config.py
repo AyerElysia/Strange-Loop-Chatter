@@ -161,23 +161,31 @@ class DefaultChatterConfig(BaseConfig):
             hint="建议在上游模型明确支持视频输入时开启",
             order=6
         )
+        enable_programmatic_controller: bool = Field(
+            default=True,
+            description="是否启用 sub-agent 的程序化控制器。开启后会先按本地概率规则判断是否直接响应，关闭后始终交由 LLM sub-agent 决策。",
+            label="启用程序化控制器",
+            tag="ai",
+            hint="关闭后群聊消息将始终经过 LLM sub-agent 过滤，不再使用本地概率直通逻辑",
+            order=7
+        )
         theme_guide: ThemeGuideSection = Field(
             default_factory=ThemeGuideSection,
             description="按聊天类型区分的额外提示词",
             label="场景引导配置",
-            order=7
+            order=8
         )
         reply: ReplySection = Field(
             default_factory=ReplySection,
             description="发送分段与节奏配置",
             label="回复节奏配置",
-            order=8
+            order=9
         )
         debug: DebugSection = Field(
             default_factory=DebugSection,
             description="调试输出配置",
             label="调试配置",
-            order=9
+            order=10
         )
 
     plugin: PluginSection = Field(default_factory=PluginSection)

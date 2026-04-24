@@ -29,8 +29,17 @@ from tempfile import TemporaryDirectory
 from pathlib import Path
 from threading import Lock as ThreadLock
 from typing import Any
+from sqlalchemy import select
 
 from src.kernel.logger import get_logger
+from src.app.plugin_system.api.llm_api import get_model_set_by_task, create_llm_request
+from src.kernel.llm.model_client.registry import ModelClientRegistry
+from src.core.prompt import PromptTemplate, get_prompt_manager
+from src.core.config import get_core_config
+from src.kernel.scheduler import get_unified_scheduler, TriggerType
+from src.kernel.db.core.session import get_db_session
+from src.core.models.sql_alchemy import Images, ImageDescriptions
+from src.kernel.llm import LLMContextManager, LLMPayload, ROLE, Text, Image
 
 logger = get_logger("media_manager")
 
@@ -113,6 +122,7 @@ class MediaManager:
         self._media_stats_lock = ThreadLock()
         self._recognition_locks: dict[str, asyncio.Lock] = {}
         self._initialize_vlm()
+        self._initialize_asr()
         self._register_prompts()
         self._setup_media_folders()
         self._cleanup_task_id = None
@@ -121,8 +131,6 @@ class MediaManager:
     def _initialize_vlm(self) -> None:
         """初始化 VLM/视频/ASR 模型配置。"""
         try:
-            from src.app.plugin_system.api.llm_api import get_model_set_by_task
-
             self._vlm_model_set = get_model_set_by_task("vlm")
             self._vlm_available = self._vlm_model_set is not None
             self._voice_model_set = get_model_set_by_task("voice")
@@ -146,17 +154,32 @@ class MediaManager:
         except Exception as e:
             logger.error(f"初始化 VLM 模型失败: {e}")
 
+    def _initialize_asr(self) -> None:
+        """初始化 ASR 模型配置。"""
+        try:
+            self._asr_model_set = get_model_set_by_task("voice")
+            self._asr_available = self._asr_model_set is not None
+
+            if self._asr_available:
+                logger.info("ASR 模型已加载，语音识别功能可用")
+            else:
+                logger.info("未配置 ASR 模型，语音识别功能不可用")
+        except Exception as e:
+            self._asr_model_set = None
+            self._asr_available = False
+            logger.error(f"初始化 ASR 模型失败: {e}")
+
     def _register_prompts(self) -> None:
         """注册媒体识别相关的提示词模板。"""
         try:
-            from src.core.prompt import PromptTemplate, get_prompt_manager
-            
             manager = get_prompt_manager()
             
             # 注册图片识别提示词
+            custom_prompt = get_core_config().chat.image_recognition_prompt
+            default_template = "描述这张图片的内容，包含主题、主要元素。若有文字或代码，完整转述。"
             image_prompt = PromptTemplate(
                 name="media.image_recognition",
-                template="请描述这张图片，字数控制在100字以内。简要说明图片主题、核心元素及背景环境。如果图片中包含任何文字或代码，请完整转述，这部分不计入字数限制，力求客观、生动地还原图片内容。"
+                template=custom_prompt if custom_prompt else default_template
             )
             manager.register_template(image_prompt)
             
@@ -204,8 +227,6 @@ class MediaManager:
     async def _register_cleanup_task(self) -> None:
         """注册定时清理任务到调度器。"""
         try:
-            from src.kernel.scheduler import get_unified_scheduler, TriggerType
-            
             scheduler = get_unified_scheduler()
             
             # 创建周期性清理任务（每5分钟 = 300秒）
@@ -566,7 +587,7 @@ class MediaManager:
                     media_type="voice",
                 )
 
-                transcription = await self._recognize_with_asr(base64_data, metadata)
+                transcription = await self._recognize_with_asr(base64_data)
                 if not transcription:
                     await self._record_media_event(
                         event="failure",
@@ -600,6 +621,7 @@ class MediaManager:
                 failure_type=type(e).__name__,
             )
             return None
+
 
     async def recognize_batch(
         self,
@@ -756,13 +778,9 @@ class MediaManager:
             vlm_processed: 是否已经过 VLM 处理
         """
         try:
-            from src.kernel.db.core.session import get_db_session
-            from src.core.models.sql_alchemy import Images
-
             async with get_db_session() as session:
                 # 查找现有记录（使用 image_id 作为唯一标识）
                 # 这里使用 scalars().first() 来避免数据库中存在多条重复记录导致的 MultipleResultsFound 错误
-                from sqlalchemy import select
                 stmt = (
                     select(Images)
                     .where(Images.image_id == media_hash)
@@ -809,13 +827,8 @@ class MediaManager:
             媒体信息字典，不存在返回 None
         """
         try:
-            from src.kernel.db.core.session import get_db_session
-            from src.core.models.sql_alchemy import Images
-            from sqlalchemy import select
-
             async with get_db_session() as session:
                 # 如果存在多条重复记录，取最新一条返回
-                from sqlalchemy import select
                 stmt = (
                     select(Images)
                     .where(Images.image_id == media_hash)
@@ -862,9 +875,6 @@ class MediaManager:
         """
         try:
             from src.app.plugin_system.api.llm_api import create_llm_request
-            from src.kernel.llm import LLMContextManager, LLMPayload, ROLE, Text, Image
-            from src.core.prompt import get_prompt_manager
-            
             
             # 检查 VLM 模型是否可用
             if not self._vlm_model_set:
@@ -917,69 +927,39 @@ class MediaManager:
             logger.error(f"VLM 识别失败: {e}", exc_info=True)
             return None
 
-    async def _recognize_with_asr(
-        self,
-        base64_data: str,
-        metadata: dict[str, Any],
-    ) -> str | None:
-        """使用 ASR 模型转写语音。"""
+    async def _recognize_with_asr(self, audio_base64: str) -> str | None:
+        """调用 ASR 客户端执行语音转文字。
+
+        Args:
+            audio_base64: base64 编码的 WAV 音频数据。
+
+        Returns:
+            识别出的文字，失败返回 None。
+        """
         try:
-            if not self._voice_model_set:
-                logger.debug("ASR 模型不可用")
+            registry = ModelClientRegistry()
+            model_set = self._asr_model_set
+            # model_set 是 list[dict]，每个元素即一个 ModelEntry
+            if not isinstance(model_set, list) or not model_set:
+                logger.debug("ASR model_set 中无可用模型")
                 return None
 
-            model = self._voice_model_set[0]
-            model_identifier = str(model.get("model_identifier") or "")
-            api_key = str(model.get("api_key") or "")
-            base_url = str(model.get("base_url") or "")
-            timeout = model.get("timeout")
-            if not model_identifier or not api_key:
-                return None
+            model_entry = model_set[0]
+            client = registry.get_asr_client_for_model(model_entry)
+            model_name = model_entry.get("model_identifier") if isinstance(model_entry, dict) else str(model_entry)
 
-            clean_base64 = self._extract_clean_base64(base64_data)
-            audio_bytes = base64.b64decode(clean_base64)
-            audio_file = BytesIO(audio_bytes)
-            audio_file.name = str(metadata.get("filename") or "voice.mp3")
+            clean_b64 = self._extract_clean_base64(audio_base64)
+            audio_bytes = base64.b64decode(clean_b64)
 
-            try:
-                from openai import AsyncOpenAI
-
-                async with AsyncOpenAI(
-                    api_key=api_key,
-                    base_url=base_url or None,
-                    timeout=float(timeout) if isinstance(timeout, (int, float)) else None,
-                ) as client:
-                    response = await client.audio.transcriptions.create(
-                        model=model_identifier,
-                        file=audio_file,
-                    )
-                text = response if isinstance(response, str) else getattr(response, "text", "")
-                text = str(text).strip()
-                if len(text) > 200:
-                    text = text[:197] + "..."
-                if text:
-                    return text
-            except Exception as e:
-                logger.debug(f"ASR 专用端点失败，尝试音频多模态兜底: {e}")
-
-            from src.app.plugin_system.api.llm_api import create_llm_request
-            from src.kernel.llm import Audio, LLMContextManager, LLMPayload, ROLE, Text
-
-            request = create_llm_request(
-                self._voice_model_set,
-                "voice_asr_fallback",
-                context_manager=LLMContextManager(max_payloads=2),
+            text = await client.create_transcription(
+                model_name=model_name,
+                audio_bytes=audio_bytes,
+                request_name="voice_recognition",
+                model_set=model_entry,
             )
-            prompt = "请将这段语音转写为简体中文纯文本，只输出转写结果，不要解释。"
-            request.add_payload(LLMPayload(ROLE.USER, [Text(prompt), Audio(base64_data)]))
-            response = await request.send(stream=False)
-            await response
-            text = str(response.message or "").strip()
-            if len(text) > 200:
-                text = text[:197] + "..."
-            return text or None
+            return text.strip() if text else None
         except Exception as e:
-            logger.error(f"ASR 转写失败: {e}", exc_info=True)
+            logger.error(f"ASR 请求失败: {e}", exc_info=True)
             return None
 
     async def _get_cached_description(
@@ -997,10 +977,6 @@ class MediaManager:
             缓存的描述，不存在返回 None
         """
         try:
-            from src.kernel.db.core.session import get_db_session
-            from src.core.models.sql_alchemy import ImageDescriptions
-            from sqlalchemy import select
-
             async with get_db_session() as session:
                 stmt = select(ImageDescriptions).where(
                     ImageDescriptions.image_description_hash == media_hash,
@@ -1030,13 +1006,8 @@ class MediaManager:
             description: 描述文本
         """
         try:
-            from src.kernel.db.core.session import get_db_session
-            from src.core.models.sql_alchemy import ImageDescriptions
-            from sqlalchemy import select
-
             async with get_db_session() as session:
                 # 检查是否已存在（避免重复记录导致 MultipleResultsFound）
-                from sqlalchemy import select
                 stmt = (
                     select(ImageDescriptions)
                     .where(

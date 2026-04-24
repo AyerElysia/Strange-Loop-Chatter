@@ -23,15 +23,18 @@ from .types import ModelEntry, ModelSet, RequestType
 
 from .payload import (
 	Audio,
+	Video,
 	Content,
 	Image,
 	Video,
 	LLMPayload,
 	LLMUsable,
+	ReasoningText,
 	Text,
 	ToolCall,
 	ToolResult,
 	ToolRegistry,
+	Video,
 )
 
 from .monitor import (
@@ -74,6 +77,7 @@ __all__ = [
 	"ModelSet",
 	# 内容类型
 	"Content",
+	"ReasoningText",
 	"Text",
 	"Image",
 	"Audio",
